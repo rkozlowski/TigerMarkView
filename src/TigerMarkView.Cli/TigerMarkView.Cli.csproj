@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The `tiger-mark` command: one Markdown file to one PDF, from a terminal.
+
+    It is a thin front end and must stay one: every decision about how a document renders belongs to
+    TigerMarkView.Core, and every decision about how HTML becomes a PDF belongs to TigerMarkView.Pdf.
+    This project owns the command line, the exit codes, and the messages — nothing else.
+
+    **No Avalonia reference, ever.** That boundary is the reason Core and Pdf are separate projects,
+    and a GUI framework dragged into a console tool would quietly undo it.
+    net10.0-windows because TigerMarkView.Pdf hosts WebView2 through WinForms; the runtime assumptions
+    are exactly the GUI's, and nothing is bundled.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The published command is `tiger-mark` (README, "Product Identity"); the code keeps the
+         project's own namespace, which a hyphenated assembly name cannot be. -->
+    <AssemblyName>tiger-mark</AssemblyName>
+    <RootNamespace>TigerMarkView.Cli</RootNamespace>
+    <!--
+      The only piece of product identity this project states for itself. Everything else — Version,
+      Product, Company, Copyright — is inherited from Directory.Build.props and must stay that way.
+      TigerCli reads the assembly description and prints it under the command name in generated help,
+      so the inherited one ("A local Markdown viewer, reviewer and PDF exporter") would describe the
+      desktop application in the CLI's own help text.
+    -->
+    <Description>Converts a Markdown file to PDF.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="TigerMarkView.Cli.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The command line itself: parsing, generated help and version, error rendering, exit-code policy
+      and interaction mode all belong to TigerCli. A released package, never a project reference and
+      never vendored source — a framework change is made, tested and released in TigerCli and only then
+      consumed here by version.
+    -->
+    <PackageReference Include="ItTiger.TigerCli" Version="0.9.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TigerMarkView.Core\TigerMarkView.Core.csproj" />
+    <ProjectReference Include="..\TigerMarkView.Pdf\TigerMarkView.Pdf.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,496 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:webview="using:Avalonia.Controls"
+        x:Class="TigerMarkView.MainWindow"
+        Title="TigerMarkView"
+        Icon="/Assets/TMV.ico"
+        Width="1100" Height="850"
+        WindowStartupLocation="CenterScreen">
+
+  <Window.Styles>
+    <!--
+      Toolbar buttons are flat by default and only paint on hover/press, which is what keeps a row of
+      six commands from reading as a wall of boxes. Only the resting Background is overridden: the
+      Fluent theme's :pointerover/:pressed/:disabled states set their brushes on the template's
+      ContentPresenter, so hover feedback and disabled dimming still come from the theme — and because
+      PathIcon fills with the inherited Foreground, a disabled button dims its icon too.
+    -->
+    <Style Selector="Button.toolbar, DropDownButton.toolbar">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="8,5" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!--
+      Without this, a disabled toolbar button is *louder* than an enabled one: the Fluent theme paints
+      a filled grey plate for :disabled, which on an otherwise flat toolbar makes Back and Forward look
+      like the highlighted commands whenever they are the ones unavailable. Keeping the plate
+      transparent leaves the theme's dimmed Foreground — inherited by the PathIcon — as the sole
+      disabled cue, which is the conventional and quieter reading.
+    -->
+    <Style Selector="Button.toolbar:disabled /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+
+    <Style Selector="Button.toolbar > PathIcon, DropDownButton.toolbar PathIcon">
+      <Setter Property="Width" Value="16" />
+      <Setter Property="Height" Value="16" />
+    </Style>
+
+    <!--
+      Pointer-safe tooltips, and the reason every icon command needs them.
+
+      Avalonia's default is Placement=Pointer with a 20px vertical offset — the popup is positioned
+      against the *cursor*, not the control. A tooltip is a top-level window of its own, so wherever
+      it lands it takes the pointer with it. On the status bar, which sits at the bottom of the
+      screen, those 20px may not fit below the cursor, so the positioner can slide the popup directly
+      over the pointer. The tooltip then receives the click instead of the button.
+
+      Anchoring the tooltip to the control (above it, nudged a little further away) keeps the popup
+      clear of the hotspot, so the pointer stays on the button through hover, click, and the next
+      hover. Applied to the shared toolbar class, which is what the toolbar, the status-bar actions,
+      and the Confirm strip's Reload all use — one rule, every icon-only command — plus the status
+      text, whose own tooltip appears in the same band at the bottom of the window.
+    -->
+    <Style Selector="Button.toolbar, DropDownButton.toolbar, TextBlock#StatusText">
+      <Setter Property="ToolTip.Placement" Value="Top" />
+      <Setter Property="ToolTip.VerticalOffset" Value="-4" />
+    </Style>
+
+    <!-- Group divider. A Separator would draw a horizontal rule; a toolbar needs a vertical one. -->
+    <Style Selector="Border.toolbarSeparator">
+      <Setter Property="Width" Value="1" />
+      <Setter Property="Margin" Value="5,6" />
+      <Setter Property="Background" Value="{DynamicResource ChromeDividerBrush}" />
+    </Style>
+  </Window.Styles>
+
+  <DockPanel>
+    <!--
+      The menu bar is one of the two command surfaces, and the toolbar's menu button mirrors *this*
+      tree rather than restating it — see MenuMirror. Every command therefore has one declaration, one
+      handler, and one enabled/checked state, whichever surface the reader reaches it from. Hiding it
+      collapses the row entirely (IsVisible, not opacity), and CommandSurfaces guarantees the toolbar
+      is still there when it goes.
+    -->
+    <Menu x:Name="MainMenu" DockPanel.Dock="Top" AutomationProperties.AutomationId="MainMenu">
+      <MenuItem Header="_File" AutomationProperties.AutomationId="FileMenu">
+        <MenuItem Header="_Open..." Click="OnOpenClick" />
+        <MenuItem Header="Open _Recent" x:Name="OpenRecentMenuItem" IsEnabled="False"
+                  AutomationProperties.AutomationId="OpenRecentMenuItem" />
+        <MenuItem Header="_Reload Now" x:Name="ReloadMenuItem" Click="OnReloadClick" IsEnabled="False"
+                  AutomationProperties.AutomationId="ReloadMenuItem" />
+        <Separator />
+        <MenuItem Header="_Export to PDF..." x:Name="ExportPdfMenuItem" Click="OnExportPdfClick"
+                  IsEnabled="False" AutomationProperties.AutomationId="ExportPdfMenuItem" />
+        <!--
+          Printing is not part of the shipped UI. There is deliberately no File > Print... entry and
+          no Ctrl+P gesture bound here; Ctrl+P is still
+          intercepted (OnPreviewKeyDown for the chrome, DocumentShell's print script in the document)
+          purely to stop WebView2 opening Edge's own print preview, not to reach any command of ours.
+        -->
+        <Separator />
+        <MenuItem Header="E_xit" Click="OnExitClick" />
+      </MenuItem>
+      <MenuItem Header="_Navigate" x:Name="NavigateMenuItem"
+                AutomationProperties.AutomationId="NavigateMenu">
+        <MenuItem Header="_Back" x:Name="BackMenuItem" Click="OnBackClick" IsEnabled="False"
+                  InputGesture="Alt+Left" AutomationProperties.AutomationId="BackMenuItem" />
+        <MenuItem Header="_Forward" x:Name="ForwardMenuItem" Click="OnForwardClick" IsEnabled="False"
+                  InputGesture="Alt+Right" AutomationProperties.AutomationId="ForwardMenuItem" />
+        <Separator />
+        <!-- Items are built by RebuildHistoryMenus from NavigationHistory, together with the
+             toolbar dropdown's — one trail, two surfaces, never two models. -->
+        <MenuItem Header="_History" x:Name="HistoryMenuItem" IsEnabled="False"
+                  AutomationProperties.AutomationId="HistoryMenuItem" />
+      </MenuItem>
+      <MenuItem Header="_View" AutomationProperties.AutomationId="ViewMenu">
+        <!--
+          Menu Bar and Toolbar are the two command surfaces and are bound by one rule: at least one of
+          them stays visible. Whichever is the last one left has its item disabled — still checked, so
+          it reads as "showing, and not yours to turn off" rather than as an available choice that
+          silently does nothing. UpdateCommandSurfaceState writes all six properties from one
+          CommandSurfaces value.
+        -->
+        <MenuItem Header="_Menu Bar" ToggleType="CheckBox" x:Name="MenuBarVisibleItem"
+                  Click="OnToggleMenuBarClick" AutomationProperties.AutomationId="MenuBarVisibleItem" />
+        <MenuItem Header="_Toolbar" ToggleType="CheckBox" x:Name="ToolbarVisibleItem"
+                  Click="OnToggleToolbarClick" AutomationProperties.AutomationId="ToolbarVisibleItem" />
+        <!--
+          Which buttons the toolbar carries, in the order they appear on it. This is the whole of
+          toolbar customisation and is meant to stay that way: named buttons a reader may add or
+          remove, not a designer — no reordering, no arbitrary command list, no per-button dialog.
+
+          Disabled while the toolbar itself is hidden (ApplyCommandSurfaces), since there is then no
+          toolbar for these to be on. Like every checkbox command here, each handler derives its new
+          value from application state rather than from the sender's IsChecked — a click forwarded from
+          the mirror does not flip it. See ApplyToolbarActions and ApplyCommandSurfaces.
+        -->
+        <MenuItem Header="Toolbar _Buttons" x:Name="ToolbarButtonsMenuItem"
+                  AutomationProperties.AutomationId="ToolbarButtonsMenu">
+          <!--
+            The odd one out, and the reason this submenu is not purely ToolbarActions': the menu
+            button is a *command surface*, not an optional convenience. It is visible by default (the
+            other two are not) and it cannot be hidden while the menu bar is — CommandSurfaces owns
+            that rule, and disables this item rather than letting the click quietly do nothing.
+          -->
+          <MenuItem Header="_Menu" ToggleType="CheckBox" x:Name="ToolbarMenuItem"
+                    Click="OnToggleToolbarMenuClick"
+                    AutomationProperties.AutomationId="ToolbarMenuItem" />
+          <MenuItem Header="Open _Recent" ToggleType="CheckBox" x:Name="ToolbarOpenRecentItem"
+                    Click="OnToggleToolbarOpenRecentClick"
+                    AutomationProperties.AutomationId="ToolbarOpenRecentItem" />
+          <MenuItem Header="_Export to PDF" ToggleType="CheckBox" x:Name="ToolbarExportPdfItem"
+                    Click="OnToggleToolbarExportPdfClick"
+                    AutomationProperties.AutomationId="ToolbarExportPdfItem" />
+        </MenuItem>
+        <MenuItem Header="_Status Bar" ToggleType="CheckBox" x:Name="StatusBarVisibleItem"
+                  Click="OnToggleStatusBarClick" AutomationProperties.AutomationId="StatusBarVisibleItem" />
+        <Separator />
+        <MenuItem Header="T_heme" AutomationProperties.AutomationId="ThemeMenu">
+          <MenuItem Header="_Light" ToggleType="Radio" GroupName="MarkdownTheme"
+                    x:Name="LightThemeItem" Click="OnThemeLightClick"
+                    AutomationProperties.AutomationId="LightThemeItem" />
+          <MenuItem Header="_Dark" ToggleType="Radio" GroupName="MarkdownTheme"
+                    x:Name="DarkThemeItem" Click="OnThemeDarkClick"
+                    AutomationProperties.AutomationId="DarkThemeItem" />
+        </MenuItem>
+        <!--
+          Optional rendering behaviours, both off by default. They live under View because they change
+          what the reader sees rather than what the application does with a document; Tools holds the
+          latter. No toolbar buttons: these are settings a reader picks once, not commands.
+          Each handler derives its new value from _settings, never from the sender's IsChecked — a click
+          forwarded from the hamburger mirror does not flip it. See SetRenderingMenuChecked.
+        -->
+        <MenuItem Header="_Rendering" AutomationProperties.AutomationId="RenderingMenu">
+          <MenuItem Header="_Emoji Shortcodes" ToggleType="CheckBox" x:Name="EmojiShortcodesItem"
+                    Click="OnEmojiShortcodesClick"
+                    AutomationProperties.AutomationId="EmojiShortcodesItem" />
+          <MenuItem Header="_Syntax Highlighting" ToggleType="CheckBox" x:Name="SyntaxHighlightingItem"
+                    Click="OnSyntaxHighlightingClick"
+                    AutomationProperties.AutomationId="SyntaxHighlightingItem" />
+        </MenuItem>
+      </MenuItem>
+      <MenuItem Header="_Reload Mode" AutomationProperties.AutomationId="ReloadModeMenu">
+        <MenuItem Header="_Manual" ToggleType="Radio" GroupName="ReloadMode"
+                  x:Name="ManualModeItem" Click="OnReloadModeManualClick"
+                  AutomationProperties.AutomationId="ManualModeItem" />
+        <MenuItem Header="_Confirm" ToggleType="Radio" GroupName="ReloadMode"
+                  x:Name="ConfirmModeItem" Click="OnReloadModeConfirmClick"
+                  AutomationProperties.AutomationId="ConfirmModeItem" />
+        <MenuItem Header="_Automatic" ToggleType="Radio" GroupName="ReloadMode"
+                  x:Name="AutomaticModeItem" Click="OnReloadModeAutomaticClick"
+                  AutomationProperties.AutomationId="AutomaticModeItem" />
+      </MenuItem>
+      <MenuItem Header="_Tools" AutomationProperties.AutomationId="ToolsMenu">
+        <MenuItem Header="_Open in Editor" x:Name="OpenInEditorMenuItem" Click="OnOpenInEditorClick"
+                  IsEnabled="False" AutomationProperties.AutomationId="OpenInEditorMenuItem" />
+        <Separator />
+        <MenuItem Header="_Editor" AutomationProperties.AutomationId="EditorMenu">
+          <MenuItem Header="_System Default" ToggleType="Radio" GroupName="EditorType"
+                    x:Name="SystemDefaultEditorItem" Click="OnEditorTypeSystemDefaultClick"
+                    AutomationProperties.AutomationId="SystemDefaultEditorItem" />
+          <MenuItem Header="_Visual Studio Code" ToggleType="Radio" GroupName="EditorType"
+                    x:Name="VsCodeEditorItem" Click="OnEditorTypeVsCodeClick"
+                    AutomationProperties.AutomationId="VsCodeEditorItem" />
+          <MenuItem Header="_Notepad3" ToggleType="Radio" GroupName="EditorType"
+                    x:Name="Notepad3EditorItem" Click="OnEditorTypeNotepad3Click"
+                    AutomationProperties.AutomationId="Notepad3EditorItem" />
+          <MenuItem Header="C_ustom..." ToggleType="Radio" GroupName="EditorType"
+                    x:Name="CustomEditorItem" Click="OnEditorTypeCustomClick"
+                    AutomationProperties.AutomationId="CustomEditorItem" />
+        </MenuItem>
+        <!--
+          The page layout for File > Export to PDF.... Printing is not part of the shipped UI, so this
+          menu is named for PDF export alone.
+
+          Lives alongside the Editor preference rather than in the File menu because these are
+          settings, not commands. File > Export to PDF... deliberately stays a single save dialog — the
+          page is answered once here, never re-asked.
+
+          Only presets are offered. The GUI's job is to make the common answers one click away, while
+          the shared PdfPageSetup model keeps the actual geometry out of the UI.
+        -->
+        <MenuItem Header="_PDF Export Settings" AutomationProperties.AutomationId="PdfExportMenu">
+          <MenuItem Header="Paper _Size" AutomationProperties.AutomationId="PdfPaperMenu">
+            <MenuItem Header="A_3" ToggleType="Radio" GroupName="PdfPaperSize"
+                      x:Name="PdfPaperA3Item" Click="OnPdfPaperA3Click"
+                      AutomationProperties.AutomationId="PdfPaperA3Item" />
+            <MenuItem Header="A_4" ToggleType="Radio" GroupName="PdfPaperSize"
+                      x:Name="PdfPaperA4Item" Click="OnPdfPaperA4Click"
+                      AutomationProperties.AutomationId="PdfPaperA4Item" />
+            <MenuItem Header="A_5" ToggleType="Radio" GroupName="PdfPaperSize"
+                      x:Name="PdfPaperA5Item" Click="OnPdfPaperA5Click"
+                      AutomationProperties.AutomationId="PdfPaperA5Item" />
+            <MenuItem Header="_Letter" ToggleType="Radio" GroupName="PdfPaperSize"
+                      x:Name="PdfPaperLetterItem" Click="OnPdfPaperLetterClick"
+                      AutomationProperties.AutomationId="PdfPaperLetterItem" />
+            <MenuItem Header="Le_gal" ToggleType="Radio" GroupName="PdfPaperSize"
+                      x:Name="PdfPaperLegalItem" Click="OnPdfPaperLegalClick"
+                      AutomationProperties.AutomationId="PdfPaperLegalItem" />
+          </MenuItem>
+          <MenuItem Header="_Orientation" AutomationProperties.AutomationId="PdfOrientationMenu">
+            <MenuItem Header="_Portrait" ToggleType="Radio" GroupName="PdfOrientation"
+                      x:Name="PdfPortraitItem" Click="OnPdfPortraitClick"
+                      AutomationProperties.AutomationId="PdfPortraitItem" />
+            <MenuItem Header="_Landscape" ToggleType="Radio" GroupName="PdfOrientation"
+                      x:Name="PdfLandscapeItem" Click="OnPdfLandscapeClick"
+                      AutomationProperties.AutomationId="PdfLandscapeItem" />
+          </MenuItem>
+          <MenuItem Header="_Margins" AutomationProperties.AutomationId="PdfMarginsMenu">
+            <MenuItem Header="_Narrow" ToggleType="Radio" GroupName="PdfMargins"
+                      x:Name="PdfMarginsNarrowItem" Click="OnPdfMarginsNarrowClick"
+                      AutomationProperties.AutomationId="PdfMarginsNarrowItem" />
+            <MenuItem Header="N_ormal" ToggleType="Radio" GroupName="PdfMargins"
+                      x:Name="PdfMarginsNormalItem" Click="OnPdfMarginsNormalClick"
+                      AutomationProperties.AutomationId="PdfMarginsNormalItem" />
+            <MenuItem Header="_Wide" ToggleType="Radio" GroupName="PdfMargins"
+                      x:Name="PdfMarginsWideItem" Click="OnPdfMarginsWideClick"
+                      AutomationProperties.AutomationId="PdfMarginsWideItem" />
+          </MenuItem>
+          <MenuItem Header="Page N_umbers" ToggleType="CheckBox" x:Name="PdfPageNumbersItem"
+                    Click="OnPdfPageNumbersClick"
+                    AutomationProperties.AutomationId="PdfPageNumbersItem" />
+        </MenuItem>
+      </MenuItem>
+      <!--
+        Help is application documentation, not a document. Both items open windows of their own and
+        neither touches the reading session: no watcher, no Open Recent entry, no navigation history,
+        no change to what Export to PDF or Open in Editor act on. F1 is shown as the gesture but is
+        handled in OnPreviewKeyDown and, for a reader whose focus is in the document, by the page
+        itself — InputGesture on a MenuItem is a label, not a binding.
+      -->
+      <MenuItem Header="_Help" AutomationProperties.AutomationId="HelpMenu">
+        <MenuItem Header="_Help" Click="OnHelpClick" InputGesture="F1"
+                  AutomationProperties.AutomationId="HelpMenuItem" />
+        <Separator />
+        <MenuItem Header="_About TigerMarkView" Click="OnAboutClick"
+                  AutomationProperties.AutomationId="AboutMenuItem" />
+      </MenuItem>
+    </Menu>
+
+    <!--
+      Every button here is a second entry point into a command the menu already exposes: the Click
+      handlers are literally the same methods, so the two cannot drift apart. Enabled state is not set
+      here either — UpdateNavigationCommandState and UpdateDocumentCommandState drive the menu item
+      and its toolbar twin together, from one place each.
+    -->
+    <Border x:Name="Toolbar" DockPanel.Dock="Top" Padding="4,3" BorderThickness="0,0,0,1"
+            BorderBrush="{DynamicResource ChromeDividerBrush}"
+            AutomationProperties.AutomationId="Toolbar">
+      <StackPanel Orientation="Horizontal" Spacing="1">
+        <!--
+          The application menu, and the reason the menu bar is optional at all: with the menu bar
+          hidden this is how every command is still reached. Its flyout is not a second menu — it is
+          built from the live menu bar by MenuMirror at the moment it opens, so the commands, their
+          order, their enabled state, and their check marks are the menu bar's own.
+
+          Optional only in one direction: View > Toolbar Buttons > Menu can take it off a toolbar that
+          sits under a visible menu bar, where it duplicates what the menu bar already shows. It comes
+          back, and its item greys out, the moment the menu bar goes — CommandSurfaces' second
+          invariant, since this button would then be the only route to the full command tree.
+        -->
+        <Button x:Name="MenuToolbarButton" Classes="toolbar" Click="OnMenuToolbarClick"
+                ToolTip.Tip="Menu" AutomationProperties.Name="Menu"
+                AutomationProperties.AutomationId="MenuToolbarButton">
+          <PathIcon Data="{StaticResource MenuIconGeometry}" />
+        </Button>
+
+        <Button x:Name="OpenToolbarButton" Classes="toolbar" Click="OnOpenClick"
+                ToolTip.Tip="Open Markdown file" AutomationProperties.Name="Open Markdown file"
+                AutomationProperties.AutomationId="OpenToolbarButton">
+          <PathIcon Data="{StaticResource OpenIconGeometry}" />
+        </Button>
+        <!--
+          Open Recent, beside Open and never instead of it: the primary click still opens the picker,
+          and this chevron is the second half of a split control rather than a dropdown that swallowed
+          the command. Its list is the *same* list File > Open Recent shows — BuildRecentFileItems
+          fills both, from _settings.RecentFiles — so ordering, labels, tooltips and the explicit-open
+          semantics cannot differ between the two surfaces.
+
+          A plain Button for the reason the history dropdown is one: DropDownButton draws its own
+          chevron affordance in addition to the content, so a Fluent chevron inside one renders twice,
+          and its :disabled state paints the grey plate the toolbar style suppresses only for Button.
+          Off by default — View > Toolbar Buttons > Open Recent.
+        -->
+        <Button x:Name="OpenRecentToolbarButton" Classes="toolbar" IsEnabled="False" IsVisible="False"
+                Click="OnOpenRecentToolbarClick"
+                ToolTip.Tip="Open recent" AutomationProperties.Name="Open recent"
+                AutomationProperties.AutomationId="OpenRecentToolbarButton">
+          <PathIcon Data="{StaticResource ChevronDownIconGeometry}" />
+        </Button>
+
+        <Border Classes="toolbarSeparator" />
+
+        <Button x:Name="BackToolbarButton" Classes="toolbar" Click="OnBackClick" IsEnabled="False"
+                ToolTip.Tip="Back (Alt+Left)" AutomationProperties.Name="Back"
+                AutomationProperties.AutomationId="BackToolbarButton">
+          <PathIcon Data="{StaticResource BackIconGeometry}" />
+        </Button>
+        <Button x:Name="ForwardToolbarButton" Classes="toolbar" Click="OnForwardClick" IsEnabled="False"
+                ToolTip.Tip="Forward (Alt+Right)" AutomationProperties.Name="Forward"
+                AutomationProperties.AutomationId="ForwardToolbarButton">
+          <PathIcon Data="{StaticResource ForwardIconGeometry}" />
+        </Button>
+        <!--
+          Third member of the navigation group, so Back/Forward/history read as one control the way a
+          browser's do. Its flyout is filled by the same RebuildHistoryMenus that fills Navigate >
+          History; the button holds no history of its own.
+
+          A plain Button, not a DropDownButton: DropDownButton draws its own chevron affordance, which
+          next to the Fluent chevron this command *is* rendered as two stacked chevrons — and its
+          disabled state paints the grey plate the toolbar style suppresses only for Button. The menu
+          is built and shown by OnHistoryToolbarClick instead of being declared here, so it is filled
+          from the trail at the moment it opens.
+        -->
+        <Button x:Name="HistoryToolbarButton" Classes="toolbar" IsEnabled="False"
+                Click="OnHistoryToolbarClick"
+                ToolTip.Tip="Navigation history"
+                AutomationProperties.Name="Navigation history"
+                AutomationProperties.AutomationId="HistoryToolbarButton">
+          <PathIcon Data="{StaticResource ChevronDownIconGeometry}" />
+        </Button>
+
+        <Border Classes="toolbarSeparator" />
+
+        <Button x:Name="ReloadToolbarButton" Classes="toolbar" Click="OnReloadClick" IsEnabled="False"
+                ToolTip.Tip="Reload" AutomationProperties.Name="Reload"
+                AutomationProperties.AutomationId="ReloadToolbarButton">
+          <PathIcon Data="{StaticResource ReloadIconGeometry}" />
+        </Button>
+
+        <Border Classes="toolbarSeparator" />
+
+        <Button x:Name="OpenInEditorToolbarButton" Classes="toolbar" Click="OnOpenInEditorClick"
+                IsEnabled="False" ToolTip.Tip="Open in Editor" AutomationProperties.Name="Open in Editor"
+                AutomationProperties.AutomationId="OpenInEditorToolbarButton">
+          <PathIcon Data="{StaticResource OpenInEditorIconGeometry}" />
+        </Button>
+
+        <!--
+          The publishing group — currently just Export to PDF, behind one divider. That divider is
+          hidden with it (ToolbarActions.PublishGroupVisible): with the command off it introduces
+          nothing. Off by default; UpdateDocumentCommandState enables it, alongside its File-menu twin.
+        -->
+        <Border x:Name="PublishToolbarSeparator" Classes="toolbarSeparator" IsVisible="False" />
+
+        <Button x:Name="ExportPdfToolbarButton" Classes="toolbar" Click="OnExportPdfClick"
+                IsEnabled="False" IsVisible="False"
+                ToolTip.Tip="Export to PDF" AutomationProperties.Name="Export to PDF"
+                AutomationProperties.AutomationId="ExportPdfToolbarButton">
+          <!--
+            The same document-PDF geometry the status bar's "Open exported PDF" action wears. The
+            command and the artifact it produces are one subject, so they share one glyph: a reader
+            who has met this icon on the status bar already knows what this button makes.
+          -->
+          <PathIcon Data="{StaticResource ExportedPdfIconGeometry}" />
+        </Button>
+
+        <Border Classes="toolbarSeparator" />
+
+        <!--
+          The one toolbar command that carries a text label. Reload mode is a *state*, not an action,
+          and no icon makes "Confirm" distinguishable from "Automatic" at 16px — so the mode is
+          spelled out and the tooltip repeats it in full. Its three items are radio-checked in step
+          with the Reload Mode menu by SetReloadModeChecked.
+        -->
+        <DropDownButton x:Name="ReloadModeButton" Classes="toolbar"
+                        AutomationProperties.Name="Reload mode"
+                        AutomationProperties.AutomationId="ReloadModeButton">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <PathIcon Data="{StaticResource ReloadModeIconGeometry}" />
+            <TextBlock x:Name="ReloadModeLabel" VerticalAlignment="Center"
+                       AutomationProperties.AutomationId="ReloadModeLabel" />
+          </StackPanel>
+          <DropDownButton.Flyout>
+            <MenuFlyout>
+              <MenuItem Header="Manual" ToggleType="Radio" GroupName="ReloadModeToolbar"
+                        x:Name="ManualModeToolbarItem" Click="OnReloadModeManualClick"
+                        AutomationProperties.AutomationId="ManualModeToolbarItem" />
+              <MenuItem Header="Confirm" ToggleType="Radio" GroupName="ReloadModeToolbar"
+                        x:Name="ConfirmModeToolbarItem" Click="OnReloadModeConfirmClick"
+                        AutomationProperties.AutomationId="ConfirmModeToolbarItem" />
+              <MenuItem Header="Automatic" ToggleType="Radio" GroupName="ReloadModeToolbar"
+                        x:Name="AutomaticModeToolbarItem" Click="OnReloadModeAutomaticClick"
+                        AutomationProperties.AutomationId="AutomaticModeToolbarItem" />
+            </MenuFlyout>
+          </DropDownButton.Flyout>
+        </DropDownButton>
+      </StackPanel>
+    </Border>
+
+    <!--
+      The Confirm-mode UI, and nothing else: RefreshStatusBar shows it exactly when the reload mode is
+      Confirm and the file on disk is newer. It is deliberately not a notification surface with a
+      visibility setting of its own — a View-menu toggle for it would let the reader turn off the only
+      thing Confirm mode does, leaving a mode that silently behaves like Manual. Inline and
+      non-modal on purpose (README: "should not interrupt reading unnecessarily").
+    -->
+    <Border x:Name="ConfirmBanner" DockPanel.Dock="Top"
+            Background="{DynamicResource BannerBackgroundBrush}" Padding="10,6"
+            BorderThickness="0,0,0,1" BorderBrush="{DynamicResource BannerBorderBrush}" IsVisible="False"
+            AutomationProperties.AutomationId="ConfirmBanner">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Classes="toolbar" Click="OnReloadClick"
+                ToolTip.Tip="Reload" AutomationProperties.Name="Reload"
+                AutomationProperties.AutomationId="ConfirmBannerReloadButton">
+          <PathIcon Data="{StaticResource ReloadIconGeometry}" />
+        </Button>
+        <TextBlock Text="File modified externally." VerticalAlignment="Center" />
+      </DockPanel>
+    </Border>
+
+    <!--
+      Right-docked children are laid out in declaration order from the right edge inwards, so Reload
+      comes first in the markup to stay rightmost, the export-folder action sits immediately to its
+      left (where it must be), and the transient Open-PDF action appears further left again. The
+      status text is the fill child and is given a Grid — a horizontal StackPanel would measure it
+      unconstrained, and a long exported path would then shove Reload off the window edge instead of
+      ellipsising.
+    -->
+    <Border x:Name="StatusBar" DockPanel.Dock="Bottom" Padding="10,6" BorderThickness="0,1,0,0"
+            BorderBrush="{DynamicResource ChromeDividerBrush}"
+            AutomationProperties.AutomationId="StatusBar">
+      <DockPanel>
+        <Button x:Name="ReloadButton" DockPanel.Dock="Right" Classes="toolbar" Click="OnReloadClick"
+                IsVisible="False" ToolTip.Tip="Reload" AutomationProperties.Name="Reload"
+                AutomationProperties.AutomationId="ReloadButton">
+          <PathIcon Data="{StaticResource ReloadIconGeometry}" />
+        </Button>
+        <Button x:Name="OpenExportFolderButton" DockPanel.Dock="Right" Classes="toolbar"
+                Click="OnOpenExportFolderClick" IsVisible="False"
+                ToolTip.Tip="Open containing folder"
+                AutomationProperties.Name="Open containing folder"
+                AutomationProperties.AutomationId="OpenExportFolderButton">
+          <PathIcon Data="{StaticResource OpenIconGeometry}" />
+        </Button>
+        <Button x:Name="OpenExportedPdfButton" DockPanel.Dock="Right" Classes="toolbar"
+                Click="OnOpenExportedPdfClick" IsVisible="False"
+                ToolTip.Tip="Open exported PDF"
+                AutomationProperties.Name="Open exported PDF"
+                AutomationProperties.AutomationId="OpenExportedPdfButton">
+          <PathIcon Data="{StaticResource ExportedPdfIconGeometry}" />
+        </Button>
+        <Grid ColumnDefinitions="Auto,*" VerticalAlignment="Center">
+          <Ellipse x:Name="StatusDot" Width="10" Height="10" Fill="Gray" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="1" x:Name="StatusText" Text="No document open" Margin="8,0,8,0"
+                     VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                     AutomationProperties.AutomationId="StatusText" />
+        </Grid>
+      </DockPanel>
+    </Border>
+
+    <!--
+      ClipToBounds is load-bearing, not tidiness. NativeWebView is a NativeControlHost, and its
+      hit-test area is not confined to its layout bounds; as the DockPanel's fill child it is also last
+      in declaration order, which puts it *above* the chrome in Z-order. Without clipping, pointer
+      events over the status bar can be answered by the WebView, leaving its buttons with no hover,
+      tooltip, or click while they still look normal. Clipping confines hit testing to the WebView's
+      bounds. Removing it silently breaks the controls below.
+    -->
+    <webview:NativeWebView x:Name="Browser" ClipToBounds="True" />
+  </DockPanel>
+</Window>

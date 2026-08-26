@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Windows-only PDF generation, deliberately kept out of both TigerMarkView.Core (which must stay
+    platform-neutral and dependency-light) and the Avalonia app (so the `tiger-mark` CLI can reference
+    this without pulling in a GUI framework). Two jobs, one engine: rendered HTML -> PDF file, and PDF
+    file -> printer. The CLI uses only the first; the printer half needs no dependency the export half
+    did not already bring (WebView2 prints the PDF, and PrintDialog comes with the WinForms below).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TigerMarkView.Core\TigerMarkView.Core.csproj" />
+  </ItemGroup>
+
+</Project>

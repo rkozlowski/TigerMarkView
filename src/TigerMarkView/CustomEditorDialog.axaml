@@ -1,0 +1,26 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="TigerMarkView.CustomEditorDialog"
+        Title="Custom Editor"
+        Width="480" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        ShowInTaskbar="False">
+  <StackPanel Margin="20" Spacing="12">
+    <TextBlock Text="Executable path:" />
+    <DockPanel>
+      <Button DockPanel.Dock="Right" Content="Browse..." Click="OnBrowseClick" Margin="8,0,0,0" />
+      <TextBox x:Name="ExecutablePathBox" />
+    </DockPanel>
+
+    <TextBlock Text="Arguments template (use {file} for the Markdown file path):" />
+    <TextBox x:Name="ArgumentsTemplateBox" />
+
+    <TextBlock x:Name="ErrorText" Foreground="Red" TextWrapping="Wrap" IsVisible="False" />
+
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+      <Button Content="Cancel" Click="OnCancelClick" />
+      <Button Content="OK" Click="OnOkClick" IsDefault="True" />
+    </StackPanel>
+  </StackPanel>
+</Window>

@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Markdig" Version="1.3.2" />
+    <!--
+      Syntax highlighting, done statically at render time. Chosen over every JavaScript highlighter
+      because it is the only candidate that is pure managed netstandard2.0 with no transitive and no
+      native dependencies, which is what lets it live in this platform-neutral project and reach the
+      viewer, PDF export, and tiger-mark through the one pipeline.
+    -->
+    <PackageReference Include="ColorCode.Core" Version="2.0.15" />
+  </ItemGroup>
+
+</Project>

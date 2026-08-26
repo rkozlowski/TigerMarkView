@@ -1,0 +1,98 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="TigerMarkView.AboutDialog"
+        Title="About TigerMarkView"
+        Icon="/Assets/TMV.ico"
+        Width="440" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        ShowInTaskbar="False">
+
+  <Window.Styles>
+    <!--
+      Link-style buttons: the three documentation actions are references, not commands, and reading as
+      links is what says so. Only the resting and hover plates are suppressed — focus, keyboard
+      activation, and the automation peer all stay exactly what a Button gives, which is what keeps
+      them reachable without a pointer. The link colour is set on the TextBlock itself rather than
+      inherited, because the Fluent theme writes TextBlock.Foreground onto the content presenter for
+      :pointerover and would otherwise take it back on hover.
+    -->
+    <Style Selector="Button.link">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Cursor" Value="Hand" />
+
+      <!-- The pointer-safe tooltip rule from MainWindow, restated because this window has styles of
+           its own: anchored to the control, never to the pointer, so the tooltip cannot come to rest
+           on the cursor and swallow the click. -->
+      <Setter Property="ToolTip.Placement" Value="Top" />
+      <Setter Property="ToolTip.VerticalOffset" Value="-4" />
+    </Style>
+
+    <Style Selector="Button.link:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+
+    <Style Selector="Button.link:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+  </Window.Styles>
+
+  <StackPanel Margin="24" Spacing="18">
+    <StackPanel Orientation="Horizontal" Spacing="16">
+      <!-- The shipped PNG, not the .ico: Window.Icon takes an .ico, but an Image needs a bitmap
+           format Skia decodes. Both live in Assets and are embedded by the same AvaloniaResource
+           include. -->
+      <Image Source="/Assets/TMV.png" Width="64" Height="64" VerticalAlignment="Top"
+             AutomationProperties.Name="TigerMarkView icon" />
+
+      <StackPanel Spacing="2" VerticalAlignment="Center">
+        <TextBlock x:Name="ProductNameText" FontSize="20" FontWeight="SemiBold"
+                   AutomationProperties.AutomationId="AboutProductName" />
+        <TextBlock x:Name="VersionText" AutomationProperties.AutomationId="AboutVersion" />
+      </StackPanel>
+    </StackPanel>
+
+    <TextBlock x:Name="DescriptionText" TextWrapping="Wrap"
+               AutomationProperties.AutomationId="AboutDescription" />
+
+    <StackPanel Spacing="2">
+      <TextBlock x:Name="CopyrightText" TextWrapping="Wrap"
+                 AutomationProperties.AutomationId="AboutCopyright" />
+      <TextBlock x:Name="LicenseText" TextWrapping="Wrap"
+                 AutomationProperties.AutomationId="AboutLicense" />
+    </StackPanel>
+
+    <StackPanel Orientation="Horizontal" Spacing="20">
+      <Button Classes="link" Click="OnHelpClick"
+              ToolTip.Tip="Open the bundled help"
+              AutomationProperties.Name="Help"
+              AutomationProperties.AutomationId="AboutHelpLink">
+        <TextBlock Text="Help" TextDecorations="Underline"
+                   Foreground="{DynamicResource LinkTextBrush}" />
+      </Button>
+      <Button Classes="link" Click="OnLicenseClick"
+              ToolTip.Tip="Read the full licence text"
+              AutomationProperties.Name="License"
+              AutomationProperties.AutomationId="AboutLicenseLink">
+        <TextBlock Text="License" TextDecorations="Underline"
+                   Foreground="{DynamicResource LinkTextBrush}" />
+      </Button>
+      <Button Classes="link" Click="OnThirdPartyNoticesClick"
+              ToolTip.Tip="Licences of the components TigerMarkView is built on"
+              AutomationProperties.Name="Third-party notices"
+              AutomationProperties.AutomationId="AboutThirdPartyLink">
+        <TextBlock Text="Third-party notices" TextDecorations="Underline"
+                   Foreground="{DynamicResource LinkTextBrush}" />
+      </Button>
+    </StackPanel>
+
+    <Button Content="Close" HorizontalAlignment="Right" Click="OnCloseClick"
+            IsDefault="True" IsCancel="True"
+            AutomationProperties.Name="Close"
+            AutomationProperties.AutomationId="AboutCloseButton" />
+  </StackPanel>
+</Window>

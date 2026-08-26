@@ -1,0 +1,20 @@
+<Project>
+
+  <!--
+    The Microsoft.Web.WebView2 package adds references to its WinForms *and* WPF wrapper assemblies
+    unconditionally, with no opt-out property. TigerMarkView hosts WebView2 in WinForms only and
+    never touches the WPF wrapper — but that wrapper depends on WPF's
+    WindowsBase 5.0, which cannot be reconciled with the WindowsBase 4.0 facade in the base framework
+    reference pack. The result is an MSB3277 "conflicts that could not be resolved" warning and a dead
+    WPF assembly copied into the output.
+
+    Dropping the unused reference removes the conflict at its source rather than silencing the warning.
+    Revisit only if a WPF-hosted WebView2 is ever genuinely needed.
+  -->
+  <Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference->WithMetadataValue('Filename', 'Microsoft.Web.WebView2.Wpf'))" />
+    </ItemGroup>
+  </Target>
+
+</Project>

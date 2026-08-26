@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TigerMarkView.Cli/TigerMarkView.Cli.csproj" />
+    <Project Path="src/TigerMarkView.Core/TigerMarkView.Core.csproj" />
+    <Project Path="src/TigerMarkView.Pdf/TigerMarkView.Pdf.csproj" />
+    <Project Path="src/TigerMarkView/TigerMarkView.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TigerMarkView.Cli.Tests/TigerMarkView.Cli.Tests.csproj" />
+    <Project Path="tests/TigerMarkView.Core.Tests/TigerMarkView.Core.Tests.csproj" />
+  </Folder>
+</Solution>

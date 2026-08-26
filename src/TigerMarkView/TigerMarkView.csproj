@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Icon for the built EXE itself (Explorer, taskbar pinning). The same file is embedded as an
+         Avalonia resource below so MainWindow can point its Icon at it for the title bar. -->
+    <ApplicationIcon>Assets\TMV.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
+  <!--
+    The bundled offline documentation, copied next to the executable so Help works from a build output
+    and from an installed copy with no repository checkout and no network. The sources stay where they
+    are useful to a reader of the project: docs/ at the repository root, and LICENSE where GitHub and
+    every licence scanner expects to find it. LICENSE is extensionless, so it is given a .txt name in
+    the output — the Help viewer needs something it can open, and it is copied verbatim rather than
+    duplicated as Markdown, so there is still exactly one licence text in the repository.
+
+    Content rather than AvaloniaResource on purpose: these are files on disk that the Help window reads
+    at run time (see Documentation/BundledDocuments), not resources embedded in the assembly.
+  -->
+  <ItemGroup>
+    <Content Include="..\..\docs\HELP.md" Link="Docs\HELP.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\docs\THIRD-PARTY-NOTICES.md" Link="Docs\THIRD-PARTY-NOTICES.md"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\LICENSE" Link="Docs\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Controls.WebView" Version="12.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TigerMarkView.Core\TigerMarkView.Core.csproj" />
+    <ProjectReference Include="..\TigerMarkView.Pdf\TigerMarkView.Pdf.csproj" />
+  </ItemGroup>
+
+</Project>

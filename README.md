@@ -1,0 +1,209 @@
+# TigerMarkView
+
+<p align="center">
+  <img src="assets/TMV.png" alt="TigerMarkView icon" width="128">
+</p>
+
+TigerMarkView is a Windows desktop application for reading and reviewing local Markdown files. It is
+a viewer, not an editor: when a document needs changes, TigerMarkView opens it in a configured
+external editor and watches the file for updates.
+
+The project is pre-1.0. Its current version is defined in `Directory.Build.props` and shown at run
+time under **Help > About TigerMarkView**.
+
+## Features
+
+- rendered `.md` and `.markdown` documents with tables, task lists, links, images, and fenced code;
+- drag-and-drop, Open Recent, local Markdown links, Back/Forward, and per-session navigation history;
+- Manual, Confirm, and Automatic reload modes for files changed by another application;
+- a status bar that distinguishes the viewed version from the version currently on disk;
+- configurable external editors, including system default, Visual Studio Code, Notepad3, and a
+  custom executable and arguments template;
+- Light and Dark application themes;
+- optional emoji shortcode expansion and syntax highlighting, both off by default;
+- PDF export using the exact document version currently displayed;
+- configurable menu bar, toolbar, status bar, and optional toolbar buttons;
+- bundled offline Help, About, licence, and third-party notices;
+- a per-user Inno Setup installer; and
+- the `tiger-mark` command-line Markdown-to-PDF converter.
+
+Printing is not included in the shipped application.
+
+## Reading and reviewing
+
+TigerMarkView focuses on files on the local machine. Every document-opening route uses the same
+rendering and file-monitoring workflow. Links to other local Markdown files stay in TigerMarkView;
+web and mail links open through the associated Windows application, and other local file types are
+not launched from a document.
+
+The reload modes determine what happens when the open file changes:
+
+| Mode | Behaviour |
+|---|---|
+| Manual | Reports that a newer version exists and waits for an explicit reload. |
+| Confirm | Shows an unobtrusive reload action. This is the default. |
+| Automatic | Reloads automatically and preserves the reading position where practical. |
+
+Open Recent records documents explicitly opened by the user and persists between sessions.
+Navigation history records every document visited during the current session, including local links,
+and restores the previous scroll position when navigating Back or Forward.
+
+## Rendering
+
+Markdown is converted by Markdig and displayed as HTML in WebView2. The same generated HTML and CSS
+are used for the viewer and PDF export:
+
+```text
+Markdown -> Markdig -> HTML + CSS -> WebView2 -> viewer / PDF
+```
+
+Two rendering options are available under **View > Rendering**:
+
+- **Emoji Shortcodes** expands recognised forms such as `:rocket:`. It is off by default. Literal
+  emoji are unaffected, and unrecognised shortcodes or shortcodes inside code remain unchanged.
+- **Syntax Highlighting** colours fenced code blocks when their declared language is recognised. It
+  is off by default. TigerMarkView does not guess languages; an absent or unsupported language falls
+  back to the normal code-block rendering.
+
+Both options are implemented in `TigerMarkView.Core`, so the displayed document and an exported PDF
+stay consistent. The CLI currently uses the default rendering with both options off.
+
+## PDF export
+
+**File > Export to PDF...** exports the currently displayed document version. If a newer version is
+available on disk but has not been reloaded, the PDF contains the version the reviewer can see. PDF
+output always uses a light, print-oriented palette regardless of the viewer theme.
+
+Global settings under **Tools > PDF Export Settings** are remembered between sessions:
+
+| Setting | Choices | Default |
+|---|---|---|
+| Paper size | A3, A4, A5, Letter, Legal | A4 |
+| Orientation | Portrait, Landscape | Portrait |
+| Margins | Narrow, Normal, Wide | Normal |
+| Page numbers | On, Off | Off |
+
+## Window layout
+
+The menu bar, toolbar, and status bar can be shown or hidden. The menu bar and toolbar cannot both be
+hidden, and the toolbar's **Menu** (`☰`) button remains available whenever it is the only route to the
+full command tree.
+
+**View > Toolbar Buttons** controls three named items:
+
+- **Menu**, shown by default;
+- **Open Recent**, hidden by default; and
+- **Export to PDF**, hidden by default.
+
+These buttons mirror existing menu commands; toolbar customisation does not change the available
+features.
+
+## Installation
+
+The intended first distribution is the Windows installer attached to a GitHub Release. The installer
+supports per-user installation by default and an optional all-users installation. It installs the
+desktop application only; it does not currently install `tiger-mark`.
+
+TigerMarkView requires:
+
+- Windows 10 version 1607 or later on x64-compatible hardware;
+- the .NET 10 Desktop Runtime (x64); and
+- the Microsoft Edge WebView2 Runtime.
+
+The installer checks for the two runtimes and identifies anything missing. They are not bundled.
+TigerMarkView is not currently distributed through WinGet.
+
+To build the installer locally, install Inno Setup 6 or 7 and run:
+
+```powershell
+pwsh installer/Build-Installer.ps1
+```
+
+The output is written below `artifacts/`, which is ignored by Git.
+
+## Command line
+
+`tiger-mark` converts one Markdown file to one PDF without opening the desktop application. It is a
+TigerCli-based command and currently builds from `src/TigerMarkView.Cli`; no separate CLI installer or
+package is published by this repository.
+
+Write the PDF beside the input (`notes.md` becomes `notes.pdf`):
+
+```text
+tiger-mark notes.md
+```
+
+Choose an output path and page settings:
+
+```text
+tiger-mark notes.md -o report.pdf
+tiger-mark notes.md --output "output/review.pdf"
+tiger-mark notes.md --paper Letter --orientation Landscape --margins Narrow --page-numbers
+```
+
+The command surface is:
+
+- one positional Markdown input (`.md` or `.markdown`);
+- `-o` / `--output <file>`; when omitted, the PDF is written beside the input;
+- `--paper <A3|A4|A5|Letter|Legal>`;
+- `--orientation <Portrait|Landscape>`;
+- `--margins <Narrow|Normal|Wide>`;
+- `--page-numbers`;
+- `--help` and `--version`; and
+- `--help-errors` for the documented exit-code meanings.
+
+Enum values are case-insensitive. TigerCli's grammar places the input before TigerMarkView's options:
+`tiger-mark <input> [options]`. There are no subcommands, configuration files, multi-file publishing,
+custom page dimensions, headers/footers, TOC generation, or CLI switches for emoji or syntax
+highlighting.
+
+`--help` also lists TigerCli's standard presentation and diagnostics options, including `-h`,
+`--version-full`, `--help-env`, `--non-interactive`, `--theme`, `--color`, `--no-color`, and
+`--culture`. These control the command-line framework; for example, TigerCli's `--theme` does not
+change the PDF palette.
+
+On success the command writes `Created: <path>` to standard output and exits with code `0`. Conversion
+failures return `1`, usage errors return `2`, and cancellation returns `3`. Errors are written to
+standard error. The CLI is Windows-only and requires WebView2, like the desktop application.
+
+## Building and testing
+
+The repository requires the .NET 10 SDK on Windows:
+
+```powershell
+dotnet restore TigerMarkView.slnx
+dotnet build TigerMarkView.slnx
+dotnet test TigerMarkView.slnx
+dotnet run --project src/TigerMarkView
+dotnet run --project src/TigerMarkView.Cli -- README.md -o README.pdf
+```
+
+## Repository structure
+
+```text
+src/
+  TigerMarkView.Core/       Platform-neutral rendering and domain logic
+  TigerMarkView/            Avalonia desktop application
+  TigerMarkView.Pdf/        Windows/WebView2 PDF support
+  TigerMarkView.Cli/        tiger-mark command
+
+tests/
+  TigerMarkView.Core.Tests/
+  TigerMarkView.Cli.Tests/
+
+docs/                       Bundled user documentation and notices
+assets/                     Artwork and licence texts
+installer/                  Inno Setup build files
+```
+
+`TigerMarkView.Core` must remain free of Avalonia and Windows-only dependencies. Both the GUI and CLI
+reuse its renderer, and both use `TigerMarkView.Pdf` for PDF generation. `Directory.Build.props` is
+the single source of product identity and version information.
+
+Contributor guidance is in `AGENTS.md` and the architecture notes in `CLAUDE.md`.
+
+## Licence
+
+TigerMarkView is released under the [MIT License](LICENSE). Third-party components and their licence
+terms are listed in [docs/THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md). Toolbar and status-bar
+icons are derived from [Microsoft Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons).

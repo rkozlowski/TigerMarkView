@@ -1,0 +1,12 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="TigerMarkView.MessageDialog"
+        Width="420" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        ShowInTaskbar="False">
+  <StackPanel Margin="20" Spacing="16">
+    <TextBlock x:Name="MessageText" TextWrapping="Wrap" />
+    <Button Content="OK" HorizontalAlignment="Right" Click="OnOkClick" IsDefault="True" />
+  </StackPanel>
+</Window>

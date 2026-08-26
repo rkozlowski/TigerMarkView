@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Separate from TigerMarkView.Core.Tests because the CLI is net10.0-windows (TigerMarkView.Pdf hosts
+    WebView2 through WinForms) and Core's tests are deliberately platform-neutral net10.0. What is
+    tested here is only what the CLI itself decides — argument parsing, path resolution, exit codes.
+    Rendering and export are Core's and Pdf's, and are not re-tested through this front end.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\TigerMarkView.Cli\TigerMarkView.Cli.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,20 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:webview="using:Avalonia.Controls"
+        x:Class="TigerMarkView.HelpWindow"
+        Title="TigerMarkView Help"
+        Icon="/Assets/TMV.ico"
+        Width="900" Height="750"
+        WindowStartupLocation="CenterOwner">
+
+  <!--
+    Nothing but the viewer. Help has no toolbar, no status bar, and no menus, because everything those
+    surfaces express — freshness, reload mode, export, the navigation trail — is about the document the
+    reader is reviewing, and the bundled help is not that document.
+
+    ClipToBounds for the same reason MainWindow's browser carries it: NativeWebView's hit-test area is
+    not confined to its layout bounds. There is no chrome for it to swallow here today, and this is what
+    keeps that true if any is ever added.
+  -->
+  <webview:NativeWebView x:Name="Browser" ClipToBounds="True" />
+</Window>

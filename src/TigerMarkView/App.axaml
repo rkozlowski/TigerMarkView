@@ -1,0 +1,37 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="TigerMarkView.App"
+             RequestedThemeVariant="Light">
+  <Application.Styles>
+    <FluentTheme />
+  </Application.Styles>
+
+  <!-- The application chrome follows the selected viewer theme through Avalonia's own theme-variant
+       mechanism: FluentTheme restyles the standard controls, and these dictionaries cover the few
+       places TigerMarkView paints itself (the Confirm banner and the status-bar divider). -->
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <!-- Toolbar command icons (Fluent UI System Icons); see Assets/Icons.axaml for provenance. -->
+        <ResourceInclude Source="avares://TigerMarkView/Assets/Icons.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="BannerBackgroundBrush" Color="#FFF4E5" />
+          <SolidColorBrush x:Key="BannerBorderBrush" Color="#F0C36D" />
+          <SolidColorBrush x:Key="ChromeDividerBrush" Color="#D0D7DE" />
+          <!-- Same values the rendered document uses for links (DocumentShell's link colour token), so
+               a link in the About dialog and a link in a document are recognisably the same thing. -->
+          <SolidColorBrush x:Key="LinkTextBrush" Color="#0969DA" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="BannerBackgroundBrush" Color="#3A2E14" />
+          <SolidColorBrush x:Key="BannerBorderBrush" Color="#7A6021" />
+          <SolidColorBrush x:Key="ChromeDividerBrush" Color="#30363D" />
+          <SolidColorBrush x:Key="LinkTextBrush" Color="#4493F8" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
+</Application>
