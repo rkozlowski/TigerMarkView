@@ -16,6 +16,11 @@ Inno product code, ARP publisher/name matching, the `tiger-mark` command, and pa
 `.NET Desktop Runtime 10` and `Microsoft Edge WebView2 Runtime`. The machine entry appears first so
 TigerWinLab's current machine-scope WinGet scenario can validate it explicitly.
 
+Do not emit `AppsAndFeaturesEntries.DisplayVersion` when it is identical to `PackageVersion`. With no
+explicit installed display-version override, the generator treats the ARP version as the package
+version and omits the field. Emit it only when the installed ARP display version genuinely differs,
+by passing that value through `-InstalledDisplayVersion`.
+
 ## Before publication
 
 The release workflow generates and runs `winget validate` over the manifests from the exact local

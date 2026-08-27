@@ -5,6 +5,7 @@ param(
     [string] $ExpectedVersion,
     [string] $InstallerUrl,
     [string] $ExpectedInstallerSha256,
+    [string] $InstalledDisplayVersion,
     [switch] $Validate
 )
 
@@ -43,6 +44,19 @@ $installerHash = (Get-FileHash -LiteralPath $InstallerPath -Algorithm SHA256).Ha
 if (-not [string]::IsNullOrWhiteSpace($ExpectedInstallerSha256) -and
     $installerHash -cne $ExpectedInstallerSha256.ToUpperInvariant()) {
     throw "Installer SHA-256 '$installerHash' does not match '$ExpectedInstallerSha256'."
+}
+
+if ([string]::IsNullOrWhiteSpace($InstalledDisplayVersion)) {
+    $InstalledDisplayVersion = $version
+}
+if ($InstalledDisplayVersion -match '[\r\n]') {
+    throw 'InstalledDisplayVersion must be a single-line value.'
+}
+$displayVersionEntry = if ($InstalledDisplayVersion -cne $version) {
+    "    DisplayVersion: $InstalledDisplayVersion`r`n"
+}
+else {
+    ''
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) { $OutputRoot = Join-Path $repoRoot 'artifacts\winget' }
@@ -91,7 +105,7 @@ Installers:
   AppsAndFeaturesEntries:
   - DisplayName: $($properties.Product)
     Publisher: $($properties.Company)
-    ProductCode: '$productCode'
+$displayVersionEntry    ProductCode: '$productCode'
     InstallerType: inno
 - Architecture: x64
   Scope: user
@@ -104,7 +118,7 @@ Installers:
   AppsAndFeaturesEntries:
   - DisplayName: $($properties.Product)
     Publisher: $($properties.Company)
-    ProductCode: '$productCode'
+$displayVersionEntry    ProductCode: '$productCode'
     InstallerType: inno
 ManifestType: installer
 ManifestVersion: 1.12.0
@@ -169,7 +183,7 @@ if ($installerManifest -notmatch '(?ms)Scope: machine.*?/ALLUSERS.*?Scope: user.
 if ($Validate) {
     $winget = Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue
     if ($null -eq $winget) { throw 'winget.exe is required for -Validate.' }
-    & $winget.Source validate --manifest $manifestDirectory
+    & $winget.Source validate --manifest $manifestDirectory --disable-interactivity
     if ($LASTEXITCODE -ne 0) { throw "winget validate failed with $LASTEXITCODE." }
 }
 

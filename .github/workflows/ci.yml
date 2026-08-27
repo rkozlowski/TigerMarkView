@@ -47,5 +47,9 @@ jobs:
           -m:1
           /nodeReuse:false
 
+      - name: Test WinGet manifest generation
+        shell: pwsh
+        run: ./eng/winget/tests/TigerMarkViewWinGet.Tests.ps1
+
       - name: Verify tracked-file whitespace
         run: git diff --check
