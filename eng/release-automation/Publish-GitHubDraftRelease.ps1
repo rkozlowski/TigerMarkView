@@ -105,6 +105,8 @@ if (-not $tagExists) {
         }
     }
     else {
+        git -C $repoRoot config user.name 'github-actions[bot]'
+        git -C $repoRoot config user.email '41898282+github-actions[bot]@users.noreply.github.com'
         git -C $repoRoot tag -a $tag $CommitSha -m "TigerMarkView $Version"
         if ($LASTEXITCODE -ne 0) { throw "Could not create annotated tag '$tag'." }
     }
