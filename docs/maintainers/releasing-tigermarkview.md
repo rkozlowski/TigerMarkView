@@ -97,7 +97,8 @@ tag. It then:
 4. publishes GUI and CLI from the already-built outputs;
 5. compiles and behavior-tests the one installer;
 6. records SHA-256 and byte lengths in the closed artifact manifest;
-7. prepares and validates WinGet manifests without submitting them;
+7. force-provisions pinned WinGet 1.29.290, records `winget --info`, and validates schema 1.12
+   manifests non-interactively without submitting them;
 8. transfers the exact validated bytes to the publication job and rechecks the transfer hash;
 9. creates annotated tag `v<version>` at the workflow commit; and
 10. creates a **draft** GitHub Release with the installer and verification records.

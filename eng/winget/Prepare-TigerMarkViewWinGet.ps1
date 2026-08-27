@@ -6,6 +6,7 @@ param(
     [string] $InstallerUrl,
     [string] $ExpectedInstallerSha256,
     [string] $InstalledDisplayVersion,
+    [string] $WinGetPath,
     [switch] $Validate
 )
 
@@ -21,6 +22,7 @@ if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion) -and $version -cne $Expe
 }
 
 $packageIdentifier = 'ItTiger.TigerMarkView'
+$manifestVersion = [version] '1.12.0'
 $repositoryUrl = [string] $properties.RepositoryUrl
 $issueTrackerUrl = ([string] $properties.IssueTrackerUrl).Replace('$(RepositoryUrl)', $repositoryUrl)
 $websiteUrl = [string] $properties.WebsiteUrl
@@ -181,10 +183,51 @@ if ($installerManifest -notmatch '(?ms)Scope: machine.*?/ALLUSERS.*?Scope: user.
 }
 
 if ($Validate) {
-    $winget = Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue
-    if ($null -eq $winget) { throw 'winget.exe is required for -Validate.' }
-    & $winget.Source validate --manifest $manifestDirectory --disable-interactivity
-    if ($LASTEXITCODE -ne 0) { throw "winget validate failed with $LASTEXITCODE." }
+    if ([string]::IsNullOrWhiteSpace($WinGetPath)) {
+        $winget = Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue
+        if ($null -eq $winget) { throw 'winget.exe is required for -Validate.' }
+        $WinGetPath = $winget.Source
+    }
+    $WinGetPath = [IO.Path]::GetFullPath($WinGetPath)
+    if (-not (Test-Path -LiteralPath $WinGetPath -PathType Leaf)) {
+        throw "WinGet executable not found: $WinGetPath"
+    }
+
+    $versionOutput = @(& $WinGetPath --version 2>&1)
+    $versionExitCode = $LASTEXITCODE
+    if ($versionExitCode -ne 0) {
+        throw "'$WinGetPath --version' failed with exit code $versionExitCode."
+    }
+    $versionText = ($versionOutput | Out-String).Trim()
+    $versionMatch = [regex]::Match($versionText, '(?<!\d)(\d+\.\d+\.\d+)(?!\d)')
+    if (-not $versionMatch.Success) {
+        throw "Could not parse the WinGet client version from '$versionText'."
+    }
+    $wingetVersion = [version] $versionMatch.Groups[1].Value
+    if ($wingetVersion.Major -lt $manifestVersion.Major -or
+        ($wingetVersion.Major -eq $manifestVersion.Major -and
+            $wingetVersion.Minor -lt $manifestVersion.Minor)) {
+        throw "WinGet $wingetVersion cannot validate manifest schema $manifestVersion; provision WinGet $($manifestVersion.Major).$($manifestVersion.Minor) or later."
+    }
+
+    Write-Host "Validating manifest schema $manifestVersion with WinGet $wingetVersion at '$WinGetPath'."
+    $validationOutput = @(
+        & $WinGetPath validate --manifest $manifestDirectory --disable-interactivity 2>&1
+    )
+    $validationExitCode = $LASTEXITCODE
+    $validationOutput | ForEach-Object { Write-Host $_ }
+
+    # WinGet documents 0x8A150028 as MANIFEST_VALIDATION_WARNING: validation succeeded
+    # with warnings. Accept only that HRESULT, and only after the compatibility gate above.
+    $validationWarningExitCode = -1978335192
+    if ($validationExitCode -eq $validationWarningExitCode) {
+        Write-Warning 'WinGet manifest validation succeeded with warnings.'
+    }
+    elseif ($validationExitCode -ne 0) {
+        $unsignedExitCode = [uint32] ([int64] $validationExitCode -band 0xffffffffL)
+        throw ('winget validate failed with exit code {0} (0x{1:X8}).' -f `
+            $validationExitCode, $unsignedExitCode)
+    }
 }
 
 Write-Host "PASS: prepared $packageIdentifier $version manifests at '$manifestDirectory'." -ForegroundColor Green

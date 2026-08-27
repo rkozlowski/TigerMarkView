@@ -28,11 +28,22 @@ installer hash. It uploads them as the workflow artifact
 `TigerMarkView-WinGet-<version>-<commit>`. This proves schema and release construction but not the
 future public URL, which does not resolve while the GitHub Release is a draft.
 
+The hosted runner's preinstalled WinGet is not trusted merely because it is present. The workflow
+uses a pinned `Microsoft.WinGet.Client` module to force-provision WinGet 1.29.290, prints
+`winget --info`, and passes that exact executable to the generator. The generator rejects clients
+older than the manifest schema's 1.12 major/minor before validation and always uses
+`--disable-interactivity`. WinGet's documented warning-success HRESULT (`0x8A150028`) is the only
+accepted nonzero result; schema-incompatible clients and genuine validation failures remain fatal.
+
 To generate the same files locally:
 
 ```powershell
 pwsh eng/winget/Prepare-TigerMarkViewWinGet.ps1 -Validate
 ```
+
+Local validation likewise requires WinGet 1.12 or later. Use `-WinGetPath` to bind the check to a
+specific provisioned executable rather than whichever app execution alias happens to be first on
+`PATH`.
 
 They are written to:
 
