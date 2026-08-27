@@ -183,12 +183,9 @@ jobs:
         shell: pwsh
         env:
           WINGET_CLIENT_MODULE_VERSION: '1.29.280'
-          WINGET_MINIMUM_VERSION: '1.12'
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-
-          $minimumVersion = [version] $env:WINGET_MINIMUM_VERSION
 
           function Resolve-WorkingWinGet {
             $candidate = Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue |
@@ -196,26 +193,12 @@ jobs:
             if ($null -eq $candidate -or -not (Test-Path -LiteralPath $candidate.Source -PathType Leaf)) {
               return $null
             }
-            $versionOutput = (& $candidate.Source --version 2>&1 | Out-String).Trim()
+            & $candidate.Source --info | Out-Host
             if ($LASTEXITCODE -ne 0) {
               Write-Warning "The discovered winget.exe at '$($candidate.Source)' exited with code $LASTEXITCODE."
               return $null
             }
-            if ($versionOutput -notmatch '(?<!\d)(\d+\.\d+\.\d+)(?!\d)') {
-              Write-Warning "Could not parse a WinGet client version from '$versionOutput'."
-              return $null
-            }
-            $resolvedVersion = [version] $Matches[1]
-            if ($resolvedVersion -lt $minimumVersion) {
-              Write-Warning "WinGet $resolvedVersion at '$($candidate.Source)' cannot validate manifest schema 1.12.0."
-              return $null
-            }
-            & $candidate.Source --info | Out-Host
-            if ($LASTEXITCODE -ne 0) {
-              Write-Warning "'$($candidate.Source) --info' exited with code $LASTEXITCODE."
-              return $null
-            }
-            return [pscustomobject] @{ Path = $candidate.Source; Version = $resolvedVersion }
+            return $candidate
           }
 
           $winget = Resolve-WorkingWinGet
@@ -236,10 +219,10 @@ jobs:
             $winget = Resolve-WorkingWinGet
           }
           if ($null -eq $winget) {
-            throw "WinGet provisioning did not produce a usable winget.exe of version $minimumVersion or later."
+            throw 'WinGet provisioning completed without resolving an executable winget.exe.'
           }
-          Write-Host "Using WinGet $($winget.Version) at '$($winget.Path)' for manifest schema 1.12.0."
-          "path=$($winget.Path)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Using WinGet at '$($winget.Source)'."
+          "path=$($winget.Source)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Prepare and validate first-submission WinGet manifests
         shell: pwsh

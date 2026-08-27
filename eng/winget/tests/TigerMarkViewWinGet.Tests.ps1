@@ -185,21 +185,19 @@ exit /b 2
 '@
     Set-Content -LiteralPath $fakeWinGet -Value $fakeWinGetContent -Encoding ascii
 
-    $unsupportedLog = Join-Path $testRoot 'unsupported-winget.log'
-    Set-FakeWinGetResult -Version '1.11.510' -ValidateExitCode -1978335192 -LogPath $unsupportedLog
-    Assert-Throws -MessagePattern 'cannot validate manifest schema 1\.12\.0' -Action {
-        & $prepareScript `
-            -InstallerPath $installerPath `
-            -OutputRoot (Join-Path $testRoot 'unsupported-client') `
-            -ExpectedVersion $version `
-            -InstallerUrl $installerUrl `
-            -WinGetPath $fakeWinGet `
-            -Validate | Out-Host
-    }
-    $unsupportedInvocations = @(Get-Content -LiteralPath $unsupportedLog | Where-Object { $_ })
-    Assert-True ($unsupportedInvocations.Count -eq 1 -and $unsupportedInvocations[0] -eq '--version') `
-        'A schema-incompatible WinGet client must be rejected before manifest validation.'
-    Write-Host 'PASS: WinGet 1.11 is rejected before validating schema 1.12.0 manifests'
+    $legacyClientLog = Join-Path $testRoot 'legacy-client-winget.log'
+    Set-FakeWinGetResult -Version '1.11.510' -ValidateExitCode 0 -LogPath $legacyClientLog
+    & $prepareScript `
+        -InstallerPath $installerPath `
+        -OutputRoot (Join-Path $testRoot 'legacy-client') `
+        -ExpectedVersion $version `
+        -InstallerUrl $installerUrl `
+        -WinGetPath $fakeWinGet `
+        -Validate | Out-Host
+    $legacyClientInvocations = @(Get-Content -LiteralPath $legacyClientLog | Where-Object { $_ })
+    Assert-True ($legacyClientInvocations.Count -eq 1 -and $legacyClientInvocations[0] -like 'validate *') `
+        'The client version must not be probed; winget validate alone decides whether the manifests are acceptable.'
+    Write-Host 'PASS: an older WinGet client reaches validation instead of being rejected up front'
 
     $successLog = Join-Path $testRoot 'success-winget.log'
     Set-FakeWinGetResult -Version '1.29.290' -ValidateExitCode 0 -LogPath $successLog
