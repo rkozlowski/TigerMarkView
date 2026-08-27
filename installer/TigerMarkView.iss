@@ -264,11 +264,12 @@ procedure AddOwnedPathEntry;
 var
   Root: Integer;
   Key, ExistingPath, OwnedEntry, Entry: String;
+  PathValueExists: Boolean;
 begin
   Root := EnvironmentRoot;
   Key := EnvironmentKey;
   Entry := ExpandConstant('{app}');
-  RegQueryStringValue(Root, Key, PathValueName, ExistingPath);
+  PathValueExists := RegQueryStringValue(Root, Key, PathValueName, ExistingPath);
 
   if PathContainsEntry(ExistingPath, Entry) then
   begin
@@ -280,7 +281,9 @@ begin
     Exit;
   end;
 
-  if (ExistingPath <> '') and (ExistingPath[Length(ExistingPath)] <> ';') then
+  { Always add a separator when the PATH value exists. If its original value ends in ';' (or is
+    empty), that empty segment is unrelated content and must remain ahead of our entry. }
+  if PathValueExists then
     ExistingPath := ExistingPath + ';';
   if not RegWriteExpandStringValue(Root, Key, PathValueName, ExistingPath + Entry) then
     RaiseException('Could not add TigerMarkView to PATH.');
