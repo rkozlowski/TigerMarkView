@@ -5,7 +5,7 @@ namespace TigerMarkView.Core.Tests.About;
 
 /// <summary>
 /// The About line's formatting rule. The version <em>value</em> is not tested here and should not be —
-/// it lives in Directory.Build.props, and a test asserting it would be a second place to update on
+/// it lives in Version.props, and a test asserting it would be a second place to update on
 /// every release, which is exactly what having one canonical definition is meant to avoid.
 /// </summary>
 public class ApplicationVersionTests

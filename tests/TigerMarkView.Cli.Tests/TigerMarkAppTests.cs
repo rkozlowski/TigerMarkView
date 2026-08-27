@@ -85,7 +85,7 @@ public class TigerMarkAppTests : IDisposable
     }
 
     /// <summary>
-    /// One version, from Directory.Build.props through assembly metadata — asserted as "a version is
+    /// One version, from Version.props through assembly metadata — asserted as "a version is
     /// reported", never against a literal, which would be the second place to edit on every release.
     /// </summary>
     [Fact]

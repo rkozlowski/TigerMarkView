@@ -1,0 +1,60 @@
+<Project>
+
+  <!--
+    Shared product version and application metadata for the four shipped TigerMarkView projects.
+    Imported explicitly by production project files; tests and repository helpers do not import it.
+    Project-specific metadata such as AssemblyName and Description may remain in a project file.
+  -->
+  <PropertyGroup>
+    <Version>0.8.0</Version>
+    <AssemblyVersion>$(Version).0</AssemblyVersion>
+    <FileVersion>$(Version).0</FileVersion>
+    <UtcBuildTimestamp>$([System.DateTime]::UtcNow.ToString('yyyyMMdd.HHmmss'))</UtcBuildTimestamp>
+    <InformationalVersion>$(Version)+$(UtcBuildTimestamp)</InformationalVersion>
+    <!-- Keep InformationalVersion exactly Version+timestamp; the SDK must not append a Git SHA. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+
+    <Product>TigerMarkView</Product>
+    <Company>IT Tiger</Company>
+    <Authors>IT Tiger</Authors>
+    <!-- This remains aligned with the copyright notice in LICENSE. -->
+    <Copyright>Copyright (c) 2026 Ryszard Kozlowski</Copyright>
+    <NeutralLanguage>en-US</NeutralLanguage>
+    <Description>A local Markdown viewer, reviewer and PDF exporter.</Description>
+
+    <RepositoryUrl>https://github.com/rkozlowski/TigerMarkView</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <DocumentationUrl>$(RepositoryUrl)/blob/main/docs/HELP.md</DocumentationUrl>
+    <IssueTrackerUrl>$(RepositoryUrl)/issues</IssueTrackerUrl>
+    <WebsiteUrl>https://www.ittiger.net/</WebsiteUrl>
+    <LicenseIdentity>MIT</LicenseIdentity>
+
+    <!-- This repository ships applications and deliberately has no NuGet package output. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- Surface canonical links and identity at runtime for About and TigerCli-generated output. -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>Documentation</_Parameter1>
+      <_Parameter2>$(DocumentationUrl)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>RepositoryUrl</_Parameter1>
+      <_Parameter2>$(RepositoryUrl)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>IssueTrackerUrl</_Parameter1>
+      <_Parameter2>$(IssueTrackerUrl)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>Website</_Parameter1>
+      <_Parameter2>$(WebsiteUrl)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>License</_Parameter1>
+      <_Parameter2>$(LicenseIdentity)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

@@ -40,7 +40,7 @@ internal static class TigerMarkApp
     public static TigerCliApp Create() =>
         TigerCliApp.CreateBuilder()
             // Name, description, version and copyright off the built assembly, which is where
-            // Directory.Build.props put them. No version string exists in this project and there must
+            // Version.props put them. No version string exists in this project and there must
             // never be one; the application name comes from the assembly, which is `tiger-mark`.
             .UseAssemblyMetadata<ConvertCommand>()
             .SetInteractionMode(TigerCliInteractionMode.NonInteractive)

@@ -60,10 +60,29 @@
                AutomationProperties.AutomationId="AboutDescription" />
 
     <StackPanel Spacing="2">
+      <TextBlock x:Name="CompanyText" TextWrapping="Wrap"
+                 AutomationProperties.AutomationId="AboutCompany" />
       <TextBlock x:Name="CopyrightText" TextWrapping="Wrap"
                  AutomationProperties.AutomationId="AboutCopyright" />
       <TextBlock x:Name="LicenseText" TextWrapping="Wrap"
                  AutomationProperties.AutomationId="AboutLicense" />
+    </StackPanel>
+
+    <StackPanel Orientation="Horizontal" Spacing="20">
+      <Button Classes="link" Click="OnRepositoryClick"
+              ToolTip.Tip="Open the public source repository"
+              AutomationProperties.Name="Repository"
+              AutomationProperties.AutomationId="AboutRepositoryLink">
+        <TextBlock Text="Repository" TextDecorations="Underline"
+                   Foreground="{DynamicResource LinkTextBrush}" />
+      </Button>
+      <Button Classes="link" Click="OnIssueTrackerClick"
+              ToolTip.Tip="Report a problem in the public issue tracker"
+              AutomationProperties.Name="Report an issue"
+              AutomationProperties.AutomationId="AboutIssueTrackerLink">
+        <TextBlock Text="Report an issue" TextDecorations="Underline"
+                   Foreground="{DynamicResource LinkTextBrush}" />
+      </Button>
     </StackPanel>
 
     <StackPanel Orientation="Horizontal" Spacing="20">

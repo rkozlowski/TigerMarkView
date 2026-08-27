@@ -15,9 +15,11 @@ dotnet test TigerMarkView.slnx
 ```
 
 Builds must remain at zero warnings. Automated tests cover Core and CLI behaviour, not the complete
-Avalonia/WebView interaction. For GUI changes, verify pointer hover, tooltip, click, and effect in the
-running application. If automation moves the pointer, first confirm that TigerMarkView is the
-foreground window.
+Avalonia/WebView interaction. Automated pointer, keyboard, focus, installer, and other live Windows UI
+work should run through TigerWinLab whenever it can reasonably do so; it must not drive the developer's
+active desktop, live TigerMarkView process, or unrelated applications. Quick manual host checks remain
+available to a developer. TigerWinLab is the application-facing lab interface; TigerHyperLab is its
+lower-level VM substrate and must not be scripted ad hoc from this repository.
 
 ## Product boundary
 
@@ -238,22 +240,36 @@ zero values differ from those defaults. No dimensions or margin values belong in
 
 ## Versioning and packaging
 
-`Directory.Build.props` is the single source of `Version`, `Product`, `Authors`, `Company`,
-`Copyright`, and `Description`. Assemblies, About, CLI version output, and installer metadata derive
-from it. Do not repeat a literal version elsewhere. Copyright metadata must match `LICENSE`.
+`Version.props` is the single source of `Version`, assembly/file/informational versions, `Product`,
+`Authors`, `Company`, `Copyright`, repository/documentation/issue links, and shared description.
+The four shipped projects import it explicitly; test/helper projects do not. `Directory.Build.props`
+contains repository-wide build policy only. Assemblies, About, TigerCli help/version output, installer
+metadata, artifact names, release automation, and WinGet preparation derive from `Version.props`. Do
+not repeat a literal product version elsewhere. Copyright metadata must match `LICENSE`.
 
 `ApplicationVersion` strips build metadata for display. Tests verify formatting rules and metadata
 consistency without asserting the current literal version.
 
-`installer/Build-Installer.ps1` publishes framework-dependent win-x64 output and invokes
-`TigerMarkView.iss`. Generated files stay below ignored `artifacts/`.
+`installer/Build-Installer.ps1` stages framework-dependent win-x64 GUI and CLI output in one tree and
+invokes `TigerMarkView.iss`. The release workflow builds the solution once, then uses the script's
+`-NoBuild` path so validation, installer compilation, hashing, and upload all concern the same binary
+outputs. Generated files stay below ignored `artifacts/`.
 
 The Inno script derives identity and version from the published executable. Keep its `AppId` fixed so
 upgrades recognise previous installations. Per-user installation is the default; all-users
-installation may elevate. Uninstall leaves Local AppData settings and WebView profiles intact.
+installation may elevate. The PATH task is checked for a first install and owns at most one exact raw
+install-directory entry in the selected user/machine scope. It must not claim a pre-existing entry or
+remove more than the entry it recorded. Uninstall leaves Local AppData settings and WebView profiles
+intact.
 
 Neither .NET nor WebView2 is bundled. The installer checks for both, downloads nothing, creates no
 Markdown file association, and excludes debug symbols and XML documentation from the installed files.
+
+TigerMarkView is an application repository. It publishes one GUI+CLI installer, not NuGet packages,
+a separate CLI installer, or a portable ZIP. Public documentation remains `README.md` plus `docs/`;
+do not introduce DocFX, generated API docs, or an API-documentation site. Release automation creates a
+draft release and never submits to `winget-pkgs`; the first and subsequent WinGet pull requests remain
+explicit maintainer actions after live-asset validation in TigerWinLab.
 
 Inno Setup's preprocessor treats a line beginning with `#` as a directive, including in code blocks;
 use `Chr(13) + Chr(10)` rather than a line-leading `#13#10` expression.

@@ -7,7 +7,7 @@ namespace TigerMarkView.Core.About;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The version itself is not defined here and must never be: it lives in <c>Directory.Build.props</c>
+/// The version itself is not defined here and must never be: it lives in <c>Version.props</c>
 /// and reaches the application as assembly metadata. This is only the formatting rule, which is in
 /// Core because it is a pure string transformation worth testing and because <c>tiger-mark
 /// --version</c> must match the GUI's About dialog.
@@ -29,7 +29,7 @@ public static class ApplicationVersion
     /// </summary>
     /// <remarks>
     /// The informational version is the authoritative one — it is what <c>&lt;Version&gt;</c> in
-    /// Directory.Build.props produces verbatim — but an assembly built without it should still report
+    /// Version.props produces verbatim — but an assembly built without it should still report
     /// something true rather than "unknown", hence the assembly-version fallback. This is the one
     /// reader of that metadata, so the GUI's About dialog and the CLI's <c>--version</c> cannot drift.
     /// </remarks>

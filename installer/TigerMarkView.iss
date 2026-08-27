@@ -5,9 +5,9 @@
 ; win-x64 publish already exists at artifacts\publish\win-x64.
 ;
 ; Nothing here states the version, the product name, the publisher, or the copyright. All four are
-; read back out of the published TigerMarkView.exe, which the SDK stamped from Directory.Build.props
+; read back out of the published TigerMarkView.exe, which the SDK stamped from Version.props
 ; — the same chain the About dialog reads at run time, so the installer and About can never disagree.
-; Adding a literal version to this file is exactly the drift Directory.Build.props exists to prevent.
+; Adding a literal version to this file is exactly the drift Version.props exists to prevent.
 
 ; ---------------------------------------------------------------------------------------------
 ; Inputs (override with ISCC /D...)
@@ -35,12 +35,12 @@
 #define AppName GetStringFileInfo(AppExePath, "ProductName")
 #define AppPublisher GetStringFileInfo(AppExePath, COMPANY_NAME)
 #define AppCopyright GetStringFileInfo(AppExePath, LEGAL_COPYRIGHT)
-; "Comments", not FILE_DESCRIPTION: the SDK puts <Description> from Directory.Build.props there,
+; "Comments", not FILE_DESCRIPTION: the SDK puts <Description> from Version.props there,
 ; while FileDescription is just the assembly name again.
 #define AppDescription GetStringFileInfo(AppExePath, "Comments")
 
-; ProductVersion carries SemVer build metadata (0.8.0+ce8a809...). Strip it, exactly as
-; Core.About.ApplicationVersion.Format does for the About dialog, so both read "0.8.0".
+; ProductVersion carries SemVer build metadata. Strip it exactly as
+; Core.About.ApplicationVersion.Format does for the About dialog.
 #define RawProductVersion GetStringFileInfo(AppExePath, PRODUCT_VERSION)
 #if Pos("+", RawProductVersion) > 0
   #define AppVersion Copy(RawProductVersion, 1, Pos("+", RawProductVersion) - 1)
@@ -95,18 +95,23 @@ OutputBaseFilename={#AppName}-{#AppVersion}-win-x64-setup
 
 ; No file associations in this phase — .md stays with whatever the user already uses.
 ChangesAssociations=no
+ChangesEnvironment=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-; Off by default, per the product decision that a Start Menu entry is enough.
+; PATH is checked by default because this is the complete GUI + CLI product. The code below owns one
+; exact raw entry, avoids claiming a pre-existing entry, and removes only the entry it inserted.
+Name: "addtopath"; Description: "Add the TigerMarkView install directory to PATH"; \
+    GroupDescription: "Command-line integration:"; Flags: checkedonce
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
 ; The whole publish output, minus debug symbols and XML doc files — around 105 MB of .pdb that the
-; application never reads. Everything else (Avalonia, Markdig, the WebView2 loader, Docs\HELP.md,
-; Docs\THIRD-PARTY-NOTICES.md, Docs\LICENSE.txt) ships as published, so Help works offline.
+; applications never read. Everything else (TigerMarkView.exe, tiger-mark.exe, Avalonia, TigerCli,
+; Markdig, the WebView2 loader, Docs\HELP.md, Docs\THIRD-PARTY-NOTICES.md, Docs\LICENSE.txt) ships as
+; staged, so the GUI, CLI, PDF export, and offline Help are one product installation.
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "*.pdb,*.xml"; \
     Flags: recursesubdirs createallsubdirs ignoreversion
 
@@ -129,6 +134,196 @@ const
   { Microsoft's documented detection key for the Evergreen WebView2 Runtime. }
   WebView2ClientKey = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
   DirectoryAttribute = $10;
+  UserEnvironmentKey = 'Environment';
+  MachineEnvironmentKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';
+  PathValueName = 'Path';
+  PathOwnershipKey = 'Software\{#AppPublisher}\{#AppName}\Installer';
+  PathOwnershipValue = 'OwnedPathEntry';
+
+function EnvironmentRoot: Integer;
+begin
+  if IsAdminInstallMode then
+    Result := HKLM
+  else
+    Result := HKCU;
+end;
+
+function EnvironmentKey: String;
+begin
+  if IsAdminInstallMode then
+    Result := MachineEnvironmentKey
+  else
+    Result := UserEnvironmentKey;
+end;
+
+function NormalizePathEntry(const Value: String): String;
+begin
+  Result := Trim(Value);
+  while (Length(Result) > 3) and
+        ((Result[Length(Result)] = '\') or (Result[Length(Result)] = '/')) do
+    Delete(Result, Length(Result), 1);
+end;
+
+function SamePathEntry(const Left, Right: String): Boolean;
+begin
+  Result := CompareText(NormalizePathEntry(Left), NormalizePathEntry(Right)) = 0;
+end;
+
+function SameExactPathEntry(const Left, Right: String): Boolean;
+begin
+  Result := CompareText(Trim(Left), Trim(Right)) = 0;
+end;
+
+function PathContainsEntry(const PathValue, Entry: String): Boolean;
+var
+  Remaining, Segment: String;
+  Separator: Integer;
+begin
+  Result := False;
+  Remaining := PathValue;
+  while True do
+  begin
+    Separator := Pos(';', Remaining);
+    if Separator = 0 then
+      Segment := Remaining
+    else
+      Segment := Copy(Remaining, 1, Separator - 1);
+
+    if SamePathEntry(Segment, Entry) then
+    begin
+      Result := True;
+      Exit;
+    end;
+
+    if Separator = 0 then
+      Exit;
+    Delete(Remaining, 1, Separator);
+  end;
+end;
+
+function RemoveFirstPathEntry(const PathValue, Entry: String; var Removed: Boolean): String;
+var
+  Remaining, Segment: String;
+  Separator: Integer;
+  FirstOutput, ExactEntryExists, Matches: Boolean;
+begin
+  Result := '';
+  Removed := False;
+  FirstOutput := True;
+  Remaining := PathValue;
+  ExactEntryExists := False;
+
+  { An equivalent entry may have been added by the user after installation. Prefer the exact raw
+    entry we recorded, so uninstall never removes that later lookalike while leaving our own entry. }
+  while True do
+  begin
+    Separator := Pos(';', Remaining);
+    if Separator = 0 then
+      Segment := Remaining
+    else
+      Segment := Copy(Remaining, 1, Separator - 1);
+    if SameExactPathEntry(Segment, Entry) then
+      ExactEntryExists := True;
+    if Separator = 0 then
+      Break;
+    Delete(Remaining, 1, Separator);
+  end;
+
+  Remaining := PathValue;
+
+  while True do
+  begin
+    Separator := Pos(';', Remaining);
+    if Separator = 0 then
+      Segment := Remaining
+    else
+      Segment := Copy(Remaining, 1, Separator - 1);
+
+    if ExactEntryExists then
+      Matches := SameExactPathEntry(Segment, Entry)
+    else
+      Matches := SamePathEntry(Segment, Entry);
+
+    if (not Removed) and Matches then
+      Removed := True
+    else
+    begin
+      if not FirstOutput then
+        Result := Result + ';';
+      Result := Result + Segment;
+      FirstOutput := False;
+    end;
+
+    if Separator = 0 then
+      Exit;
+    Delete(Remaining, 1, Separator);
+  end;
+end;
+
+procedure AddOwnedPathEntry;
+var
+  Root: Integer;
+  Key, ExistingPath, OwnedEntry, Entry: String;
+begin
+  Root := EnvironmentRoot;
+  Key := EnvironmentKey;
+  Entry := ExpandConstant('{app}');
+  RegQueryStringValue(Root, Key, PathValueName, ExistingPath);
+
+  if PathContainsEntry(ExistingPath, Entry) then
+  begin
+    { Preserve ownership across upgrades, but never claim a matching entry another product or the
+      user created before TigerMarkView. }
+    if RegQueryStringValue(Root, PathOwnershipKey, PathOwnershipValue, OwnedEntry) and
+       SamePathEntry(OwnedEntry, Entry) then
+      RegWriteStringValue(Root, PathOwnershipKey, PathOwnershipValue, Entry);
+    Exit;
+  end;
+
+  if (ExistingPath <> '') and (ExistingPath[Length(ExistingPath)] <> ';') then
+    ExistingPath := ExistingPath + ';';
+  if not RegWriteExpandStringValue(Root, Key, PathValueName, ExistingPath + Entry) then
+    RaiseException('Could not add TigerMarkView to PATH.');
+  if not RegWriteStringValue(Root, PathOwnershipKey, PathOwnershipValue, Entry) then
+    RaiseException('Could not record TigerMarkView PATH ownership.');
+end;
+
+procedure RemoveOwnedPathEntry;
+var
+  Root: Integer;
+  Key, ExistingPath, UpdatedPath, OwnedEntry: String;
+  Removed: Boolean;
+begin
+  Root := EnvironmentRoot;
+  Key := EnvironmentKey;
+  if not RegQueryStringValue(Root, PathOwnershipKey, PathOwnershipValue, OwnedEntry) then
+    Exit;
+
+  if RegQueryStringValue(Root, Key, PathValueName, ExistingPath) then
+  begin
+    UpdatedPath := RemoveFirstPathEntry(ExistingPath, OwnedEntry, Removed);
+    if Removed and not RegWriteExpandStringValue(Root, Key, PathValueName, UpdatedPath) then
+      RaiseException('Could not remove TigerMarkView from PATH.');
+  end;
+  RegDeleteValue(Root, PathOwnershipKey, PathOwnershipValue);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    if WizardIsTaskSelected('addtopath') then
+      AddOwnedPathEntry
+    else
+      RemoveOwnedPathEntry;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    RemoveOwnedPathEntry;
+end;
 
 function DesktopRuntimeFoundUnder(const DotNetRoot: String): Boolean;
 var

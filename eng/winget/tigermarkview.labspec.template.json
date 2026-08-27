@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "name": "tiger-markview-winget",
+  "package": {
+    "identifier": "ItTiger.TigerMarkView",
+    "version": "VERSION",
+    "productCode": "{E718860E-EDE4-4ACC-8235-BCF1DD40FC25}_is1"
+  },
+  "manifestDirectory": "MANIFEST_DIRECTORY",
+  "installer": {
+    "path": "INSTALLER_PATH",
+    "type": "inno",
+    "scope": "machine",
+    "architecture": "x64",
+    "expectedUrl": "INSTALLER_URL",
+    "successExitCodes": [0]
+  },
+  "hashMismatchProbe": {
+    "enabled": true,
+    "expectedOutputPattern": "(?i)hash"
+  },
+  "expected": {
+    "installRoot": "%ProgramFiles%\\TigerMarkView",
+    "files": [
+      "TigerMarkView.exe",
+      "tiger-mark.exe",
+      "TigerMarkView.Core.dll",
+      "TigerMarkView.Pdf.dll",
+      "Docs\\HELP.md",
+      "Docs\\LICENSE.txt",
+      "Docs\\THIRD-PARTY-NOTICES.md",
+      "unins000.exe"
+    ],
+    "minimumFileCount": 50,
+    "versionFile": "TigerMarkView.exe",
+    "machinePathEntries": ["%ProgramFiles%\\TigerMarkView"],
+    "commands": ["tiger-mark"],
+    "dependencies": [
+      {
+        "packageIdentifier": "Microsoft.DotNet.DesktopRuntime.10",
+        "presentWhenPathExists": "%ProgramFiles%\\dotnet\\shared\\Microsoft.WindowsDesktop.App",
+        "installer": {
+          "url": "https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe",
+          "arguments": ["/install", "/quiet", "/norestart"]
+        }
+      },
+      {
+        "packageIdentifier": "Microsoft.EdgeWebView2Runtime",
+        "presentWhenPathExists": "%ProgramFiles(x86)%\\Microsoft\\EdgeWebView\\Application",
+        "installer": {
+          "url": "https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+          "arguments": ["/silent", "/install"]
+        }
+      }
+    ],
+    "smoke": [
+      {
+        "name": "version",
+        "command": "tiger-mark",
+        "arguments": ["--version"],
+        "expectedExitCode": 0,
+        "expectedOutputPattern": "TigerMarkView version {version}"
+      },
+      {
+        "name": "help",
+        "command": "tiger-mark",
+        "arguments": ["--help"],
+        "expectedExitCode": 0,
+        "expectedOutputPattern": "tiger-mark"
+      }
+    ]
+  }
+}

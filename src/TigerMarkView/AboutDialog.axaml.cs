@@ -1,10 +1,10 @@
 using System;
-using System.Reflection;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using TigerMarkView.Core.About;
 using TigerMarkView.Documentation;
+using TigerMarkView.Navigation;
 using TigerMarkView.Windowing;
 
 namespace TigerMarkView;
@@ -15,10 +15,9 @@ namespace TigerMarkView;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <strong>Every line of it comes from assembly metadata</strong> — product name, version, description,
-/// and copyright are read off the running assembly, which the SDK stamped from
-/// <c>Directory.Build.props</c>. Nothing is written into the XAML or into this file, because a version
-/// spelled out in a dialog is a version that will eventually disagree with the one that shipped.
+/// <strong>Every identity value comes from assembly metadata</strong> — product name, version,
+/// description, company, copyright, licence, and public links are read off the running assembly,
+/// which the SDK stamped from <c>Version.props</c>.
 /// </para>
 /// <para>
 /// The three links are bundled documents, so they remain available offline. They open in the Help
@@ -28,22 +27,24 @@ namespace TigerMarkView;
 /// </remarks>
 public partial class AboutDialog : Window
 {
+    private readonly ApplicationMetadata _metadata;
+    private readonly ExternalLinkLauncher _linkLauncher = new();
     private BundledDocument? _requested;
 
     public AboutDialog()
     {
         InitializeComponent();
 
-        var assembly = typeof(AboutDialog).Assembly;
+        _metadata = ApplicationMetadata.FromAssembly(typeof(AboutDialog).Assembly);
 
-        ProductNameText.Text = Read<AssemblyProductAttribute>(assembly, attribute => attribute.Product) ?? "TigerMarkView";
-        VersionText.Text = $"Version {ApplicationVersion.Of(assembly)}";
-        DescriptionText.Text = Read<AssemblyDescriptionAttribute>(assembly, attribute => attribute.Description) ?? "";
-        CopyrightText.Text = Read<AssemblyCopyrightAttribute>(assembly, attribute => attribute.Copyright) ?? "";
-
-        // Stated, not inferred: the repository ships an MIT LICENSE, and the link below opens that
-        // exact file rather than a description of it.
-        LicenseText.Text = "MIT License";
+        ProductNameText.Text = _metadata.ProductName;
+        VersionText.Text = $"Version {_metadata.Version}";
+        DescriptionText.Text = _metadata.Description;
+        CompanyText.Text = _metadata.Company;
+        CopyrightText.Text = _metadata.Copyright;
+        LicenseText.Text = string.IsNullOrWhiteSpace(_metadata.LicenseIdentity)
+            ? string.Empty
+            : $"{_metadata.LicenseIdentity} License";
     }
 
     /// <summary>
@@ -70,20 +71,30 @@ public partial class AboutDialog : Window
         NativeTitleBar.ApplyCurrentTheme(this);
     }
 
-    private static string? Read<TAttribute>(Assembly assembly, Func<TAttribute, string?> select)
-        where TAttribute : Attribute
-    {
-        var value = assembly.GetCustomAttribute<TAttribute>() is { } attribute ? select(attribute) : null;
-
-        return string.IsNullOrWhiteSpace(value) ? null : value;
-    }
-
     private void OnHelpClick(object? sender, RoutedEventArgs e) => Request(BundledDocuments.Help);
 
     private void OnLicenseClick(object? sender, RoutedEventArgs e) => Request(BundledDocuments.License);
 
     private void OnThirdPartyNoticesClick(object? sender, RoutedEventArgs e) =>
         Request(BundledDocuments.ThirdPartyNotices);
+
+    private async void OnRepositoryClick(object? sender, RoutedEventArgs e) =>
+        await OpenExternalAsync(_metadata.Repository);
+
+    private async void OnIssueTrackerClick(object? sender, RoutedEventArgs e) =>
+        await OpenExternalAsync(_metadata.IssueTracker);
+
+    private async Task OpenExternalAsync(Uri? target)
+    {
+        var outcome = target is null
+            ? Editing.LaunchOutcome.Failed("That link is not available in this build.")
+            : _linkLauncher.Open(target);
+
+        if (!outcome.Success)
+        {
+            await MessageDialog.ShowAsync(this, "Could not open link", outcome.ErrorMessage!);
+        }
+    }
 
     private void Request(BundledDocument document)
     {

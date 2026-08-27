@@ -1,23 +1,9 @@
 <Project>
 
-  <!--
-    The one place TigerMarkView states who it is and which version it is. Every project in the
-    repository inherits these, the SDK stamps them into each assembly as AssemblyInformationalVersion /
-    AssemblyDescription / AssemblyCopyright / AssemblyProduct, and the About dialog reads them back off
-    the running assembly rather than repeating any of it in XAML or dialog code.
-
-    Releasing therefore means editing <Version> here and nowhere else. Adding a second version string
-    somewhere — a constant, a XAML label, an installer script — is how the two start disagreeing, and
-    the About dialog is exactly the place a disagreement shows.
-  -->
+  <!-- Build policy applies repository-wide. Product/release metadata does not: the four shipped
+       projects import Version.props explicitly, while tests remain ordinary test assemblies. -->
   <PropertyGroup>
-    <Version>0.8.0</Version>
-    <Product>TigerMarkView</Product>
-    <Authors>Ryszard Kozlowski</Authors>
-    <Company>Ryszard Kozlowski</Company>
-    <!-- Must stay word-for-word what LICENSE says; About shows this string as the copyright line. -->
-    <Copyright>Copyright (c) 2026 Ryszard Kozlowski</Copyright>
-    <Description>A local Markdown viewer, reviewer and PDF exporter.</Description>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 
 </Project>

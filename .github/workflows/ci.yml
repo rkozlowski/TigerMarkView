@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AVALONIA_TELEMETRY_OPTOUT: '1'
+
+jobs:
+  windows:
+    name: Windows build and test
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore TigerMarkView.slnx -m:1
+
+      - name: Build with zero warnings
+        run: >-
+          dotnet build TigerMarkView.slnx
+          --configuration Release
+          --no-restore
+          -p:ContinuousIntegrationBuild=true
+          -m:1
+          /nodeReuse:false
+
+      - name: Test
+        run: >-
+          dotnet test TigerMarkView.slnx
+          --configuration Release
+          --no-restore
+          --no-build
+          --logger "console;verbosity=normal"
+          -m:1
+          /nodeReuse:false
+
+      - name: Verify tracked-file whitespace
+        run: git diff --check

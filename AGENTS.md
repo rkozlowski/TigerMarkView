@@ -12,16 +12,23 @@
 - `dotnet run --project src/TigerMarkView` launches the Windows desktop app.
 - `dotnet run --project src/TigerMarkView.Cli -- README.md -o README.pdf` exercises the CLI.
 - `pwsh installer/Build-Installer.ps1` publishes win-x64 output and builds the Inno Setup installer under `artifacts/`.
+- `pwsh eng/lab/Test-TigerMarkViewRelease.ps1` runs installer and desktop release scenarios in TigerWinLab.
 
 The desktop, PDF, and CLI projects require Windows; PDF workflows also require the Edge WebView2 Runtime.
 
 ## Coding Style & Naming Conventions
 
-Follow existing C# style: four-space indentation, file-scoped namespaces, nullable reference types, implicit usings, and braces on separate lines. Use PascalCase for types, methods, properties, and test names; camelCase for locals and parameters; and descriptive domain names rather than abbreviations. Keep Core free of Avalonia and Windows-only dependencies, keep the CLI thin, and share rendering/PDF behavior through Core and Pdf. Add concise XML documentation where behavior or architectural intent is not obvious. `Directory.Build.props` is the only source of product identity and version.
+Follow existing C# style: four-space indentation, file-scoped namespaces, nullable reference types, implicit usings, and braces on separate lines. Use PascalCase for types, methods, properties, and test names; camelCase for locals and parameters; and descriptive domain names rather than abbreviations. Keep Core free of Avalonia and Windows-only dependencies, keep the CLI thin, and share rendering/PDF behavior through Core and Pdf. Add concise XML documentation where behavior or architectural intent is not obvious. `Version.props` is the only source of product version and common application metadata; only shipped production projects import it.
 
 ## Testing Guidelines
 
 Tests use xUnit 2.9. Name files after the subject (`MarkdownRendererTests.cs`) and tests as readable behavior statements (`RemoteLinksAreNeverLocalMarkdownHoweverTheyEnd`). Use `[Theory]` for data-driven cases and `[Fact]` for a single scenario. Every behavioral change should include focused tests in the corresponding namespace; run the full solution before submitting.
+
+Automated TigerMarkView UI interaction should run in TigerWinLab rather than on the developer's active desktop whenever the test can reasonably be executed there. This includes pointer/keyboard automation, installer, upgrade/uninstall, first-run, and WinGet scenarios. Use TigerWinLab's public scenario/job commands; do not script Hyper-V or TigerHyperLab directly from this repository. Quick manual host checks remain acceptable when a developer explicitly chooses them.
+
+## Release and Documentation Boundaries
+
+TigerMarkView ships one installer containing the GUI and `tiger-mark`. It does not publish NuGet packages, a separate CLI installer, or a portable ZIP. Release automation must build once, validate and hash the exact installer bytes, create an annotated tag at the validated commit, and create a draft GitHub Release; WinGet submission remains a separate manual action. Public documentation belongs in `README.md` and `docs/`. Do not add DocFX, generated API documentation, or an API-doc website for this application repository.
 
 ## Commit & Pull Request Guidelines
 

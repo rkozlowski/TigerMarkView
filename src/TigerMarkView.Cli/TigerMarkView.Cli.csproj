@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <Import Project="..\..\Version.props" />
+
   <!--
     The `tiger-mark` command: one Markdown file to one PDF, from a terminal.
 
@@ -15,6 +17,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- The published command is `tiger-mark` (README, "Product Identity"); the code keeps the
@@ -23,7 +26,7 @@
     <RootNamespace>TigerMarkView.Cli</RootNamespace>
     <!--
       The only piece of product identity this project states for itself. Everything else — Version,
-      Product, Company, Copyright — is inherited from Directory.Build.props and must stay that way.
+      Product, Company, Copyright and links — is imported from Version.props and must stay that way.
       TigerCli reads the assembly description and prints it under the command name in generated help,
       so the inherited one ("A local Markdown viewer, reviewer and PDF exporter") would describe the
       desktop application in the CLI's own help text.

@@ -13,6 +13,7 @@ use **Help > Help**. Reading it does not disturb the document you have open.
 ## Contents
 
 - [Overview](#overview)
+- [Help and About](#help-and-about)
 - [Opening documents](#opening-documents)
 - [Navigation](#navigation)
 - [Reload modes](#reload-modes)
@@ -40,6 +41,13 @@ your default browser and network connection.
 Markdown is rendered as GitHub-Flavored Markdown, so headings, lists, tables, task lists, fenced code
 blocks, block quotes, and links all work as they do on GitHub. The full syntax is described in the
 [GFM specification](https://github.github.com/gfm/).
+
+## Help and About
+
+**Help > About TigerMarkView** shows the running application version, IT Tiger, copyright, and MIT
+licence identity. It also provides **Repository** and **Report an issue** links to the public project,
+plus offline **Help**, **License**, and **Third-party notices** actions. The two public links use the
+default system browser; the bundled documents remain available without a network connection.
 
 ## Opening documents
 

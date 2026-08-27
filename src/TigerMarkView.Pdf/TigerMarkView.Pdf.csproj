@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <Import Project="..\..\Version.props" />
+
   <!--
     Windows-only PDF generation, deliberately kept out of both TigerMarkView.Core (which must stay
     platform-neutral and dependency-light) and the Avalonia app (so the `tiger-mark` CLI can reference

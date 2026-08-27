@@ -32,7 +32,7 @@ small subset of Fluent UI System Icons as vector geometry.
 
 TigerCli provides command parsing, generated help, error and exit-code handling for `tiger-mark`.
 Its runtime dependencies include ItTiger.Core and the two Microsoft.Extensions abstractions packages.
-They are not included in the desktop installer.
+They ship with `tiger-mark` in the normal TigerMarkView installer.
 
 The dedicated copies in `assets/licenses/` retain the exact upstream notices for ColorCode-Universal
 and Fluent UI System Icons.

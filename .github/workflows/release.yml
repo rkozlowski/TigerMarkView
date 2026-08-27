@@ -1,0 +1,256 @@
+name: Release TigerMarkView
+run-name: Release TigerMarkView ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact release version already recorded in Version.props
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  AVALONIA_TELEMETRY_OPTOUT: '1'
+
+concurrency:
+  group: release-tigermarkview-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Build and validate exact release artifacts
+    runs-on: windows-latest
+    outputs:
+      manifest_sha256: ${{ steps.transfer.outputs.manifest_sha256 }}
+    steps:
+      - name: Check out the dispatched commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Verify main, commit, version, cleanliness, and tag availability
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REF -cne 'refs/heads/main') {
+            throw "Releases must be dispatched from main; this run uses '$env:GITHUB_REF'."
+          }
+          if ($env:RELEASE_VERSION -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            throw "Invalid release version '$env:RELEASE_VERSION'."
+          }
+          $head = (git rev-parse HEAD).Trim()
+          if ($head -cne $env:GITHUB_SHA) { throw "Checked-out commit '$head' is not '$env:GITHUB_SHA'." }
+          if (git status --porcelain) { throw 'Release checkout is not clean.' }
+          [xml] $props = Get-Content -LiteralPath Version.props -Raw
+          $configured = [string] $props.Project.PropertyGroup.Version
+          if ($configured -cne $env:RELEASE_VERSION) {
+            throw "Workflow input '$env:RELEASE_VERSION' does not match Version.props '$configured'."
+          }
+          $tag = "v$env:RELEASE_VERSION"
+          if ((git ls-remote --tags origin "refs/tags/$tag" | Out-String).Trim()) {
+            throw "Tag '$tag' already exists. Use the documented retained-artifact recovery path; tags are never moved."
+          }
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore once for win-x64 release output
+        run: dotnet restore TigerMarkView.slnx --runtime win-x64 -m:1
+
+      - name: Prepare clean artifact staging
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = [IO.Path]::GetFullPath($PWD)
+          $artifacts = [IO.Path]::GetFullPath((Join-Path $root 'artifacts'))
+          if (-not $artifacts.StartsWith($root.TrimEnd('\', '/') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to clean '$artifacts'."
+          }
+          if (Test-Path -LiteralPath $artifacts) { Remove-Item -LiteralPath $artifacts -Recurse -Force }
+          New-Item -ItemType Directory -Path artifacts/release -Force | Out-Null
+
+      - name: Build once with zero warnings
+        run: >-
+          dotnet build TigerMarkView.slnx
+          --configuration Release
+          --no-restore
+          -p:ContinuousIntegrationBuild=true
+          -p:RepositoryCommit=${{ github.sha }}
+          -m:1
+          /nodeReuse:false
+
+      - name: Test the exact build
+        run: >-
+          dotnet test TigerMarkView.slnx
+          --configuration Release
+          --no-restore
+          --no-build
+          --logger "console;verbosity=normal"
+          -m:1
+          /nodeReuse:false
+
+      - name: Provision pinned Inno Setup
+        id: inno
+        shell: pwsh
+        env:
+          INNO_SETUP_VERSION: '7.1.0'
+          INNO_SETUP_INSTALLER_URI: 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe'
+          INNO_SETUP_INSTALLER_SHA256: '0362A383ED217D4C4239B5933866DD96D3EB2102737DA92F80F6057A4B40DF2F'
+        run: |
+          $compiler = ./eng/release/Install-InnoSetup.ps1 `
+            -Version $env:INNO_SETUP_VERSION `
+            -InstallerUri $env:INNO_SETUP_INSTALLER_URI `
+            -InstallerSha256 $env:INNO_SETUP_INSTALLER_SHA256
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'ISCC.exe was not provisioned.' }
+          "compiler=$compiler" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Stage both applications and compile one installer without rebuilding
+        shell: pwsh
+        run: ./installer/Build-Installer.ps1 -Configuration Release -NoBuild -InnoSetupPath '${{ steps.inno.outputs.compiler }}'
+
+      - name: Validate binary metadata and TigerCli-generated output
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: ./eng/release/Assert-ProductMetadata.ps1 -PublishDirectory artifacts/publish/win-x64 -ExpectedVersion $env:RELEASE_VERSION
+
+      - name: Validate installer contents, metadata, PATH behavior, and uninstall
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          ./eng/release/Assert-Installer.ps1 `
+            -InstallerPath "artifacts/installer/TigerMarkView-$env:RELEASE_VERSION-win-x64-setup.exe" `
+            -ExpectedVersion $env:RELEASE_VERSION `
+            -ValidateBehavior
+
+      - name: Close and hash the release artifact set
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          Copy-Item -LiteralPath "artifacts/installer/TigerMarkView-$env:RELEASE_VERSION-win-x64-setup.exe" -Destination artifacts/release
+          ./eng/release/New-ReleaseArtifactManifest.ps1 `
+            -ArtifactDirectory artifacts/release `
+            -Version $env:RELEASE_VERSION `
+            -CommitSha $env:GITHUB_SHA
+          ./eng/release/Assert-ReleaseArtifactManifest.ps1 `
+            -ArtifactDirectory artifacts/release `
+            -ExpectedVersion $env:RELEASE_VERSION `
+            -ExpectedCommit $env:GITHUB_SHA
+
+      - name: Resolve WinGet for manifest validation
+        shell: pwsh
+        env:
+          WINGET_CLIENT_MODULE_VERSION: '1.29.280'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $winget = Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue
+          if ($null -eq $winget) {
+            Install-Module Microsoft.WinGet.Client -RequiredVersion $env:WINGET_CLIENT_MODULE_VERSION -Scope CurrentUser -Force
+            Import-Module Microsoft.WinGet.Client -RequiredVersion $env:WINGET_CLIENT_MODULE_VERSION
+            Repair-WinGetPackageManager -AllUsers
+            $winget = Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue
+          }
+          if ($null -eq $winget) { throw 'winget.exe could not be provisioned.' }
+          & $winget.Source --info
+          if ($LASTEXITCODE -ne 0) { throw 'winget.exe is not usable.' }
+
+      - name: Prepare and validate first-submission WinGet manifests
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          $installer = "artifacts/release/TigerMarkView-$env:RELEASE_VERSION-win-x64-setup.exe"
+          $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+          ./eng/winget/Prepare-TigerMarkViewWinGet.ps1 `
+            -InstallerPath $installer `
+            -OutputRoot artifacts/winget `
+            -ExpectedVersion $env:RELEASE_VERSION `
+            -ExpectedInstallerSha256 $hash `
+            -Validate | Out-Host
+
+      - name: Verify release construction did not mutate committed inputs
+        run: git diff --exit-code
+
+      - name: Record artifact-transfer hash
+        id: transfer
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -LiteralPath artifacts/release/release-artifacts.json -Algorithm SHA256).Hash.ToLowerInvariant()
+          "manifest_sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Release manifest transfer SHA-256: $hash"
+
+      - name: Upload exact validated release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: TigerMarkView-release-${{ inputs.version }}-${{ github.sha }}
+          path: |
+            artifacts/release/TigerMarkView-${{ inputs.version }}-win-x64-setup.exe
+            artifacts/release/SHA256SUMS.txt
+            artifacts/release/release-artifacts.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload prepared WinGet manifests for manual submission
+        uses: actions/upload-artifact@v7
+        with:
+          name: TigerMarkView-WinGet-${{ inputs.version }}-${{ github.sha }}
+          path: artifacts/winget/manifests/i/ItTiger/TigerMarkView/${{ inputs.version }}/*.yaml
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Tag exact commit and create draft GitHub Release
+    needs: validate
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the validated commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Download exact validated release artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: TigerMarkView-release-${{ inputs.version }}-${{ github.sha }}
+          path: artifacts/release
+
+      - name: Verify artifact transfer and recorded bytes
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          EXPECTED_MANIFEST_SHA256: ${{ needs.validate.outputs.manifest_sha256 }}
+        run: |
+          $actual = (Get-FileHash -LiteralPath artifacts/release/release-artifacts.json -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -cne $env:EXPECTED_MANIFEST_SHA256) { throw 'Artifact transfer changed release-artifacts.json.' }
+          ./eng/release/Assert-ReleaseArtifactManifest.ps1 `
+            -ArtifactDirectory artifacts/release `
+            -ExpectedVersion $env:RELEASE_VERSION `
+            -ExpectedCommit $env:GITHUB_SHA
+
+      - name: Create annotated tag and compatible draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          ./eng/release/Publish-GitHubDraftRelease.ps1 `
+            -ArtifactDirectory artifacts/release `
+            -Version $env:RELEASE_VERSION `
+            -CommitSha $env:GITHUB_SHA
+
+      - name: Verify publication did not mutate tracked inputs
+        run: git diff --exit-code

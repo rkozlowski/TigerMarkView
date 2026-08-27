@@ -8,12 +8,15 @@
         pwsh installer\Build-Installer.ps1
 
     Produces artifacts\installer\TigerMarkView-<version>-win-x64-setup.exe, where <version> comes
-    from Directory.Build.props by way of the published executable's version resource. This script
-    never states a version of its own; it reads the one the SDK stamped and then checks that the
-    installer Inno Setup produced carries the same one.
+    from Version.props by way of the published executable's version resource. The staging directory
+    contains both the GUI and tiger-mark; the installer is compiled only after their metadata agrees.
 
 .PARAMETER SkipPublish
     Compile the installer from the existing artifacts\publish\win-x64 folder without republishing.
+
+.PARAMETER NoBuild
+    Publish already-built Release win-x64 outputs without compiling or restoring. Release automation
+    uses this after its single solution build so the exact validated binaries are packaged.
 
 .PARAMETER InnoSetupPath
     Full path to ISCC.exe, when it is somewhere this script would not look.
@@ -22,6 +25,7 @@
 param(
     [string] $Configuration = 'Release',
     [switch] $SkipPublish,
+    [switch] $NoBuild,
     [string] $InnoSetupPath
 )
 
@@ -30,10 +34,13 @@ $ErrorActionPreference = 'Stop'
 
 $RepoRoot   = Split-Path -Parent $PSScriptRoot
 $AppProject = Join-Path $RepoRoot 'src\TigerMarkView\TigerMarkView.csproj'
+$CliProject = Join-Path $RepoRoot 'src\TigerMarkView.Cli\TigerMarkView.Cli.csproj'
+$VersionProps = Join-Path $RepoRoot 'Version.props'
 $IssScript  = Join-Path $PSScriptRoot 'TigerMarkView.iss'
 $PublishDir = Join-Path $RepoRoot 'artifacts\publish\win-x64'
 $OutputDir  = Join-Path $RepoRoot 'artifacts\installer'
 $AppExe     = Join-Path $PublishDir 'TigerMarkView.exe'
+$CliExe     = Join-Path $PublishDir 'tiger-mark.exe'
 
 function Resolve-InnoSetupCompiler {
     param([string] $Explicit)
@@ -101,29 +108,56 @@ if ($SkipPublish) {
         throw "No publish output at '$PublishDir'. Run without -SkipPublish first."
     }
 } else {
-    Write-Host "== Publishing $Configuration win-x64 ==" -ForegroundColor Cyan
+    Write-Host "== Staging GUI and CLI ($Configuration win-x64) ==" -ForegroundColor Cyan
     # A stale file left in the publish folder would be packaged as though it belonged there.
     if (Test-Path -LiteralPath $PublishDir) {
         Remove-Item -LiteralPath $PublishDir -Recurse -Force
     }
 
     # Framework-dependent on purpose: neither the .NET runtime nor WebView2 is bundled.
-    dotnet publish $AppProject `
-        --configuration $Configuration `
-        --runtime win-x64 `
-        --self-contained false `
-        --output $PublishDir
-    if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE." }
+    $publishArguments = @(
+        '--configuration', $Configuration,
+        '--runtime', 'win-x64',
+        '--self-contained', 'false',
+        '--output', $PublishDir,
+        '-m:1'
+    )
+    if ($NoBuild) {
+        $publishArguments += @('--no-build', '--no-restore')
+    }
+
+    foreach ($project in @($AppProject, $CliProject)) {
+        dotnet publish $project @publishArguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "dotnet publish failed for '$project' with exit code $LASTEXITCODE."
+        }
+    }
 }
 
 Write-Host '== Version ==' -ForegroundColor Cyan
-# Directory.Build.props -> AssemblyInformationalVersion -> ProductVersion. The '+<sha>' build
-# metadata the SDK appends is stripped here exactly as Core.About.ApplicationVersion.Format
-# strips it for the About dialog, so this is the version the running application reports.
-$productVersion = (Get-Item -LiteralPath $AppExe).VersionInfo.ProductVersion
-if (-not $productVersion) { throw "Could not read ProductVersion from '$AppExe'." }
-$version = $productVersion.Split('+')[0]
-Write-Host "  $version  (from $productVersion)"
+# Version.props -> AssemblyInformationalVersion -> ProductVersion. Build metadata is stripped here
+# exactly as Core.About.ApplicationVersion.Format strips it for the About dialog.
+[xml] $versionDocument = Get-Content -LiteralPath $VersionProps -Raw
+$version = [string] $versionDocument.Project.PropertyGroup.Version
+$company = [string] $versionDocument.Project.PropertyGroup.Company
+if ([string]::IsNullOrWhiteSpace($version)) { throw "Version.props does not define Version." }
+if ([string]::IsNullOrWhiteSpace($company)) { throw "Version.props does not define Company." }
+
+foreach ($executable in @($AppExe, $CliExe)) {
+    if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+        throw "Required product executable is missing from installer staging: '$executable'."
+    }
+
+    $versionInfo = (Get-Item -LiteralPath $executable).VersionInfo
+    $productVersion = $versionInfo.ProductVersion
+    if ([string]::IsNullOrWhiteSpace($productVersion) -or $productVersion.Split('+')[0] -cne $version) {
+        throw "'$executable' ProductVersion '$productVersion' does not match Version.props '$version'."
+    }
+    if ($versionInfo.CompanyName -cne $company) {
+        throw "'$executable' CompanyName '$($versionInfo.CompanyName)' is not the canonical publisher."
+    }
+    Write-Host "  $([IO.Path]::GetFileName($executable)): $productVersion"
+}
 
 Write-Host '== Compiling installer ==' -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null

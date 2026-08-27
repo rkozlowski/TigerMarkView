@@ -8,7 +8,7 @@ TigerMarkView is a Windows desktop application for reading and reviewing local M
 a viewer, not an editor: when a document needs changes, TigerMarkView opens it in a configured
 external editor and watches the file for updates.
 
-The project is pre-1.0. Its current version is defined in `Directory.Build.props` and shown at run
+The project is pre-1.0. Its current version is defined in `Version.props` and shown at run
 time under **Help > About TigerMarkView**.
 
 ## Features
@@ -24,7 +24,7 @@ time under **Help > About TigerMarkView**.
 - PDF export using the exact document version currently displayed;
 - configurable menu bar, toolbar, status bar, and optional toolbar buttons;
 - bundled offline Help, About, licence, and third-party notices;
-- a per-user Inno Setup installer; and
+- one per-user/all-users Inno Setup installer containing the GUI and CLI; and
 - the `tiger-mark` command-line Markdown-to-PDF converter.
 
 Printing is not included in the shipped application.
@@ -100,9 +100,14 @@ features.
 
 ## Installation
 
-The intended first distribution is the Windows installer attached to a GitHub Release. The installer
-supports per-user installation by default and an optional all-users installation. It installs the
-desktop application only; it does not currently install `tiger-mark`.
+The initial public distribution is the Windows installer attached to a
+[GitHub Release](https://github.com/rkozlowski/TigerMarkView/releases). The same installer contains
+the desktop application, `tiger-mark`, bundled Help, the MIT licence, and third-party notices. It
+installs for the current user by default and offers an all-users mode.
+
+The **Add the TigerMarkView install directory to PATH** option is checked on a first install, so
+`tiger-mark` works from a new shell. A per-user install changes only the user's PATH; an all-users
+install changes the machine PATH. Upgrade and uninstall preserve unrelated PATH entries.
 
 TigerMarkView requires:
 
@@ -111,7 +116,9 @@ TigerMarkView requires:
 - the Microsoft Edge WebView2 Runtime.
 
 The installer checks for the two runtimes and identifies anything missing. They are not bundled.
-TigerMarkView is not currently distributed through WinGet.
+TigerMarkView is not yet published in the WinGet community repository. The prepared package identity
+is `ItTiger.TigerMarkView`; this README will advertise `winget install ItTiger.TigerMarkView` only
+after the first manifest has been accepted and the command is live.
 
 To build the installer locally, install Inno Setup 6 or 7 and run:
 
@@ -124,8 +131,8 @@ The output is written below `artifacts/`, which is ignored by Git.
 ## Command line
 
 `tiger-mark` converts one Markdown file to one PDF without opening the desktop application. It is a
-TigerCli-based command and currently builds from `src/TigerMarkView.Cli`; no separate CLI installer or
-package is published by this repository.
+TigerCli-based command installed by the normal TigerMarkView installer. No separate CLI installer,
+portable archive, or NuGet package is published by this repository.
 
 Write the PDF beside the input (`notes.md` becomes `notes.pdf`):
 
@@ -197,8 +204,8 @@ installer/                  Inno Setup build files
 ```
 
 `TigerMarkView.Core` must remain free of Avalonia and Windows-only dependencies. Both the GUI and CLI
-reuse its renderer, and both use `TigerMarkView.Pdf` for PDF generation. `Directory.Build.props` is
-the single source of product identity and version information.
+reuse its renderer, and both use `TigerMarkView.Pdf` for PDF generation. `Version.props` is the single
+source of product version and shared application metadata; production projects import it explicitly.
 
 Contributor guidance is in `AGENTS.md` and the architecture notes in `CLAUDE.md`.
 
@@ -207,3 +214,7 @@ Contributor guidance is in `AGENTS.md` and the architecture notes in `CLAUDE.md`
 TigerMarkView is released under the [MIT License](LICENSE). Third-party components and their licence
 terms are listed in [docs/THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md). Toolbar and status-bar
 icons are derived from [Microsoft Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons).
+
+## Copyright & Project Sponsor
+
+TigerMarkView is an open-source project sponsored by [IT Tiger](https://www.ittiger.net/).
