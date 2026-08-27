@@ -7,6 +7,7 @@ on:
       version:
         description: Exact release version already recorded in Version.props
         required: true
+        default: '0.8.0'
         type: string
 
 permissions:
@@ -31,6 +32,28 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Verify release workflow scripts are tracked
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $requiredScripts = @(
+            'eng/release-automation/Install-InnoSetup.ps1'
+            'eng/release-automation/Assert-ProductMetadata.ps1'
+            'eng/release-automation/Assert-Installer.ps1'
+            'eng/release-automation/New-ReleaseArtifactManifest.ps1'
+            'eng/release-automation/Assert-ReleaseArtifactManifest.ps1'
+            'eng/release-automation/Publish-GitHubDraftRelease.ps1'
+            'installer/Build-Installer.ps1'
+            'eng/winget/Prepare-TigerMarkViewWinGet.ps1'
+          )
+          foreach ($path in $requiredScripts) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Required release workflow script is missing: $path"
+            }
+            git ls-files --error-unmatch -- $path | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Required release workflow script is not tracked: $path" }
+          }
 
       - name: Verify main, commit, version, cleanliness, and tag availability
         shell: pwsh
@@ -105,7 +128,7 @@ jobs:
           INNO_SETUP_INSTALLER_URI: 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe'
           INNO_SETUP_INSTALLER_SHA256: '0362A383ED217D4C4239B5933866DD96D3EB2102737DA92F80F6057A4B40DF2F'
         run: |
-          $compiler = ./eng/release/Install-InnoSetup.ps1 `
+          $compiler = ./eng/release-automation/Install-InnoSetup.ps1 `
             -Version $env:INNO_SETUP_VERSION `
             -InstallerUri $env:INNO_SETUP_INSTALLER_URI `
             -InstallerSha256 $env:INNO_SETUP_INSTALLER_SHA256
@@ -120,14 +143,14 @@ jobs:
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-        run: ./eng/release/Assert-ProductMetadata.ps1 -PublishDirectory artifacts/publish/win-x64 -ExpectedVersion $env:RELEASE_VERSION
+        run: ./eng/release-automation/Assert-ProductMetadata.ps1 -PublishDirectory artifacts/publish/win-x64 -ExpectedVersion $env:RELEASE_VERSION
 
       - name: Validate installer contents, metadata, PATH behavior, and uninstall
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          ./eng/release/Assert-Installer.ps1 `
+          ./eng/release-automation/Assert-Installer.ps1 `
             -InstallerPath "artifacts/installer/TigerMarkView-$env:RELEASE_VERSION-win-x64-setup.exe" `
             -ExpectedVersion $env:RELEASE_VERSION `
             -ValidateBehavior
@@ -138,11 +161,11 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           Copy-Item -LiteralPath "artifacts/installer/TigerMarkView-$env:RELEASE_VERSION-win-x64-setup.exe" -Destination artifacts/release
-          ./eng/release/New-ReleaseArtifactManifest.ps1 `
+          ./eng/release-automation/New-ReleaseArtifactManifest.ps1 `
             -ArtifactDirectory artifacts/release `
             -Version $env:RELEASE_VERSION `
             -CommitSha $env:GITHUB_SHA
-          ./eng/release/Assert-ReleaseArtifactManifest.ps1 `
+          ./eng/release-automation/Assert-ReleaseArtifactManifest.ps1 `
             -ArtifactDirectory artifacts/release `
             -ExpectedVersion $env:RELEASE_VERSION `
             -ExpectedCommit $env:GITHUB_SHA
@@ -236,7 +259,7 @@ jobs:
         run: |
           $actual = (Get-FileHash -LiteralPath artifacts/release/release-artifacts.json -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -cne $env:EXPECTED_MANIFEST_SHA256) { throw 'Artifact transfer changed release-artifacts.json.' }
-          ./eng/release/Assert-ReleaseArtifactManifest.ps1 `
+          ./eng/release-automation/Assert-ReleaseArtifactManifest.ps1 `
             -ArtifactDirectory artifacts/release `
             -ExpectedVersion $env:RELEASE_VERSION `
             -ExpectedCommit $env:GITHUB_SHA
@@ -247,7 +270,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          ./eng/release/Publish-GitHubDraftRelease.ps1 `
+          ./eng/release-automation/Publish-GitHubDraftRelease.ps1 `
             -ArtifactDirectory artifacts/release `
             -Version $env:RELEASE_VERSION `
             -CommitSha $env:GITHUB_SHA

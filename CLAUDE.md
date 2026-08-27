@@ -245,7 +245,9 @@ zero values differ from those defaults. No dimensions or margin values belong in
 The four shipped projects import it explicitly; test/helper projects do not. `Directory.Build.props`
 contains repository-wide build policy only. Assemblies, About, TigerCli help/version output, installer
 metadata, artifact names, release automation, and WinGet preparation derive from `Version.props`. Do
-not repeat a literal product version elsewhere. Copyright metadata must match `LICENSE`.
+not repeat a literal product version elsewhere, except for the manual release workflow's input
+default. That default only pre-populates the GitHub form; release validation must reject any value
+that does not exactly match `Version.props`. Copyright metadata must match `LICENSE`.
 
 `ApplicationVersion` strips build metadata for display. Tests verify formatting rules and metadata
 consistency without asserting the current literal version.

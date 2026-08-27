@@ -18,9 +18,12 @@ verification records; there are no NuGet packages, portable archives, or separat
 ## 1. Prepare the release commit
 
 1. Change `<Version>` in `Version.props`. `AssemblyVersion`, `FileVersion`, informational version,
-   binary resources, installer naming, and workflow expectations derive from it.
+   binary resources, installer naming, and workflow expectations derive from it. Also update the
+   release workflow's `workflow_dispatch` input default to the same value; that default only
+   pre-populates the GitHub form, and the workflow rejects it if it differs from `Version.props`.
 2. Update user documentation or compatibility notes that genuinely changed. Do not add a second
-   current-version constant to README, scripts, project files, or workflow YAML.
+   current-version constant to README, scripts, project files, or workflow YAML beyond that one
+   release-dialog default.
 3. Review the closed public payload policy: the release must contain only
    `TigerMarkView-<version>-win-x64-setup.exe`, `SHA256SUMS.txt`, and
    `release-artifacts.json`. GitHub supplies source archives itself.
@@ -41,10 +44,10 @@ Build and inspect the complete installer:
 ```powershell
 pwsh installer/Build-Installer.ps1 -Configuration Release
 $version = ([xml](Get-Content Version.props -Raw)).Project.PropertyGroup.Version
-pwsh eng/release/Assert-ProductMetadata.ps1 `
+pwsh eng/release-automation/Assert-ProductMetadata.ps1 `
   -PublishDirectory artifacts/publish/win-x64 `
   -ExpectedVersion $version
-pwsh eng/release/Assert-Installer.ps1 `
+pwsh eng/release-automation/Assert-Installer.ps1 `
   -InstallerPath "artifacts/installer/TigerMarkView-$version-win-x64-setup.exe" `
   -ExpectedVersion $version
 ```
@@ -82,7 +85,8 @@ drive the active host desktop.
 ## 4. Commit and dispatch
 
 Commit the complete preparation and push it to `main`. In GitHub Actions, select **Release
-TigerMarkView**, choose the `main` branch, and enter the exact `<Version>` from `Version.props`.
+TigerMarkView** and choose the `main` branch. The version field is pre-populated for convenience;
+confirm that it is the exact `<Version>` from `Version.props` before starting the run.
 
 The workflow refuses another branch, a dirty/inconsistent commit, a mismatched version, or an existing
 tag. It then:
@@ -138,7 +142,7 @@ It must end in `PASS` before a WinGet pull request is prepared. See
   its manifest. Download it without rebuilding, check out the validated commit, and run:
 
   ```powershell
-  pwsh eng/release/Publish-GitHubDraftRelease.ps1 `
+  pwsh eng/release-automation/Publish-GitHubDraftRelease.ps1 `
     -ArtifactDirectory <retained-artifact-directory> `
     -Version <version> `
     -CommitSha <validated-sha> `
