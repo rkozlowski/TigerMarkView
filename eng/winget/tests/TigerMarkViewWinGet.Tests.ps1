@@ -40,7 +40,14 @@ function Assert-Throws {
     )
 
     try {
-        & $Action
+        try {
+            & $Action
+        }
+        finally {
+            # The action is expected to fail, frequently by way of a non-zero native exit code.
+            # Clear $LASTEXITCODE so a handled failure cannot become the script's exit status.
+            $global:LASTEXITCODE = 0
+        }
     }
     catch {
         Assert-True ($_.Exception.Message -match $MessagePattern) `
