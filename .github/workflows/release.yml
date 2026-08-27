@@ -182,8 +182,11 @@ jobs:
         id: winget
         shell: pwsh
         env:
+          # Repair-WinGetPackageManager installs the WinGet package that its own module
+          # version ships; asking it for a different build fails on the runner with AppX
+          # 0x80073CF1. Keep both values on the same known-good version.
           WINGET_CLIENT_MODULE_VERSION: '1.29.280'
-          WINGET_VERSION: '1.29.290'
+          WINGET_VERSION: '1.29.280'
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
