@@ -76,6 +76,50 @@ function Set-FakeWinGetResult {
     Set-Content -LiteralPath $LogPath -Value '' -Encoding ascii
 }
 
+function Invoke-WorkflowValidationStep {
+    param(
+        [Parameter(Mandatory)]
+        [string] $OutputRoot,
+
+        [Parameter(Mandatory)]
+        [string] $WinGetPath
+    )
+
+    # Reproduce how GitHub Actions runs a 'shell: pwsh' step: the runner writes the step body
+    # to a script that starts with the stop preference and ends with 'exit $LASTEXITCODE',
+    # then dot-sources that file from a fresh pwsh process. Running the real thing is the only
+    # way to prove that an accepted WinGet warning leaves no native exit state behind.
+    $stepScript = Join-Path $testRoot ('step-' + [Guid]::NewGuid().ToString('N') + '.ps1')
+    $stepBody = @"
+`$ErrorActionPreference = 'stop'
+./eng/winget/Prepare-TigerMarkViewWinGet.ps1 ``
+  -InstallerPath '$installerPath' ``
+  -OutputRoot '$OutputRoot' ``
+  -ExpectedVersion '$version' ``
+  -InstallerUrl '$installerUrl' ``
+  -WinGetPath '$WinGetPath' ``
+  -Validate | Out-Host
+if ((Test-Path -LiteralPath variable:\LASTEXITCODE)) { exit `$LASTEXITCODE }
+"@
+    Set-Content -LiteralPath $stepScript -Value $stepBody -Encoding utf8NoBOM
+
+    $pwsh = (Get-Process -Id $PID).Path
+    # The child process is expected to fail in the negative case; its exit code is the
+    # assertion, not an error for this runner to raise.
+    $PSNativeCommandUseErrorActionPreference = $false
+    Push-Location -LiteralPath $repositoryRoot
+    try {
+        & $pwsh -NoProfile -NoLogo -Command ". '$stepScript'" | Out-Host
+        $stepExitCode = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+        $global:LASTEXITCODE = 0
+    }
+
+    return $stepExitCode
+}
+
 function Get-InstallerManifest {
     param(
         [Parameter(Mandatory)]
@@ -225,6 +269,16 @@ exit /b 2
         -Validate | Out-Host
     Write-Host 'PASS: only WinGet warning-success HRESULT 0x8A150028 is accepted'
 
+    $warningStepLog = Join-Path $testRoot 'warning-step-winget.log'
+    Set-FakeWinGetResult -Version '1.29.290' -ValidateExitCode -1978335192 -LogPath $warningStepLog
+    $warningStepExitCode = Invoke-WorkflowValidationStep `
+        -OutputRoot (Join-Path $testRoot 'validation-warning-step') `
+        -WinGetPath $fakeWinGet
+    Assert-True ($warningStepExitCode -eq 0) `
+        ('An accepted WinGet warning must leave the workflow step at exit code 0; ' +
+            "received $warningStepExitCode.")
+    Write-Host 'PASS: warning-success validation exits the workflow pwsh process with 0'
+
     $failureLog = Join-Path $testRoot 'failure-winget.log'
     Set-FakeWinGetResult -Version '1.29.290' -ValidateExitCode -1978335191 -LogPath $failureLog
     Assert-Throws -MessagePattern '0x8A150029' -Action {
@@ -237,6 +291,15 @@ exit /b 2
             -Validate | Out-Host
     }
     Write-Host 'PASS: genuine WinGet manifest-validation failure HRESULT remains fatal'
+
+    $failureStepLog = Join-Path $testRoot 'failure-step-winget.log'
+    Set-FakeWinGetResult -Version '1.29.290' -ValidateExitCode -1978335191 -LogPath $failureStepLog
+    $failureStepExitCode = Invoke-WorkflowValidationStep `
+        -OutputRoot (Join-Path $testRoot 'validation-failure-step') `
+        -WinGetPath $fakeWinGet
+    Assert-True ($failureStepExitCode -ne 0) `
+        'A genuine WinGet validation failure must fail the workflow pwsh process.'
+    Write-Host 'PASS: genuine validation failure exits the workflow pwsh process non-zero'
 }
 finally {
     Remove-Item Env:TIGERMARKVIEW_TEST_WINGET_VERSION -ErrorAction SilentlyContinue

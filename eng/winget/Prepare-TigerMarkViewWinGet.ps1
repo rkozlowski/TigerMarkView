@@ -206,6 +206,11 @@ if ($Validate) {
     $validationWarningExitCode = -1978335192
     if ($validationExitCode -eq $validationWarningExitCode) {
         Write-Warning 'WinGet manifest validation succeeded with warnings.'
+
+        # The accepted warning HRESULT still lives in the caller's $LASTEXITCODE. Clear the
+        # global copy so a hosting shell -- notably the GitHub Actions pwsh step, which ends
+        # with 'exit $LASTEXITCODE' -- does not fail on a result this script treats as success.
+        $global:LASTEXITCODE = 0
     }
     elseif ($validationExitCode -ne 0) {
         $unsignedExitCode = [uint32] ([int64] $validationExitCode -band 0xffffffffL)
