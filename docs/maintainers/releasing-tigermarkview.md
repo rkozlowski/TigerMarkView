@@ -106,8 +106,9 @@ tag. It then:
 10. creates a **draft** GitHub Release with the installer and verification records.
 
 No artifact is rebuilt in the publication job, and no WinGet manifest is regenerated after
-validation: the uploaded artifact is the submission set. The workflow never publishes the draft and
-never opens a `winget-pkgs` pull request.
+validation: the uploaded artifact **is** the submission set, and it is the only WinGet manifest set the
+post-release gate will accept. The workflow never publishes the draft and never opens a `winget-pkgs`
+pull request.
 
 ## 5. Review and publish the draft
 
@@ -129,17 +130,23 @@ Download the three assets from the now-public release. Hash the installer and co
 `releaseVersion`. Keep the workflow artifact if any value differs and do not replace a published asset
 while investigating.
 
-The WinGet readiness gate performs the same public, unauthenticated download and cross-check, then
-validates the stored submission set and runs TigerWinLab. Run it from an elevated PowerShell 7
-session at the repository root:
+The WinGet readiness gate performs the same public, unauthenticated download and cross-check. It then
+downloads the release workflow's sealed `TigerMarkView-WinGet-<version>-<commit>` artifact, verifies it
+against the digest GitHub recorded for it, and validates those exact bytes with `winget validate` and
+TigerWinLab. Run it from an elevated PowerShell 7 session at the repository root:
 
 ```powershell
-.\eng\winget\Prepare-TigerMarkViewWinGet.ps1
 .\eng\winget\Test-TigerMarkViewWinGet.ps1 -Version <version>
 ```
 
+Downloading the artifact needs a token with `actions:read` (`GH_TOKEN`, `gh auth login`, or
+`-GitHubToken`). Nothing is generated locally first: `Prepare-TigerMarkViewWinGet.ps1` writes a
+local/pre-release set that hashes a local installer, and the gate deliberately cannot read it.
+
 It must end in `PASS` before a WinGet pull request is prepared, and the files then copied into
-`winget-pkgs` are the stored manifests, unchanged. See `docs/maintainers/winget-tigermarkview.md`.
+`winget-pkgs` are the sealed manifests from
+`artifacts\winget-release\<version>\submission\`, unchanged. See
+`docs/maintainers/winget-tigermarkview.md`.
 
 ## Partial failure and recovery
 

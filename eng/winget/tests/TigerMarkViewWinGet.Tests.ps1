@@ -451,13 +451,25 @@ exit /b 2
         'The validation job must publish the sealed submission digest to the publication job.'
     Write-Host 'PASS: the publication job proves the artifact it downloaded is the set that was validated'
 
-    # --- The post-release gate consumes the stored set rather than replacing it ---
+    # --- The post-release gate consumes the sealed workflow artifact ---
 
     $gateScript = Get-Content -LiteralPath (Join-Path $wingetDirectory 'Test-TigerMarkViewWinGet.ps1') -Raw
-    Assert-True ($gateScript.Contains('$submission = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $ManifestDirectory')) `
-        'The post-release gate must read the stored submission set.'
+
+    Assert-True ($gateScript.Contains('Get-TigerMarkViewWinGetSealedSubmission')) `
+        'The post-release gate must obtain the submission set from the sealed workflow artifact.'
+    Assert-True ($gateScript.Contains('$submission = $acquired.submission')) `
+        'The post-release gate must validate the set it acquired, not one it found on disk.'
+    Assert-True (-not $gateScript.Contains('Get-TigerMarkViewWinGetManifestDirectory')) `
+        'The post-release gate must not resolve a submission set under the local generation root.'
+    Assert-True (-not $gateScript.Contains('artifacts\winget\manifests')) `
+        'The post-release gate must never read artifacts\winget\manifests.'
+    Assert-True ($gateScript -cnotmatch '(?m)^\s*\[string\] \$ManifestDirectory,') `
+        'The post-release gate must not accept a -ManifestDirectory override that could point at a stale set.'
+    Write-Host 'PASS: the post-release gate has no path to a locally generated manifest set'
+
     # The gate may regenerate only to compare. Proving that means proving there is one
-    # generator invocation and that it writes to the throwaway directory, not the store.
+    # generator invocation and that it writes to the throwaway directory, not the set
+    # that gets submitted.
     $prepareInvocations = [regex]::Matches(
         $gateScript,
         [regex]::Escape("& (Join-Path `$PSScriptRoot 'Prepare-TigerMarkViewWinGet.ps1')"))
@@ -471,9 +483,291 @@ exit /b 2
         'Regeneration in the post-release gate must target the throwaway directory.'
     Assert-True ($gateScript.Contains("`$regeneratedRoot = Join-Path `$validationRoot 'regenerated'")) `
         'The throwaway regeneration directory must sit under the per-version validation directory.'
+    Assert-True ($gateScript.Contains("Join-Path `$acquired.releaseRoot 'validation'")) `
+        'Validation output must be retained beside the sealed submission set.'
     Assert-True ($gateScript.Contains('Invoke-TigerMarkViewWinGetValidation -ManifestDirectory $submission.directory')) `
-        'The post-release gate must run winget validate against the stored submission set.'
-    Write-Host 'PASS: the post-release gate validates and submits the stored manifests'
+        'The post-release gate must run winget validate against the sealed submission set.'
+    Assert-True ($gateScript.Contains('$spec.manifestDirectory = $submission.directory')) `
+        'TigerWinLab must be handed the exact sealed submission set.'
+    Write-Host 'PASS: the post-release gate validates, labs, and submits the sealed manifests'
+
+    # --- The authoritative post-release set is the sealed workflow artifact ---
+
+    # A fake GitHub, so artifact selection, digest verification, and every refusal are
+    # exercised without a network and without a token. The shapes returned are the ones
+    # the real endpoints return; only the transport is replaced.
+    $releaseCommit = 'a' * 40
+    $otherCommit = 'b' * 40
+    $annotatedTagSha = 'c' * 40
+
+    function New-FakeGitHubClient {
+        param(
+            [Parameter(Mandatory)]
+            [object[]] $Artifacts,
+
+            [string] $ArchiveSource,
+
+            [switch] $DraftRelease
+        )
+
+        $responses = [ordered]@{
+            '*/releases/tags/*' = [pscustomobject]@{
+                name = "TigerMarkView $version"
+                draft = [bool] $DraftRelease
+                published_at = '2026-08-28T19:41:48Z'
+                html_url = "https://github.com/rkozlowski/TigerMarkView/releases/tag/v$version"
+            }
+            '*/git/ref/tags/*' = [pscustomobject]@{
+                object = [pscustomobject]@{ sha = $annotatedTagSha; type = 'tag' }
+            }
+            '*/git/tags/*' = [pscustomobject]@{
+                object = [pscustomobject]@{ sha = $releaseCommit; type = 'commit' }
+            }
+            '*/actions/artifacts*' = [pscustomobject]@{
+                total_count = $Artifacts.Count
+                artifacts = $Artifacts
+            }
+        }
+
+        [pscustomobject][ordered]@{
+            owner = 'rkozlowski'
+            name = 'TigerMarkView'
+            slug = 'rkozlowski/TigerMarkView'
+            apiRoot = 'https://api.github.com/repos/rkozlowski/TigerMarkView'
+            tokenSource = 'the test harness'
+            hasToken = $true
+            invoke = {
+                param([Parameter(Mandatory)][string] $Uri)
+
+                foreach ($entry in $responses.GetEnumerator()) {
+                    if ($Uri -like $entry.Key) {
+                        if ($null -eq $entry.Value) { throw "HTTP 404 for '$Uri'." }
+                        return $entry.Value
+                    }
+                }
+                throw "The fake GitHub client has no response for '$Uri'."
+            }.GetNewClosure()
+            download = {
+                param(
+                    [Parameter(Mandatory)][string] $Uri,
+                    [Parameter(Mandatory)][string] $OutFile
+                )
+
+                if ([string]::IsNullOrWhiteSpace($ArchiveSource)) {
+                    throw "The fake GitHub client was asked to download '$Uri' with no archive."
+                }
+                Copy-Item -LiteralPath $ArchiveSource -Destination $OutFile -Force
+            }.GetNewClosure()
+        }
+    }
+
+    function New-FakeArtifactRecord {
+        param(
+            [Parameter(Mandatory)][string] $Name,
+            [Parameter(Mandatory)][string] $Commit,
+            [Parameter(Mandatory)][long] $Id,
+            [string] $Digest,
+            [switch] $Expired
+        )
+
+        [pscustomobject]@{
+            id = $Id
+            name = $Name
+            size_in_bytes = 1905L
+            digest = if ([string]::IsNullOrWhiteSpace($Digest)) { $null } else { "sha256:$Digest" }
+            expired = [bool] $Expired
+            created_at = '2026-08-28T16:35:21Z'
+            workflow_run = [pscustomobject]@{ id = 33190536269L; head_sha = $Commit }
+        }
+    }
+
+    function New-SubmissionArchive {
+        param(
+            [Parameter(Mandatory)][string] $ManifestDirectory,
+            [Parameter(Mandatory)][string] $ArchivePath
+        )
+
+        if (Test-Path -LiteralPath $ArchivePath) { Remove-Item -LiteralPath $ArchivePath -Force }
+        Compress-Archive -Path (Join-Path $ManifestDirectory '*') -DestinationPath $ArchivePath
+        [pscustomobject]@{
+            path = $ArchivePath
+            sha256 = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    }
+
+    # The set the workflow would have sealed: generated from the installer CI built.
+    $sealedInstallerDirectory = Join-Path $testRoot 'sealed-installer'
+    New-Item -ItemType Directory -Path $sealedInstallerDirectory -Force | Out-Null
+    $sealedInstallerPath = Join-Path $sealedInstallerDirectory "TigerMarkView-$version-win-x64-setup.exe"
+    [IO.File]::WriteAllBytes($sealedInstallerPath, [byte[]] (100..179))
+    $sealedInstallerHash = (Get-FileHash -LiteralPath $sealedInstallerPath -Algorithm SHA256).Hash
+    $sealedOutput = Join-Path $testRoot 'sealed'
+    & $prepareScript `
+        -InstallerPath $sealedInstallerPath `
+        -OutputRoot $sealedOutput `
+        -ExpectedVersion $version `
+        -InstallerUrl $installerUrl | Out-Host
+    $sealedDirectory = Join-Path $sealedOutput $release.manifestRelativePath
+    $sealedSet = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $sealedDirectory -Version $version
+    $sealedArchive = New-SubmissionArchive -ManifestDirectory $sealedDirectory `
+        -ArchivePath (Join-Path $testRoot 'sealed.zip')
+
+    $artifactName = Get-TigerMarkViewWinGetWorkflowArtifactName -Version $version -Commit $releaseCommit
+    Assert-True ($artifactName -ceq "TigerMarkView-WinGet-$version-$releaseCommit") `
+        'The sealed artifact name must be TigerMarkView-WinGet-<version>-<commit>.'
+
+    # A repository root that already holds a stale locally generated set for the same
+    # version, declaring a hash no release ever published. This is the 0.8.1 failure.
+    $fakeRepoRoot = Join-Path $testRoot 'consumer'
+    New-Item -ItemType Directory -Path $fakeRepoRoot -Force | Out-Null
+    $staleRoot = Join-Path $fakeRepoRoot 'artifacts\winget'
+    & $prepareScript `
+        -InstallerPath $installerPath `
+        -OutputRoot $staleRoot `
+        -ExpectedVersion $version `
+        -InstallerUrl $installerUrl | Out-Host
+    $staleDirectory = Join-Path $staleRoot $release.manifestRelativePath
+    $staleSet = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $staleDirectory -Version $version
+    Assert-True ($staleSet.installer.installerSha256 -cne $sealedSet.installer.installerSha256) `
+        'The stale local set must declare a different installer hash from the sealed set.'
+
+    $goodArtifact = New-FakeArtifactRecord -Name $artifactName -Commit $releaseCommit -Id 9693585025 `
+        -Digest $sealedArchive.sha256
+    $client = New-FakeGitHubClient -Artifacts @($goodArtifact) -ArchiveSource $sealedArchive.path
+    $acquired = Get-TigerMarkViewWinGetSealedSubmission `
+        -RepositoryRoot $fakeRepoRoot -Version $version -Client $client
+
+    $expectedSubmissionDirectory = Get-TigerMarkViewWinGetSealedSubmissionDirectory `
+        -RepositoryRoot $fakeRepoRoot -Version $version
+    Assert-True ($acquired.submission.directory -ceq [IO.Path]::GetFullPath($expectedSubmissionDirectory)) `
+        "The sealed set must be extracted to '$expectedSubmissionDirectory'."
+    Assert-True ($acquired.submission.digest -ceq $sealedSet.digest) `
+        'The extracted set must be byte-for-byte the set the workflow sealed.'
+    Assert-True ($acquired.submission.installer.installerSha256 -ceq $sealedInstallerHash) `
+        'The extracted set must declare the sealed installer hash, not the local one.'
+    Assert-True ($acquired.provenance.commit -ceq $releaseCommit -and
+        $acquired.provenance.artifactName -ceq $artifactName -and
+        $acquired.provenance.archiveSha256 -ceq $sealedArchive.sha256) `
+        'The provenance record must name the artifact, its commit, and the verified archive digest.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $acquired.releaseRoot 'submission.json') -PathType Leaf) `
+        'The provenance record must be written beside the sealed submission set.'
+    Write-Host 'PASS: the sealed workflow artifact is downloaded, verified, and extracted'
+
+    # The stale set is the trap this whole change exists to avoid: it must neither be
+    # read nor altered, and the authoritative set must not be inside artifacts\winget.
+    $staleAfter = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $staleDirectory -Version $version
+    Assert-True ($staleAfter.digest -ceq $staleSet.digest) `
+        'Post-release acquisition must leave a stale local manifest set untouched.'
+    Assert-True ($acquired.submission.digest -cne $staleSet.digest) `
+        'Post-release validation must not resolve to the stale local manifest set.'
+    Assert-True (-not $acquired.submission.directory.StartsWith(
+            [IO.Path]::GetFullPath((Join-Path $fakeRepoRoot 'artifacts\winget\')),
+            [StringComparison]::OrdinalIgnoreCase)) `
+        'The authoritative set must not live under artifacts\winget, where local generation writes.'
+    Write-Host 'PASS: a stale locally generated set cannot become the post-release submission'
+
+    # Selection is by version and commit, never by recency. A run for another commit and
+    # a run for another version are both present, and neither may be chosen.
+    $decoyName = Get-TigerMarkViewWinGetWorkflowArtifactName -Version $version -Commit $otherCommit
+    $decoyArtifacts = @(
+        New-FakeArtifactRecord -Name $decoyName -Commit $otherCommit -Id 1 -Digest ('0' * 64)
+        New-FakeArtifactRecord -Name "TigerMarkView-WinGet-9.9.9-$releaseCommit" -Commit $releaseCommit `
+            -Id 2 -Digest ('0' * 64)
+        $goodArtifact
+    )
+    $selecting = New-FakeGitHubClient -Artifacts $decoyArtifacts -ArchiveSource $sealedArchive.path
+    $tagged = Resolve-TigerMarkViewWinGetReleaseCommit -Client $selecting -Version $version
+    Assert-True ($tagged.commit -ceq $releaseCommit) `
+        'An annotated release tag must be dereferenced to the commit the workflow built.'
+    $selected = Find-TigerMarkViewWinGetWorkflowArtifact -Client $selecting -Version $version `
+        -Commit $tagged.commit
+    Assert-True ($selected.id -eq 9693585025 -and $selected.name -ceq $artifactName) `
+        'Artifact selection must match both the version in the name and the run''s head commit.'
+    Write-Host 'PASS: the workflow artifact is selected by version and release commit'
+
+    $missing = New-FakeGitHubClient -Artifacts @($decoyArtifacts[0], $decoyArtifacts[1]) `
+        -ArchiveSource $sealedArchive.path
+    Assert-Throws -MessagePattern 'No GitHub Actions artifact named' -Action {
+        Get-TigerMarkViewWinGetSealedSubmission `
+            -RepositoryRoot (Join-Path $testRoot 'missing-consumer') -Version $version -Client $missing
+    }
+    Write-Host 'PASS: an absent workflow artifact fails instead of falling back'
+
+    $expiredClient = New-FakeGitHubClient -ArchiveSource $sealedArchive.path -Artifacts @(
+        New-FakeArtifactRecord -Name $artifactName -Commit $releaseCommit -Id 3 `
+            -Digest $sealedArchive.sha256 -Expired)
+    Assert-Throws -MessagePattern 'has expired' -Action {
+        Get-TigerMarkViewWinGetSealedSubmission `
+            -RepositoryRoot (Join-Path $testRoot 'expired-consumer') -Version $version -Client $expiredClient
+    }
+    Write-Host 'PASS: an expired workflow artifact fails instead of falling back'
+
+    $draftClient = New-FakeGitHubClient -Artifacts @($goodArtifact) -ArchiveSource $sealedArchive.path `
+        -DraftRelease
+    Assert-Throws -MessagePattern 'still a draft' -Action {
+        Get-TigerMarkViewWinGetSealedSubmission `
+            -RepositoryRoot (Join-Path $testRoot 'draft-consumer') -Version $version -Client $draftClient
+    }
+    Write-Host 'PASS: an unpublished release fails before any manifest is read'
+
+    # A download that does not reproduce the digest GitHub sealed is never extracted.
+    $staleArchive = New-SubmissionArchive -ManifestDirectory $staleDirectory `
+        -ArchivePath (Join-Path $testRoot 'stale.zip')
+    $wrongDigestClient = New-FakeGitHubClient -Artifacts @($goodArtifact) -ArchiveSource $staleArchive.path
+    $wrongDigestRoot = Join-Path $testRoot 'wrong-digest-consumer'
+    Assert-Throws -MessagePattern 'not the same bytes' -Action {
+        Get-TigerMarkViewWinGetSealedSubmission `
+            -RepositoryRoot $wrongDigestRoot -Version $version -Client $wrongDigestClient
+    }
+    Assert-True (-not (Test-Path -LiteralPath (Get-TigerMarkViewWinGetSealedSubmissionDirectory `
+            -RepositoryRoot $wrongDigestRoot -Version $version))) `
+        'An archive that fails the digest check must never be extracted into the submission directory.'
+    Write-Host 'PASS: an archive that is not the sealed bytes is refused before extraction'
+
+    Assert-Throws -MessagePattern 'not the same manifests' -Action {
+        Get-TigerMarkViewWinGetSealedSubmission `
+            -RepositoryRoot (Join-Path $testRoot 'digest-consumer') -Version $version -Client $client `
+            -ExpectedSubmissionDigest ('0' * 64)
+    }
+    Write-Host 'PASS: a sealed set that does not reproduce the recorded submission digest is refused'
+
+    # A hand-supplied archive is a route to the same bytes, not a weaker check.
+    $suppliedRoot = Join-Path $testRoot 'supplied-consumer'
+    $offline = New-FakeGitHubClient -Artifacts @($goodArtifact)
+    $supplied = Get-TigerMarkViewWinGetSealedSubmission -RepositoryRoot $suppliedRoot -Version $version `
+        -Client $offline -ArchivePath $sealedArchive.path
+    Assert-True ($supplied.submission.digest -ceq $sealedSet.digest) `
+        'A supplied archive that matches the recorded digest yields the sealed set.'
+    Assert-Throws -MessagePattern 'not the same bytes' -Action {
+        Get-TigerMarkViewWinGetSealedSubmission -RepositoryRoot (Join-Path $testRoot 'supplied-bad') `
+            -Version $version -Client $offline -ArchivePath $staleArchive.path
+    }
+    Write-Host 'PASS: a supplied archive is verified against the same recorded digest'
+
+    # The published installer is what the sealed manifests must describe. A release whose
+    # asset hashes to something else fails the same seal the workflow ran.
+    Assert-Throws -MessagePattern 'hashes to' -Action {
+        & $assertScript `
+            -ManifestDirectory $acquired.submission.directory `
+            -Version $version `
+            -ExpectedInstallerSha256 (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash |
+            Out-Host
+    }
+    $null = & $assertScript `
+        -ManifestDirectory $acquired.submission.directory `
+        -Version $version `
+        -ExpectedInstallerSha256 $sealedInstallerHash
+    Write-Host 'PASS: the sealed set is accepted only against the installer it actually hashes'
+
+    # Reproducibility is a comparison, and a regeneration from a different installer must
+    # not be able to pass as the sealed set.
+    $regenerated = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $staleDirectory -Version $version
+    Assert-True ($regenerated.digest -cne $acquired.submission.digest) `
+        'A regenerated set built from a different installer must not share the sealed digest.'
+    Assert-True ($gateScript.Contains('$regenerated.digest -cne $submission.digest')) `
+        'The post-release gate must fail reproducibility when the regenerated set differs from the sealed set.'
+    Write-Host 'PASS: a regenerated set that differs from the sealed set fails reproducibility'
+
 }
 finally {
     Remove-Item Env:TIGERMARKVIEW_TEST_WINGET_VERSION -ErrorAction SilentlyContinue

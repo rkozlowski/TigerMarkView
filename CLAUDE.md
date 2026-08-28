@@ -273,5 +273,15 @@ do not introduce DocFX, generated API docs, or an API-documentation site. Releas
 draft release and never submits to `winget-pkgs`; the first and subsequent WinGet pull requests remain
 explicit maintainer actions after live-asset validation in TigerWinLab.
 
+The authoritative WinGet submission set for a published release is the release workflow's sealed
+`TigerMarkView-WinGet-<version>-<commit>` artifact, and nothing else.
+`Prepare-TigerMarkViewWinGet.ps1` is local/pre-release generation into `artifacts\winget\`; its output
+hashes a local installer and must never be submitted or validated as a release's set.
+`Test-TigerMarkViewWinGet.ps1` resolves the release tag to a commit, downloads that commit's artifact,
+verifies it against the digest GitHub recorded, and extracts it to
+`artifacts\winget-release\<version>\submission\`. It must not read `artifacts\winget\`, and it must
+fail rather than fall back when the artifact cannot be retrieved. Regeneration stays a throwaway
+byte-for-byte reproducibility comparison and never replaces the sealed set.
+
 Inno Setup's preprocessor treats a line beginning with `#` as a directive, including in code blocks;
 use `Chr(13) + Chr(10)` rather than a line-leading `#13#10` expression.

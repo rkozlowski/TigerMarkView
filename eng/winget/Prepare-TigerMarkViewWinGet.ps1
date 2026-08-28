@@ -1,3 +1,54 @@
+#Requires -Version 7.0
+<#
+    .SYNOPSIS
+    Generates a TigerMarkView WinGet submission set from a local installer.
+
+    .DESCRIPTION
+    This is the only thing in the repository that writes a manifest, and it serves
+    two roles that must not be confused:
+
+      - locally, before a release exists, to see and review what the manifests will
+        say; and
+      - inside the release workflow, over the installer that workflow just built,
+        producing the set the workflow then validates, seals, and uploads as
+        TigerMarkView-WinGet-<version>-<commit>.
+
+    Only the second produces the authoritative post-release submission. A set
+    generated locally hashes a locally built installer, and an Inno rebuild is never
+    byte-identical to the one CI compiled, so its InstallerSha256 will not be the
+    published one. Copying a local set into winget-pkgs, or validating one as though
+    it were the release's, is precisely the mistake the post-release gate refuses to
+    make: Test-TigerMarkViewWinGet.ps1 reads the sealed workflow artifact and never
+    the output of this script.
+
+    Output goes to artifacts\winget\manifests\i\ItTiger\TigerMarkView\<version>\ by
+    default; the post-release submission lives elsewhere, under
+    artifacts\winget-release\<version>\submission\.
+
+    .PARAMETER InstallerPath
+    The installer to hash. Defaults to artifacts\installer\<installer file name>.
+
+    .PARAMETER OutputRoot
+    The root the manifests\... path is created under. Defaults to artifacts\winget.
+
+    .PARAMETER ExpectedVersion
+    When supplied, the version Version.props must already be at.
+
+    .PARAMETER InstallerUrl
+    The immutable release asset URL. Defaults to, and must equal, the v<version> URL.
+
+    .PARAMETER ExpectedInstallerSha256
+    When supplied, the digest the installer must hash to.
+
+    .PARAMETER InstalledDisplayVersion
+    An ARP display version that genuinely differs from PackageVersion. Omitted otherwise.
+
+    .PARAMETER Validate
+    Runs winget validate over the generated set.
+
+    .EXAMPLE
+    .\eng\winget\Prepare-TigerMarkViewWinGet.ps1
+#>
 [CmdletBinding()]
 param(
     [string] $InstallerPath,
@@ -186,4 +237,6 @@ if ($Validate) {
 
 Write-Host "PASS: prepared $packageIdentifier $version manifests at '$manifestDirectory'." -ForegroundColor Green
 Write-Host "Submission digest: $($submission.digest)"
+Write-Host ('This is a locally generated set. The authoritative post-release submission is the ' +
+    "release workflow's TigerMarkView-WinGet-$version-<commit> artifact.") -ForegroundColor DarkGray
 Write-Output $manifestDirectory

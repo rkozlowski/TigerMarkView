@@ -1,14 +1,15 @@
 #Requires -Version 7.0
 <#
     .SYNOPSIS
-    Validates a published TigerMarkView release against the stored WinGet submission
-    set and reports whether that set is ready to copy into microsoft/winget-pkgs.
+    Validates a published TigerMarkView release against the WinGet submission set
+    its release workflow sealed, and reports whether that set is ready to copy into
+    microsoft/winget-pkgs.
 
     .DESCRIPTION
     Three things have to be true before a winget-pkgs pull request is honest, and
     this checks all three:
 
-      1. the stored manifests say what this release implies - identity, one version
+      1. the sealed manifests say what this release implies - identity, one version
          across all three documents, and the immutable asset URL;
       2. the asset actually published at that URL is the one those manifests hash;
          and
@@ -20,11 +21,19 @@
     TigerWinLab's entry point against it, then folds the lab's result into one
     PASS/FAIL verdict.
 
-    The manifests are read, never rewritten. The set this validates is the set the
-    release workflow generated and validated, so the files copied into winget-pkgs
-    after a PASS are byte-for-byte the files that were proven. Manifests are
-    regenerated only into a throwaway directory, purely to prove they reproduce
-    byte-for-byte; that comparison can never replace the stored set.
+    What it validates is not a directory that happens to exist. The set is fetched
+    from the release workflow's TigerMarkView-WinGet-<version>-<commit> artifact,
+    selected by the commit the release tag names and verified against the digest
+    GitHub recorded for it, then extracted to
+    artifacts\winget-release\<version>\submission\. Nothing under artifacts\winget\
+    is read: that is where Prepare-TigerMarkViewWinGet.ps1 generates locally, and a
+    local set describes a locally built installer whose hash is not the published
+    one. If the sealed artifact cannot be retrieved this run fails; it never falls
+    back.
+
+    The manifests are read, never rewritten. Manifests are regenerated only into a
+    throwaway directory, purely to prove they reproduce byte-for-byte; that
+    comparison can never replace the sealed set.
 
     The run is read-only with respect to the host: nothing is installed and WinGet's
     host settings are never touched. The installation happens in the lab guest.
@@ -32,11 +41,22 @@
     .PARAMETER Version
     The published release version to validate. Defaults to Version.props.
 
-    .PARAMETER ManifestDirectory
-    The stored submission set. Defaults to
-    artifacts\winget\manifests\i\ItTiger\TigerMarkView\<version>, which is both
-    where Prepare-TigerMarkViewWinGet.ps1 writes and where the release workflow's
-    TigerMarkView-WinGet-<version>-<commit> artifact should be extracted.
+    .PARAMETER ArchivePath
+    An already-downloaded TigerMarkView-WinGet-<version>-<commit>.zip, for a machine
+    with no actions:read token. It is verified against the same recorded digest as a
+    download, so it is a different route to the sealed bytes, not a weaker check.
+
+    .PARAMETER ExpectedSubmissionDigest
+    When supplied, the submission digest the sealed set must reproduce - the value
+    the release workflow's sealing step recorded.
+
+    .PARAMETER GitHubToken
+    A token with actions:read, for downloading the sealed artifact. GH_TOKEN,
+    GITHUB_TOKEN, and 'gh auth token' are used when this is omitted.
+
+    .PARAMETER Refresh
+    Re-downloads the sealed artifact even when a retained archive already matches
+    the digest GitHub recorded for it.
 
     .PARAMETER TigerWinLabRoot
     The TigerWinLab working copy. Defaults to TIGERWINLAB_ROOT, then to a
@@ -52,11 +72,14 @@
 [CmdletBinding()]
 param(
     [string] $Version,
-    [string] $ManifestDirectory,
+    [string] $ArchivePath,
+    [string] $ExpectedSubmissionDigest,
+    [string] $GitHubToken,
     [string] $TigerWinLabRoot,
     [string] $WinGetPath,
     [ValidateRange(1, 240)]
     [int] $TimeoutMinutes = 45,
+    [switch] $Refresh,
     [switch] $SkipLab,
     [switch] $Json
 )
@@ -71,25 +94,68 @@ $configuredVersion = [string] (Get-TigerMarkViewWinGetVersionProperty -Repositor
 if ([string]::IsNullOrWhiteSpace($Version)) { $Version = $configuredVersion }
 $release = Get-TigerMarkViewWinGetRelease -Version $Version
 
-if ([string]::IsNullOrWhiteSpace($ManifestDirectory)) {
-    $ManifestDirectory = Get-TigerMarkViewWinGetManifestDirectory `
-        -OutputRoot (Join-Path $repoRoot 'artifacts\winget') -Version $Version
+# Acquiring the sealed set is a precondition, not a validation result: until the
+# release workflow's artifact is in hand there is no submission to report on, and
+# the one thing that must never happen here is quietly validating something else.
+$acquired = $null
+try {
+    $client = New-TigerMarkViewGitHubClient -Token $GitHubToken
+    $acquired = Get-TigerMarkViewWinGetSealedSubmission `
+        -RepositoryRoot $repoRoot `
+        -Version $Version `
+        -Client $client `
+        -ArchivePath $ArchivePath `
+        -ExpectedSubmissionDigest $ExpectedSubmissionDigest `
+        -Force:$Refresh
 }
-$validationRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot "artifacts\winget\validation\$Version"))
+catch {
+    Write-Host
+    Write-Host "FAIL: the sealed WinGet submission set for $Version could not be obtained." -ForegroundColor Red
+    Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host
+    Write-Host '  This gate validates only the set the release workflow sealed as' -ForegroundColor DarkGray
+    Write-Host "  TigerMarkView-WinGet-$Version-<commit>. It does not fall back to a locally" -ForegroundColor DarkGray
+    Write-Host '  generated set under artifacts\winget\, because that describes a locally built' -ForegroundColor DarkGray
+    Write-Host '  installer rather than the published one.' -ForegroundColor DarkGray
+    exit 1
+}
+
+$submission = $acquired.submission
+$provenance = $acquired.provenance
+$validationRoot = [IO.Path]::GetFullPath((Join-Path $acquired.releaseRoot 'validation'))
 $publishedRoot = Join-Path $validationRoot 'published'
 New-Item -ItemType Directory -Path $publishedRoot -Force | Out-Null
-
-# A missing or malformed stored set is an operator error, not a validation result:
-# there is nothing to report on until the submission set exists.
-$submission = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $ManifestDirectory -Version $Version
-Write-Host "Validating the stored submission set at '$($submission.directory)'."
+Write-Host "Validating the sealed submission set at '$($submission.directory)'."
 
 $checks = [Collections.Generic.List[object]]::new()
 $publishedHash = $null
 $publishedLength = 0L
 $installerPath = Join-Path $publishedRoot $release.installerFileName
 
-# 1. The published release. Downloaded exactly as an unauthenticated client would,
+# 1. Provenance. Which artifact these three files came from, proven rather than
+#    assumed, is the fact the rest of the run rests on, so it is recorded as a check
+#    and lands in result.json alongside the verdict.
+$provenanceMessage = ("Sealed artifact $($provenance.artifactName) (id $($provenance.artifactId), " +
+    "run $($provenance.workflowRunId)) from $($provenance.archiveSource), archive SHA-256 " +
+    "$($provenance.archiveSha256).")
+if ($null -eq $provenance.artifactDigest) {
+    $checks.Add((New-TigerMarkViewWinGetCheck -Name 'submission/source' -Status 'WARN' `
+        -Message ($provenanceMessage + ' GitHub reported no recorded digest for the artifact, so the ' +
+            'archive was proven only by its extracted contents.')))
+}
+else {
+    $checks.Add((New-TigerMarkViewWinGetCheck -Name 'submission/source' -Status 'PASS' `
+        -Message ($provenanceMessage + " It reproduces the digest GitHub sealed for release " +
+            "$($provenance.tag) at commit $($provenance.commit).")))
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ExpectedSubmissionDigest)) {
+    $checks.Add((New-TigerMarkViewWinGetCheck -Name 'submission/sealed-digest' -Status 'PASS' `
+        -Message ("The sealed set reproduces the recorded submission digest " +
+            "$($submission.digest).")))
+}
+
+# 2. The published release. Downloaded exactly as an unauthenticated client would,
 #    and it is this download - not a local rebuild - that the lab later installs.
 $downloadFailure = $null
 try {
@@ -158,6 +224,8 @@ if ($null -ne $publishedHash) {
     # maintainer's own Release build, and an Inno rebuild is never byte-identical to the
     # one CI compiled, so comparing against it would fail every release for no reason.
     $retainedInstaller = @(
+        Join-Path $acquired.releaseRoot $release.installerFileName
+        Join-Path $acquired.releaseRoot "installer\$($release.installerFileName)"
         Join-Path $repoRoot "artifacts\winget-release\v$Version\$($release.installerFileName)"
         Join-Path $repoRoot "artifacts\winget-release\$($release.installerFileName)"
     ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
@@ -175,7 +243,7 @@ if ($null -ne $publishedHash) {
     }
 }
 
-# 2. The stored submission set. One rule source decides identity, version agreement,
+# 3. The sealed submission set. One rule source decides identity, version agreement,
 #    the immutable URL, and the declared installer digest; a violation is one FAIL.
 $submissionFailure = $null
 try {
@@ -190,7 +258,7 @@ try {
 catch {
     $submissionFailure = $_.Exception.Message
 }
-$submissionMessage = "The stored manifests are the $($release.packageIdentifier) $Version submission set"
+$submissionMessage = "The sealed manifests are the $($release.packageIdentifier) $Version submission set"
 $submissionMessage += if ($null -eq $publishedHash) {
     ', though no published asset was available to compare their InstallerSha256 with.'
 }
@@ -200,11 +268,11 @@ else {
 $checks.Add((New-TigerMarkViewWinGetAssertion -Name 'submission/set' `
     -Condition ($null -eq $submissionFailure) `
     -Message $submissionMessage `
-    -FailureMessage "The stored manifests are not a submission set for the published release: $submissionFailure"))
+    -FailureMessage "The sealed manifests are not a submission set for the published release: $submissionFailure"))
 
-# 3. Reproducibility, comparison only. Regenerating from the published installer into
-#    a throwaway directory proves the stored bytes are still what the generator emits.
-#    The stored set is never touched, so a reproducible run and an unreproducible one
+# 4. Reproducibility, comparison only. Regenerating from the published installer into
+#    a throwaway directory proves the sealed bytes are still what the generator emits.
+#    The sealed set is never touched, so a reproducible run and an unreproducible one
 #    submit the same files - one of them just does not get to submit.
 $regeneratedRoot = Join-Path $validationRoot 'regenerated'
 if ($null -eq $publishedHash) {
@@ -214,7 +282,7 @@ if ($null -eq $publishedHash) {
 elseif ($configuredVersion -cne $Version) {
     $checks.Add((New-TigerMarkViewWinGetCheck -Name 'submission/reproducible' -Status 'WARN' `
         -Message ("Version.props is at $configuredVersion, not $Version, so this checkout cannot regenerate " +
-            'the set for comparison. The stored set is still what would be submitted.')))
+            'the set for comparison. The sealed set is still what would be submitted.')))
 }
 else {
     $regenerationFailure = $null
@@ -230,7 +298,7 @@ else {
         $regenerated = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $regeneratedDirectory -Version $Version
         if ($regenerated.digest -cne $submission.digest) {
             $regenerationFailure = ("the regenerated set hashes to '$($regenerated.digest)'; " +
-                "the stored set hashes to '$($submission.digest)'")
+                "the sealed set hashes to '$($submission.digest)'")
         }
     }
     catch {
@@ -238,11 +306,11 @@ else {
     }
     $checks.Add((New-TigerMarkViewWinGetAssertion -Name 'submission/reproducible' `
         -Condition ($null -eq $regenerationFailure) `
-        -Message 'Regenerating from the published installer reproduces the stored manifests byte for byte.' `
-        -FailureMessage "The stored manifests are not reproducible: $regenerationFailure"))
+        -Message 'Regenerating from the published installer reproduces the sealed manifests byte for byte.' `
+        -FailureMessage "The sealed manifests are not reproducible: $regenerationFailure"))
 }
 
-# 4. WinGet's own opinion of the stored set - the exact directory that gets copied.
+# 5. WinGet's own opinion of the sealed set - the exact directory that gets copied.
 $validationFailure = $null
 try {
     $null = Invoke-TigerMarkViewWinGetValidation -ManifestDirectory $submission.directory -WinGetPath $WinGetPath
@@ -252,10 +320,10 @@ catch {
 }
 $checks.Add((New-TigerMarkViewWinGetAssertion -Name 'submission/winget-validate' `
     -Condition ($null -eq $validationFailure) `
-    -Message 'winget validate accepts the stored submission set.' `
-    -FailureMessage "winget validate rejected the stored submission set: $validationFailure"))
+    -Message 'winget validate accepts the sealed submission set.' `
+    -FailureMessage "winget validate rejected the sealed submission set: $validationFailure"))
 
-# 5. The lab. It installs the downloaded release asset against the stored manifests.
+# 6. The lab. It installs the downloaded release asset against the sealed manifests.
 $lab = $null
 if ($SkipLab) {
     $checks.Add((New-TigerMarkViewWinGetCheck -Name 'lab/scenario' -Status 'FAIL' `
@@ -289,6 +357,7 @@ else {
         $spec = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'tigermarkview.labspec.template.json') -Raw |
             ConvertFrom-Json
         $spec.package.version = $Version
+        # The lab installs the sealed set, not a regenerated copy of it.
         $spec.manifestDirectory = $submission.directory
         $spec.installer.path = $installerPath
         $spec.installer.expectedUrl = $release.installerUrl
@@ -348,6 +417,7 @@ else {
             source = $labSource
             scenario = $labCommand
             specPath = $specPath
+            manifestDirectory = $submission.directory
             resultPath = $labResultPath
             exitCode = $labExitCode
             status = $labStatus
@@ -358,7 +428,7 @@ else {
 $verdict = Get-TigerMarkViewWinGetVerdict -Checks $checks.ToArray()
 $resultPath = Join-Path $validationRoot 'result.json'
 $result = [pscustomobject][ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     status = $verdict.status
     package = $release.packageIdentifier
     version = $Version
@@ -371,6 +441,7 @@ $result = [pscustomobject][ordered]@{
         publishedSha256 = $publishedHash
         publishedLength = $publishedLength
     }
+    provenance = $provenance
     submission = [pscustomobject][ordered]@{
         repository = 'microsoft/winget-pkgs'
         path = $release.submissionPath

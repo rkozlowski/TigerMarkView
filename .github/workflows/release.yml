@@ -262,6 +262,18 @@ jobs:
             -ExpectedInstallerSha256 (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash `
             -GitHubOutput $env:GITHUB_OUTPUT | Out-Host
 
+          # The post-release gate selects this artifact by name and verifies it against the
+          # digest GitHub records for it. Publishing the submission digest here as well lets a
+          # maintainer pin the manifests themselves with -ExpectedSubmissionDigest.
+          $digest = (Select-String -Path $env:GITHUB_OUTPUT -Pattern '^submission_sha256=(.+)$' |
+            Select-Object -Last 1).Matches[0].Groups[1].Value
+          @(
+            '### WinGet submission set'
+            ''
+            "- Artifact: ``TigerMarkView-WinGet-$env:RELEASE_VERSION-$env:GITHUB_SHA``"
+            "- Submission digest: ``$digest``"
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
       - name: Verify release construction did not mutate committed inputs
         run: git diff --exit-code
 
