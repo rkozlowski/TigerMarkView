@@ -269,9 +269,20 @@ Markdown file association, and excludes debug symbols and XML documentation from
 
 TigerMarkView is an application repository. It publishes one GUI+CLI installer, not NuGet packages,
 a separate CLI installer, or a portable ZIP. Public documentation remains `README.md` plus `docs/`;
-do not introduce DocFX, generated API docs, or an API-documentation site. Release automation creates a
-draft release and never submits to `winget-pkgs`; the first and subsequent WinGet pull requests remain
-explicit maintainer actions after live-asset validation in TigerWinLab.
+do not introduce DocFX, generated API docs, or an API-documentation site. TigerMarkView's completed
+release/WinGet workflow is the reference model for future Tiger projects. The durable maintainer
+lifecycle is in `docs/maintainers/releasing-tigermarkview.md`, the artifact and submission rules are
+in `docs/maintainers/winget-tigermarkview.md`, and current implementation work is scoped by
+`docs/maintainers/release-automation-implementation-plan.md`.
+
+The human decides when to publish. Automation may prepare release changes and, after publication,
+prepare, commit, and push the exact WinGet submission branch. It must never commit/push the source
+release preparation, publish the GitHub draft, or create the final `microsoft/winget-pkgs` pull
+request. Any stage after a required human action must prove that exact action occurred before
+mutation: expected commit on `origin/main`, successful CI and release runs for that commit, public
+non-draft release, authenticated/authorized `gh` session, or safe expected `winget-pkgs` repository
+state as applicable. Missing or ambiguous state stops loudly; it is never inferred or silently
+repaired. Human checkpoints end with explicit `READY FOR HUMAN ACTION` instructions.
 
 The authoritative WinGet submission set for a published release is the release workflow's sealed
 `TigerMarkView-WinGet-<version>-<commit>` artifact, and nothing else.
@@ -282,6 +293,20 @@ verifies it against the digest GitHub recorded, and extracts it to
 `artifacts\winget-release\<version>\submission\`. It must not read `artifacts\winget\`, and it must
 fail rather than fall back when the artifact cannot be retrieved. Regeneration stays a throwaway
 byte-for-byte reproducibility comparison and never replaces the sealed set.
+
+The target post-release command manages only the dedicated
+`C:\Projects\winget-pkgs-TigerMarkView\` clone. It must verify the fork/upstream identities, `master`,
+clean and operation-safe state, and the latest project-specific TigerMarkView PR before any sync or
+submission mutation. Open and draft matching PRs block; merged and manually closed PRs do not. After
+guarded fork synchronization it copies only the sealed bytes, validates the exact final diff,
+commits, pushes, and hands PR creation to the human. Local generation is never an authority or
+fallback.
+
+Local GitHub operations use a verified `gh auth login`/`gh auth status` session. Do not design routine
+PAT entry/export, token arguments or logging, arbitrary credential-store reads, or unrelated
+credential fallbacks. Actions jobs use scoped `GITHUB_TOKEN` permissions, with the minimum permission
+each job needs. GitHub's generic generated notes alone are insufficient: 0.8.1 produced only a Full
+Changelog link, so release preparation/workflow automation must supply useful version-specific notes.
 
 Inno Setup's preprocessor treats a line beginning with `#` as a directive, including in code blocks;
 use `Chr(13) + Chr(10)` rather than a line-leading `#13#10` expression.

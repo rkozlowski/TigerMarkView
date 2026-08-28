@@ -1,235 +1,288 @@
 # Preparing the TigerMarkView WinGet package
 
-The community identifier is `ItTiger.TigerMarkView`, following the established `ItTiger.TigerSqlCmd`
-publisher spelling. Do not advertise the install command as live until the first `winget-pkgs` pull
-request has been accepted and the community source returns the package.
+The community package identifier is `ItTiger.TigerMarkView`. The fork is
+`https://github.com/rkozlowski/winget-pkgs`, the upstream repository is
+`https://github.com/microsoft/winget-pkgs`, and TigerMarkView uses the dedicated clone
+`C:\Projects\winget-pkgs-TigerMarkView\`.
 
-## The flow
+Do not advertise `winget install ItTiger.TigerMarkView` as live until the first pull request is
+accepted and the community source returns the package.
+
+> **Transition status:** the release workflow already generates, validates, and seals the
+> authoritative manifests. The existing `Test-TigerMarkViewWinGet.ps1` validates them after release
+> publication. The one-command fork/branch/commit/push orchestrator described below is a target and
+> is not implemented yet. See [the implementation plan](release-automation-implementation-plan.md)
+> and the [current interim procedure](#current-interim-procedure).
+
+## The authoritative artifact
+
+The WinGet chain is:
 
 ```text
-release workflow: build installer -> generate manifests -> winget validate -> seal
-                  -> upload TigerMarkView-WinGet-<version>-<commit>
-maintainer:       publish the GitHub Release
-                  -> download that sealed artifact -> validate it against the published
-                     asset + TigerWinLab
-                  -> copy those bytes, unchanged, into winget-pkgs
+release commit -> successful CI -> release workflow -> authoritative CI-built installer
+  -> generated + winget-validated + sealed manifests
+  -> TigerMarkView-WinGet-<version>-<commit> workflow artifact
+  -> draft release -> human publication -> public-byte verification
+  -> exact sealed manifests copied to winget-pkgs
 ```
 
-One rule holds the whole thing together: **the files copied into `winget-pkgs` are byte-for-byte the
-files the release workflow generated and validated.** Nothing downstream regenerates them.
+The files submitted to `winget-pkgs` must be byte-for-byte identical to the three files that the
+release workflow generated and validated. Nothing downstream regenerates or edits them.
 
-Three things generate or hold manifests, and they are not interchangeable:
-
-| | |
+| Item | Authority and purpose |
 | --- | --- |
-| `Prepare-TigerMarkViewWinGet.ps1` | **local/pre-release generation.** Writes to `artifacts\winget\`. Hashes whatever installer it is given, normally a local Inno build, so its `InstallerSha256` is *not* the published one. Never submit its output. |
-| `TigerMarkView-WinGet-<version>-<commit>` | **the authoritative post-release submission set.** Generated inside the release workflow from the installer that release actually published, then validated, sealed, and uploaded. |
-| `Test-TigerMarkViewWinGet.ps1` | **post-release validation.** Downloads that artifact and validates it against the published release and TigerWinLab. It reads nothing under `artifacts\winget\`. |
+| `Prepare-TigerMarkViewWinGet.ps1` and `artifacts\winget\` | Local/pre-release generation. It hashes a local installer and is never a release submission set. |
+| `TigerMarkView-WinGet-<version>-<commit>` | The authoritative submission artifact. The release workflow generates it from the exact installer it publishes, validates it, seals it, and records its digest. |
+| `Test-TigerMarkViewWinGet.ps1` and `artifacts\winget-release\<version>\` | Current post-release retrieval and verification. It must obtain the sealed artifact and never fall back to local generation. |
+| Future `Prepare-TigerMarkViewWinGetSubmission.ps1` | End-to-end post-release verification and safe preparation of the pushed fork branch. |
 
-## What the release workflow does
+The release workflow's artifact root is the submission directory itself: exactly the version,
+default-locale, and installer YAML files. `Assert-TigerMarkViewWinGetSubmission.ps1` proves the file
+set, encoding, identity, version, immutable asset URL, installer hash, and combined submission
+digest. The publication job downloads and rechecks that sealed set; it does not regenerate it.
 
-The workflow builds one installer, hashes it, generates the three manifests from that exact hash and
-the immutable `v<version>` asset URL, and runs `winget validate` over them. It then *seals* the result
-with `eng/winget/Assert-TigerMarkViewWinGetSubmission.ps1`, which proves the directory holds exactly
-the three submission manifests, UTF-8 without a byte-order mark, agreeing on identity and version and
-naming that asset URL, and records a digest over the three files.
+Post-release regeneration is verification-only. It writes to throwaway storage, compares all files
+byte-for-byte with the sealed set, and can never replace the sealed files. An Inno rebuild is not
+expected to be byte-identical to the CI installer.
 
-That directory is uploaded as `TigerMarkView-WinGet-<version>-<commit>`. The artifact root *is* the
-submission directory: three YAML files, nothing else. The publication job downloads the artifact and
-re-runs the seal against the recorded digest, so an artifact that changed in transit cannot reach a
-release.
+## Target one-command contract
 
-WinGet is provisioned by the workflow only when the runner's own `winget.exe` is missing or fails
-`--info`; the pinned `Microsoft.WinGet.Client` module repairs it in that case. The resolved executable
-is passed explicitly to the generator. The client version is never probed: `winget validate` itself
-decides whether it understands schema 1.12. Its documented warning-success HRESULT (`0x8A150028`) is
-the only accepted nonzero result, and a genuine validation failure stays fatal.
-
-To see what the manifests will say before a release exists:
+After the human publishes the GitHub Release, the intended single maintainer command is:
 
 ```powershell
-.\eng\winget\Prepare-TigerMarkViewWinGet.ps1
+.\eng\winget\Prepare-TigerMarkViewWinGetSubmission.ps1 -Version <version>
 ```
 
-They are written to:
+The final name may change during implementation, but the contract may not: when the command ends in
+`PASS`, the **only** remaining maintainer action is to create and review the pull request to
+`microsoft/winget-pkgs`. There is no manual file copy, hash lookup, fork synchronization, branch
+creation, `git add`, commit, or push.
+
+The command must order its work from cheap and fundamental checks to expensive checks and defer
+mutation until all practical preflight checks pass:
+
+1. required tools;
+2. GitHub CLI authentication and account suitability;
+3. TigerMarkView source-repository identity and state;
+4. expected release version and commit;
+5. successful `CI` run for that exact commit;
+6. successful **Release TigerMarkView** run for that version and commit;
+7. published, non-draft, publicly accessible release state;
+8. sealed artifact availability and GitHub-recorded digest integrity;
+9. manifest seal, public installer/hash, byte-for-byte reproduction, and `winget validate`;
+10. TigerWinLab install, smoke, wrong-hash rejection, and uninstall validation;
+11. dedicated clone, fork, remotes, branch, worktree, operation-state, and previous-PR safety checks;
+12. fork synchronization;
+13. exact sealed-manifest copy and submission mutation;
+14. final diff/status validation, commit, and push; and
+15. an explicit human handoff.
+
+Every stage after a human checkpoint verifies that checkpoint. A missing publication, green run for
+the wrong commit, expired artifact, wrong account, or unexpected repository is `BLOCKED` or `FAIL`,
+not a prompt to guess. Fail before mutation and print what was observed, what the human must do, and
+the exact rerun command when useful.
+
+## GitHub authentication and public-release checks
+
+GitHub CLI is a required maintainer tool. The orchestrator must locate `gh`, run `gh auth status`,
+identify the authenticated account, and verify it can read the TigerMarkView Actions run and operate
+on the expected fork. Use `gh auth login` to establish or repair the session.
+
+The finished command must not require a maintainer to paste or routinely export a personal access
+token. It must not accept tokens in command-line arguments, log tokens, read arbitrary credential
+stores, or fall back to unrelated credentials. Existing lower-level compatibility inputs are not the
+target interface. GitHub Actions uses its scoped `GITHUB_TOKEN`; local orchestration uses the verified
+GitHub CLI session.
+
+Publication verification must prove all of the following before any `winget-pkgs` mutation:
+
+- `v<version>` resolves to the expected release commit, dereferencing the annotated tag;
+- the expected release workflow run for that version and commit concluded `success`;
+- the GitHub Release exists and `isDraft` is false;
+- its expected installer, `SHA256SUMS.txt`, and `release-artifacts.json` assets exist with no
+  unexpected package assets; and
+- the release page and immutable installer URL are publicly accessible without authenticated API
+  headers.
+
+The downloaded installer must match the hashes and lengths in both verification records and the
+sealed manifests. The workflow artifact archive must match the digest GitHub recorded, and the
+extracted three-file set must reproduce its recorded seal.
+
+## Dedicated clone lifecycle
+
+The clone path is fixed and project-specific:
 
 ```text
-artifacts\winget\manifests\i\ItTiger\TigerMarkView\<version>\
+C:\Projects\winget-pkgs-TigerMarkView\
 ```
 
-**That directory is never the post-release submission.** It hashes whichever installer was on hand, and
-an Inno rebuild is never byte-identical to the one CI compiled, so a set left there by an earlier local
-run declares an `InstallerSha256` that no release ever published. Reading it as though it were the
-release's submission is exactly the mistake that failed 0.8.1 in TigerWinLab.
+The general pattern for future Tiger projects is
+`C:\Projects\winget-pkgs-<TigerProjectName>\`. A shared or heuristically discovered clone is not an
+acceptable substitute.
 
-## After the GitHub Release is public
+If the TigerMarkView path does not exist, the command clones the expected fork into exactly that
+path, configures `upstream`, and verifies the resulting repository identity before continuing.
 
-Everything below needs the release **published**: the manifests name the live immutable asset URL, and
-that URL does not resolve while the release is a draft. Run from an **elevated** PowerShell 7 session
-at the repository root — elevation is TigerWinLab's requirement, not this repository's.
+If it exists, all checks occur before synchronization or other destructive work. The command must
+prove:
+
+- the path is a Git worktree for the expected `winget-pkgs` repository;
+- `origin` resolves to `rkozlowski/winget-pkgs` and `upstream` resolves to
+  `microsoft/winget-pkgs`, allowing only canonical URL-form differences;
+- the expected default branch is `master`;
+- the worktree and index are clean, with no untracked submission files that would be overwritten;
+- no merge, rebase, cherry-pick, revert, bisect, or other interrupted Git operation is active; and
+- current local and remote branch state is understood before any reset, removal, or force operation.
+
+Never reuse an ambiguous directory or silently rewrite unexpected remotes. Existing correct state is
+reusable; conflicting state is a clear stop.
+
+## Previous-PR safety gate
+
+When the dedicated clone already exists, the latest TigerMarkView WinGet pull request, if any, is a
+hard gate before fetch/synchronization or submission mutation. The lookup must be project-specific,
+not merely the latest PR opened by the maintainer. Match at least:
+
+- base repository `microsoft/winget-pkgs`;
+- fork owner `rkozlowski`;
+- head branch prefix `ItTiger-TigerMarkView-`; and
+- the most recent pull request matching that identity.
+
+If the latest matching PR is not closed, stop. Open and draft PRs block. Merged PRs are acceptable
+because they are closed, and manually closed PRs are also acceptable. The `BLOCKED` result must show
+the PR number, URL, state, draft status, and head branch, state that no sync/branch/copy/commit/push
+occurred, and tell the human to close or complete that PR before rerunning.
+
+## Fork synchronization and submission mutation
+
+After every preflight and the previous-PR gate passes, fetch both remotes. Synchronization must be
+guarded by the identity and clean-state proofs above:
+
+1. verify `upstream/master` and `origin/master` after fetch;
+2. fast-forward the fork's `master` to `upstream/master` when safe;
+3. stop on unexpected fork-only or divergent commits instead of silently discarding them;
+4. push the synchronized `master` to the fork and verify the remote result; and
+5. create `ItTiger-TigerMarkView-<version>` from the current `upstream/master`.
+
+The branch name is proposed and should remain project-specific. If a local or remote branch already
+exists, reuse it only when its version, base, commit, and files are exactly the expected resumable
+state. Otherwise stop without overwriting it.
+
+Copy the three sealed files unchanged to:
+
+```text
+manifests\i\ItTiger\TigerMarkView\<version>\
+```
+
+Before commit, rehash the destination files against the sealed source and require the final
+`winget-pkgs` diff to contain only the expected package-version directory and exactly the three
+manifest files. Re-run manifest validation against the destination, commit with a deterministic
+subject such as `New version: ItTiger.TigerMarkView version <version>`, push the release branch, and
+verify the remote branch points to the new commit.
+
+The command does **not** create the pull request. It ends loudly:
+
+```text
+PASS
+
+READY FOR HUMAN ACTION
+
+Required action:
+1. Create and review the microsoft/winget-pkgs pull request from
+   rkozlowski:ItTiger-TigerMarkView-<version>.
+
+Then:
+<suggested gh pr create command or compare URL>
+```
+
+## Idempotency and recovery
+
+The command must be safe to rerun after any interruption:
+
+- retained downloads and extracted artifacts are reused only after their digests are reverified;
+- an already-correct clone, remote, synchronized `master`, branch, manifest set, commit, or push is
+  recognized and reported as `PASS`;
+- a partially prepared branch may resume only when every existing change is exactly what the
+  requested version implies;
+- conflicting files, commits, branches, remotes, release identities, or repository state cause
+  `BLOCKED` or `FAIL` before overwrite; and
+- cleanup and repair must be explicit and narrowly targeted. The command never silently repairs
+  ambiguous state.
+
+Expensive validation results may be cached for a rerun only when their record binds the version,
+release commit, workflow run, artifact ID and digest, installer digest, sealed submission digest,
+tool versions, and relevant lab result. Any changed binding invalidates the cached result.
+
+## Current interim procedure
+
+Until the orchestrator exists, run the current read/validate gate from an elevated PowerShell 7
+session after publishing the GitHub Release:
 
 ```powershell
+gh auth status
 .\eng\winget\Test-TigerMarkViewWinGet.ps1 -Version <version>
 ```
 
-That one command is the whole gate. It fetches the sealed set itself; there is no separate download
-step and nothing to generate first.
+The gate downloads `TigerMarkView-WinGet-<version>-<commit>`, verifies the GitHub-recorded artifact
+digest, extracts it below `artifacts\winget-release\<version>\submission\`, verifies the published
+installer and release records, regenerates into throwaway storage for byte comparison, runs
+`winget validate`, and runs TigerWinLab. `-SkipLab` is useful for diagnosis but can never produce a
+submission-ready `PASS`.
 
-Fetching the artifact needs a GitHub token with `actions:read` — listing it needs none, but downloading
-it does. The token is read from `-GitHubToken`, then `GH_TOKEN`, then `GITHUB_TOKEN`, then
-`gh auth token`. On a machine with none, download the artifact from the workflow run page and pass it
-with `-ArchivePath <zip>`; it is checked against the same recorded digest, so it is a different route to
-the sealed bytes rather than a weaker check.
-
-The gate exits `0` on `PASS` and `1` on `FAIL`, prints a check table, and retains everything under
-`artifacts\winget-release\<version>\`:
-
-| Path | |
-| --- | --- |
-| `submission\` | **the authoritative set** — the three sealed YAML files extracted from the workflow artifact. These are the bytes that go to `winget-pkgs` |
-| `submission.json` | provenance — release tag, commit, artifact name and id, workflow run id, the digest GitHub recorded, and the submission digest |
-| `artifact\<artifact name>.zip` | the retained archive, so a rerun does not download again |
-| `validation\result.json` | the machine-readable record — verdict, every check, installer digests, provenance, and the submission set with per-file hashes |
-| `validation\summary.txt` | the same report as printed, so the record outlives the terminal |
-| `validation\published\` | the installer, `SHA256SUMS.txt`, and `release-artifacts.json` downloaded from the release |
-| `validation\regenerated\` | the throwaway reproducibility copy; never the submission |
-| `validation\tigerwinlab-spec.json`, `tigerwinlab-result.json`, `tigerwinlab-artifacts\` | the lab's specification, result envelope, and evidence |
-
-Useful switches: `-Json` emits the result record instead of the table; `-SkipLab` runs the manifest and
-published-asset checks only and can never produce a submission-ready `PASS`; `-ArchivePath` supplies an
-already-downloaded artifact archive; `-ExpectedSubmissionDigest` pins the submission digest the release
-workflow's job summary recorded; `-Refresh` re-downloads over a retained archive; `-TimeoutMinutes`
-bounds the guest scenario (default 45); `-TigerWinLabRoot` locates TigerWinLab.
-
-To fetch and verify the sealed set on its own, without validating a release:
+For artifact-acquisition diagnosis without the public-release and lab gates, the existing lower-level
+command is:
 
 ```powershell
 .\eng\winget\Get-TigerMarkViewWinGetReleaseSubmission.ps1 -Version <version>
 ```
 
-## What the gate proves
+It does not make a submission ready and must not be used to bypass the complete gate.
 
-**`submission/source` — these three files came from one identified sealed artifact.** The version
-resolves to the published release tagged `v<version>`; that tag resolves to a commit, dereferencing an
-annotated tag; that commit selects the one artifact named `TigerMarkView-WinGet-<version>-<commit>`
-whose workflow run built it — never merely the most recent WinGet artifact, because repeated release
-attempts leave several of the same version behind. The downloaded archive must reproduce the SHA-256
-GitHub recorded for that artifact before a single byte is extracted, and the extraction must yield
-exactly the three manifests. Every one of those links throws when it breaks; **there is no fallback.**
-A run that cannot reach the sealed artifact fails and validates nothing.
+Prefer the authenticated `gh` session. Existing `-GitHubToken`, `GH_TOKEN`, `GITHUB_TOKEN`, and
+`-ArchivePath` compatibility routes remain current implementation details; do not use them as the
+design for the new maintainer-facing command.
 
-`submission/sealed-digest` appears when `-ExpectedSubmissionDigest` is supplied, pinning the manifests
-themselves to the digest the workflow's sealing step recorded in its job summary.
+The retained result includes:
 
-**`release/*` — the published asset is the one the manifests describe.** The installer is downloaded
-from the immutable URL exactly as an unauthenticated client would and hashed, then compared with the
-release's own `SHA256SUMS.txt` and `release-artifacts.json` (digest, length, and `releaseVersion`).
-A retained copy of the workflow-produced installer is compared too when one is kept under
-`artifacts\winget-release\` (in the `<version>\` directory, an `installer\` subdirectory of it, a legacy
-`v<version>\` directory, or directly); when none is, that is a `WARN`, because the pair that actually
-matters is the manifests and the published bytes.
+| Path | Purpose |
+| --- | --- |
+| `submission\` | The authoritative extracted three-file set; never edit it. |
+| `submission.json` | Release, commit, workflow artifact, GitHub digest, and submission provenance. |
+| `artifact\` | The retained workflow artifact archive. |
+| `validation\result.json` and `summary.txt` | Machine-readable and human-readable verdicts. |
+| `validation\published\` | Public installer and verification records. |
+| `validation\regenerated\` | Throwaway comparison output; never submit it. |
+| `validation\tigerwinlab-*` | Lab specification, result, and evidence. |
 
-This never compares against `artifacts\installer\`. That directory holds the maintainer's own Release
-build from step 2 of the release procedure, and an Inno rebuild is never byte-identical to the one CI
-compiled, so treating it as a submission gate would fail every release for no reason.
+A current `PASS` proves the sealed files are suitable to submit, but it does not manage the dedicated
+clone or fork. Until the target command is implemented, the maintainer must perform those remaining
+steps manually and preserve the exact bytes. This temporary manual gap is the work the implementation
+plan removes.
 
-**`submission/*` — the sealed manifests are the submission.** `submission/set` re-runs the same seal the
-workflow ran, now against the published digest — this is the check that catches a manifest whose
-`InstallerSha256` is not the published installer's. `submission/winget-validate` runs `winget validate`
-over the sealed directory — the exact directory that gets copied. `submission/reproducible` regenerates
-from the *published* installer into `validation\regenerated\` and requires the result to be
-byte-identical to the sealed set. That regeneration is comparison only: it is written to a throwaway
-directory and can never replace what is submitted. When the working tree is not at the version being
-validated it cannot run, and reports `WARN` rather than a false proof.
+## Manifest shape and validation scope
 
-**`lab/*` — WinGet can really install it.** The sealed manifest directory and the downloaded release
-asset, not a local rebuild of either, are handed to TigerWinLab, which restores its Windows 11 guest to a clean checkpoint and runs the WinGet scenario
-there: the declared `.NET Desktop Runtime 10` and `Microsoft Edge WebView2 Runtime` dependencies, a
-local-manifest install with hash verification enforced, installed files, ARP registration, machine
-`PATH`, `tiger-mark` resolution and smoke commands, a deliberately wrong hash that must be refused,
-`winget` uninstall, and cleanup.
+TigerMarkView uses the WinGet multi-file format at schema 1.12: version, default-locale, and installer
+manifests. The Inno installer has user- and machine-scope entries over the same verified x64 asset.
+They declare silent switches, install-style upgrade behavior, the stable Inno product code, ARP
+identity, the `tiger-mark` command, and dependencies on .NET Desktop Runtime 10 and Microsoft Edge
+WebView2 Runtime.
 
-A `WARN` is something to read, not something that blocks a submission. Only a `FAIL` does.
+TigerWinLab receives the sealed manifests and downloaded public installer. It validates dependency
+setup, local-manifest installation with hash enforcement, installed files, ARP registration, machine
+`PATH`, CLI smoke behavior, deliberate wrong-hash refusal, WinGet uninstall, and cleanup in a reset
+Windows guest. Nothing is installed on the maintainer host.
 
-## The submission
+Failures involving a missing public release, wrong commit, unsuccessful workflow, expired or
+digest-mismatched artifact, release/hash disagreement, non-reproducible manifests, `winget validate`,
+or TigerWinLab are blockers. Never rebuild the installer, regenerate the submission set, edit sealed
+manifests, or substitute `artifacts\winget\` to make a post-release gate pass.
 
-A `PASS` means these three files are ready, unchanged, for a `winget-pkgs` fork at
-`manifests/i/ItTiger/TigerMarkView/<version>/`:
+`eng\winget\tests\TigerMarkViewWinGet.Tests.ps1` currently covers generation, sealing, upload shape,
+artifact selection by version and commit, digest checking, public-release checks, reproducibility,
+and refusal to use stale local output. The future clone, PR-gate, synchronization, resume, final-diff,
+commit, and push behavior requires its own isolated tests with fake GitHub and local bare Git remotes.
 
-```text
-artifacts\winget-release\<version>\submission\ItTiger.TigerMarkView.installer.yaml
-artifacts\winget-release\<version>\submission\ItTiger.TigerMarkView.locale.en-US.yaml
-artifacts\winget-release\<version>\submission\ItTiger.TigerMarkView.yaml
-```
-
-`validation\result.json` records each file's path, length, and SHA-256 under `submission.files`, the
-same submission digest the workflow sealed, and under `provenance` the artifact those bytes were
-extracted from — so the files submitted can be shown to be the files the release sealed and validated.
-Copy them verbatim — a manifest edited after the run is a manifest nothing validated. If a change is
-genuinely needed, change the generator, rerun the workflow, and rerun the gate.
-
-**Opening the pull request is a human step and stays one.** Nothing in this repository authenticates
-to, forks, or submits to `microsoft/winget-pkgs`. Fork it, copy the three files to the path above,
-commit only that one package version, open the pull request, and follow its validation and review.
-
-## Manifest shape
-
-The repository uses the multi-file manifest format recommended by the WinGet community repository:
-version, default-locale, and installer manifests at schema 1.12. The Inno installer has two entries
-over the same verified asset:
-
-- machine scope with `/ALLUSERS`, adding the install directory to machine `PATH`; and
-- user scope with `/CURRENTUSER`, adding it to user `PATH`.
-
-Both use x64, Inno silent/silent-with-progress switches, install-style upgrade behavior, the stable
-Inno product code, ARP publisher/name matching, the `tiger-mark` command, and package dependencies on
-`.NET Desktop Runtime 10` and `Microsoft Edge WebView2 Runtime`. The machine entry appears first so
-TigerWinLab's machine-scope WinGet scenario can validate it explicitly.
-
-Do not emit `AppsAndFeaturesEntries.DisplayVersion` when it is identical to `PackageVersion`. With no
-explicit override the generator omits the field. Pass `-InstalledDisplayVersion` only when the
-installed ARP display version genuinely differs.
-
-## Failures worth recognising
-
-- `release/assets` failed — the release is not published yet, or its assets are missing. Before
-  publication this gate cannot pass, and that is not a defect.
-- `release/checksums-file` or `release/artifact-manifest` failed — the published release disagrees with
-  its own verification records. Stop and investigate the release; never adjust a manifest to accept
-  surprising bytes.
-- The run failed before any check, saying the sealed set could not be obtained — the release is not
-  published, the workflow artifact has expired (30 days), or no `actions:read` token was found. Fix
-  that; do not reach for `artifacts\winget\`. A set generated locally is not this release's submission.
-- `submission/set` failed on `InstallerSha256` — the sealed manifests and the published asset disagree.
-  Stop: either something other than the validated installer was published, or the wrong artifact was
-  sealed.
-- `submission/reproducible` failed — the sealed manifests are not what the generator now emits. Find
-  out which is wrong before submitting either.
-- `lab/result` says no result was written — the lab never ran. Confirm the session is elevated and the
-  guest is provisioned with `New-TigerWinLab.ps1`.
-- `lab/scenario` reports the lab is in use — there is one mutable VM; wait for its exclusive lease.
-
-Nothing in this flow installs anything on the host or changes the host's WinGet settings. The install
-happens in the lab guest, which is discarded afterwards.
-
-## Reusing this for the next release
-
-The flow is version-driven, not release-specific: publish the release, then run the same command with
-the new version. The lab specification is generated per run from
-`eng\winget\tigermarkview.labspec.template.json`, which is where TigerMarkView's installed shape is
-described — expected files, machine `PATH` entry, dependencies, and smoke commands. Edit the template
-when the installed shape changes; the version, manifest path, installer path, and expected URL are
-filled in for you.
-
-`eng\winget\tests\TigerMarkViewWinGet.Tests.ps1` covers manifest generation, the submission-set rules,
-the sealing gate, the workflow's upload shape, and post-release acquisition — artifact selection by
-version and commit, a missing or expired artifact, an unpublished release, an archive that does not
-match the recorded digest, a published installer the manifests do not describe, an unreproducible
-regeneration, and the proof that a stale set under `artifacts\winget\` can neither be selected nor
-altered. It runs against a fake GitHub, so there is no VM, no network, and no token. Run it after
-touching anything under `eng\winget\`.
-
-Authoritative references are the WinGet community repository's
+Authoritative WinGet references are the community repository's
 [manifest documentation](https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest),
 [schema 1.12 guide](https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest/schema/1.12.0),
 and [first contribution checklist](https://github.com/microsoft/winget-pkgs/blob/master/doc/FirstContribution.md).

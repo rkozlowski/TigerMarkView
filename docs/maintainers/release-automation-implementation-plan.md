@@ -1,0 +1,330 @@
+# TigerMarkView release automation implementation plan
+
+## Objective
+
+Build the minimum-intervention release and WinGet publication workflow described in
+[Releasing TigerMarkView](releasing-tigermarkview.md) and
+[Preparing the TigerMarkView WinGet package](winget-tigermarkview.md). A maintainer makes the release
+decisions; automation performs deterministic preparation, verification, artifact handling, and Git
+work. The completed TigerMarkView implementation becomes the reference for future Tiger projects.
+
+This is a current implementation plan. Remove or substantially reduce it when the work is complete;
+the durable contracts belong in the two maintainer guides and `CLAUDE.md`.
+
+## Current behavior
+
+- Release preparation is a documented sequence of manual version, workflow-default, documentation,
+  build, installer, and TigerWinLab steps. There is no preparation orchestrator or standard agent
+  handoff.
+- Pushes to `main` automatically run `.github/workflows/ci.yml`, but the manually dispatched release
+  workflow does not verify that CI succeeded for its exact commit.
+- `.github/workflows/release.yml` already builds once, validates the installer, hashes the closed
+  release set, generates and validates manifests from that exact installer, seals and uploads the
+  WinGet set, reverifies transferred bytes, tags the commit, and creates a draft release.
+- Draft creation uses GitHub `--generate-notes`. For 0.8.1 this yielded only a Full Changelog link,
+  so the maintainer had to supply the useful release summary manually.
+- `Test-TigerMarkViewWinGet.ps1` already verifies the published release, retrieves the commit-bound
+  sealed artifact, checks GitHub's artifact digest, performs throwaway regeneration, runs
+  `winget validate`, and invokes TigerWinLab.
+- The current post-release process stops before dedicated-clone management, previous-PR checking,
+  fork synchronization, exact manifest copy, final diff checks, commit, and push.
+- Existing lower-level WinGet acquisition accepts raw-token compatibility inputs. The new
+  maintainer-facing contract must use a verified GitHub CLI session and must not expose tokens.
+
+## Target workflow and ownership
+
+| Stage | Automation responsibility | Human responsibility |
+| --- | --- | --- |
+| Prepare | Update deterministic version locations, verify prerequisites and repository state, guide release-note/document updates, run local gates, report exact diff/results | Request a version, review judgment-based content and all changes |
+| Commit/push | No implicit mutation; later stages verify the expected commit is on `origin/main` | Commit and push intentionally |
+| CI | Run automatically for the pushed commit | Wait; decide whether failures are release blockers |
+| Release dispatch | Verify pushed commit and successful CI before mutation | Manually dispatch the release workflow |
+| Build/draft | Build authoritative bytes once, generate/seal manifests, tag, create draft with useful notes, report hashes and review checklist | Review draft, notes, tag, and assets; publish explicitly |
+| Post-release | Verify publication and provenance, validate sealed files and public installer, test in TigerWinLab, prepare/commit/push fork branch | Run one command after publication |
+| WinGet PR | Provide exact pushed branch and PR command/URL | Create and review the `microsoft/winget-pkgs` PR |
+
+No automated stage may cross either publication decision: publishing the GitHub Release and creating
+the final WinGet PR remain human-only.
+
+## Verification and handoff model
+
+Implement shared result semantics for scripts and workflow summaries:
+
+- `PASS`: a check or stage completed and its invariant is proven;
+- `WARN`: notable, non-blocking state that must be shown in the final summary;
+- `BLOCKED`: a required human/external checkpoint is incomplete or state is unsafe to mutate;
+- `FAIL`: a completed check found invalid data or an operation failed; and
+- `READY FOR HUMAN ACTION`: automation intentionally stopped at a decision boundary.
+
+Each result should include a stable check ID, observed state, expected state, evidence/provenance, and
+remediation. Script exit codes should distinguish success from blocked/failed if practical; define
+the mapping once and test it. Human-readable output and machine-readable JSON must be derived from the
+same result objects.
+
+Before every post-human mutation, verify the prior action explicitly:
+
+1. Resolve local `HEAD`, `origin/main`, the requested version, and expected release commit.
+2. Query the `CI` workflow by exact SHA and require `status=completed` and `conclusion=success` for
+   the push on `main`.
+3. Query **Release TigerMarkView** by exact SHA/version and require success before consuming its
+   artifacts.
+4. Query the release and require the expected tag, commit, `isDraft=false`, assets, and public URLs.
+5. Verify `gh auth status`, authenticated identity/capability, clone identity, remotes, operation
+   state, cleanliness, branch state, and previous PR before fork mutation.
+
+On `BLOCKED` or `FAIL`, stop before mutation and end with the exact corrective action and rerun
+command. On a decision boundary, print numbered required actions and the exact next command or GitHub
+UI action. Do not end with a bare “ready”.
+
+## Tooling and authentication
+
+Required local tools are `git`, `gh`, `pwsh`, `winget`, `dotnet`, TigerWinLab, and Inno Setup where
+local installer preparation needs it. Continue to require WebView2 for local PDF/installer checks.
+
+The maintainer-facing scripts must:
+
+- resolve each required executable and report its path/version where useful;
+- run `gh auth status`, resolve the viewer identity, and prove the account can read Actions and push
+  `rkozlowski/winget-pkgs` before mutation;
+- direct authentication repair to `gh auth login`;
+- never accept a token parameter, place tokens on command lines, log tokens, inspect generic Git
+  credential stores, or search fallback credentials; and
+- use `gh api`/other `gh` commands through the authenticated session for GitHub operations.
+
+Tests should inject a fake `gh` executable or command adapter; they must not need live credentials.
+Lower-level raw-token compatibility can be removed or made internal after callers and tests migrate.
+
+In Actions, use `${{ github.token }}` only through environment delivery. Add `actions: read` to the
+release validation job for CI-run verification and retain `contents: read`; keep `contents: write`
+only on the draft-publication job. Do not give workflow-wide write permissions.
+
+## Authoritative artifacts and release notes
+
+Preserve the existing build-once chain. The release commit and successful CI select the release
+workflow run; that run creates one installer and one sealed manifest set. Record and carry version,
+commit, run ID/attempt, release artifact-manifest digest, installer digest/length, WinGet artifact ID
+and GitHub digest, and submission digest through every stage.
+
+Post-release retrieval must select the artifact by version **and** tag commit, not by recency. Public
+installer verification must be unauthenticated. Regeneration goes to a fresh throwaway directory and
+is comparison-only. No recovery path may replace the sealed set with regenerated files.
+
+Replace generic-only release notes with a deliberate, checked-in notes source. Proposed design:
+
+- release preparation creates `.github/release-notes/<version>.md`;
+- define a short template: user-visible changes, fixes, prerequisites/known limitations, and optional
+  contributor/change links;
+- readiness validation requires the exact version file, meaningful non-placeholder content, and no
+  secrets or local paths;
+- the workflow carries that file from the validated release commit and
+  `Publish-GitHubDraftRelease.ps1` uses `gh release create --notes-file` instead of relying solely on
+  `--generate-notes`; and
+- the draft remains editable and human publication remains mandatory.
+
+Confirm the final notes path and template during implementation. The acceptance requirement is useful
+version-specific content; a Full Changelog link alone is insufficient.
+
+## Proposed scripts and interfaces
+
+Prefer small assertion/planning helpers plus one orchestrator per human-facing phase. Reuse and
+extend existing `eng/release-automation` and `eng/winget` functions instead of creating a second
+artifact or manifest model.
+
+### Release preparation
+
+- `eng/release-automation/Set-TigerMarkViewReleaseVersion.ps1 -Version <version>`: update only
+  `Version.props` and the manual workflow input default; reject any unexpected extra literal-version
+  location.
+- `eng/release-automation/Test-TigerMarkViewReleaseReadiness.ps1 -Version <version> [-Json]`: verify
+  tools, source repository/remotes/branch, intended diff, release-note source, build/test/installer
+  checks, local WinGet preparation, and TigerWinLab result. It must never commit or push.
+- Agent instructions in the maintainer guide: perform judgment-based documentation/release-note
+  edits, call deterministic helpers, and emit the standard review/commit/push handoff.
+
+Whether the two helpers become one script is an implementation detail; keep mutation narrow and
+make `-WhatIf`/plan output available for any file update.
+
+### Shared GitHub state
+
+- Add shared functions under `eng/release-automation` (or extend the existing WinGet helper without
+  creating circular ownership) for `gh` preflight, exact-SHA workflow selection, tag dereference,
+  draft/public release inspection, asset shape, and public accessibility.
+- Return structured objects. Do not scrape colorized human output when `gh --json` or `gh api` can
+  return stable fields.
+- Define repository constants once: `rkozlowski/TigerMarkView`, workflow files/names, expected
+  branch, and release asset names.
+
+### Post-release WinGet
+
+- `eng/winget/Prepare-TigerMarkViewWinGetSubmission.ps1 -Version <version> [-Json]`: the only
+  maintainer-facing command. It orchestrates all checks, TigerWinLab, clone/fork work, commit, push,
+  and the final handoff. Do not expose skip switches that could still produce `PASS`.
+- Keep `Test-TigerMarkViewWinGet.ps1` as the artifact/public/lab validator, but make its structured
+  result callable without terminating the parent process. The orchestrator must require the full lab
+  result.
+- Add isolated clone helpers for repository identity, interrupted-operation detection, previous-PR
+  lookup, safe synchronization, branch/resume analysis, exact copy, final diff, deterministic commit,
+  push, and remote verification.
+
+The orchestrator may offer `-PlanOnly` for read-only diagnosis, but `PlanOnly` cannot claim
+submission `PASS` or `READY FOR HUMAN ACTION` to open the PR.
+
+## winget-pkgs clone, PR gate, and synchronization
+
+Hard-code the project-specific clone destination from a narrowly scoped configuration value:
+`C:\Projects\winget-pkgs-TigerMarkView\`. If absent, clone only
+`rkozlowski/winget-pkgs`, add/verify `microsoft/winget-pkgs` as `upstream`, and verify repository
+identity. If present, reject non-Git, wrong origin/upstream, non-`master` default, dirty/unsafe, or
+interrupted-operation state.
+
+Before changing an existing clone, query pull requests in `microsoft/winget-pkgs` and select the most
+recent one whose head owner is `rkozlowski` and head branch starts
+`ItTiger-TigerMarkView-`. Open or draft blocks; merged or manually closed passes. Include number, URL,
+state, draft flag, and branch in evidence. Do not use “latest PR by user”.
+
+After all practical checks and expensive validation pass:
+
+1. fetch `upstream` and `origin`;
+2. verify fetched repository/branch identities;
+3. fast-forward local/fork `master` to `upstream/master` and verify the pushed fork state;
+4. block on fork-only/divergent commits rather than forcing ambiguous history;
+5. create `ItTiger-TigerMarkView-<version>` from current `upstream/master`;
+6. copy only the exact sealed files into
+   `manifests/i/ItTiger/TigerMarkView/<version>/`;
+7. verify destination hashes, exact three-file shape, `winget validate`, and a path-limited diff;
+8. commit `New version: ItTiger.TigerMarkView version <version>`;
+9. push and verify the remote branch SHA; and
+10. print the PR handoff without opening the PR.
+
+Never reset, force-push, delete, overwrite, or rewrite a remote until the exact repository and target
+are proven. Prefer fast-forward operations. If a force operation is ever found necessary, it needs a
+separate explicit design and additional guards; it is not authorized by this plan.
+
+## Idempotency and recovery
+
+Model each operation as `absent`, `already correct`, or `conflicting`:
+
+- `absent`: create after prerequisites pass;
+- `already correct`: verify and reuse, reporting `PASS`; and
+- `conflicting`: stop with evidence and explicit recovery, never silently repair.
+
+Persist a post-release result record binding version, release/tag commit, CI run, release run,
+artifact IDs/digests, installer digest, submission digest, validation tool versions, and TigerWinLab
+result. Reuse expensive work only when all bindings still match. Use temporary directories followed
+by verified atomic promotion for downloads/extraction where feasible.
+
+Test reruns at boundaries: after download, extraction, validation, clone, fork sync, branch creation,
+copy, commit, and push. A second complete invocation must perform no new commit/push and must still
+end with the correct human handoff. A mismatch at any boundary must stop without destroying evidence.
+
+## GitHub Actions changes
+
+1. Add a first release-validation step/job that verifies the dispatched SHA is on `origin/main` and
+   its exact `CI` push run concluded `success`. Give only that job `actions: read` and `contents: read`.
+2. Preserve current build-once, transfer-digest, sealed-manifest, annotated-tag, draft-only, and
+   minimal-permission behavior.
+3. Add and validate the checked-in version-specific release-notes source; carry it with the
+   authoritative release inputs and pass it to draft creation.
+4. Extend the workflow summary with `PASS` checks and `READY FOR HUMAN ACTION`, including draft URL,
+   tag/commit, asset names/digests, WinGet artifact ID/name/digest, and publication checklist.
+5. Ensure failed prerequisites report `BLOCKED`/`FAIL` before tag or release mutation. Account for a
+   rerun/partial-draft recovery path without moving a tag or overwriting different assets.
+6. Keep artifact retention explicit. Decide during implementation whether 30 days is sufficient for
+   the expected human publication/WinGet window; if retained, handoffs must state the expiry risk.
+
+## Tests required
+
+Use fake GitHub responses and temporary local/bare Git repositories. No test should access the real
+fork, upstream, releases, credentials, or TigerWinLab VM.
+
+- Version preparation: valid/invalid versions, only approved files changed, workflow default matches,
+  idempotent rerun, and unexpected literal-version detection.
+- `gh` preflight: missing CLI, unauthenticated, wrong/insufficient account, expected authenticated
+  account, and no token output.
+- Workflow gates: no run, queued/in-progress, failed/cancelled, wrong event/branch/SHA, duplicate runs,
+  rerun attempts, and exact successful push/release run selection.
+- Release state: missing, draft, published, wrong tag/commit, missing/unexpected asset, private-only
+  accessibility, public success, and verification-record mismatch.
+- Release notes: missing, placeholder/Full-Changelog-only, valid useful notes, and exact file passed to
+  draft creation.
+- Artifact chain: missing/expired, wrong commit, wrong GitHub digest, unsafe archive paths, wrong
+  three-file shape, seal mismatch, public installer mismatch, and throwaway reproduction mismatch.
+- Clone identity: absent clone, wrong directory content, wrong origin/upstream/default branch, URL
+  normalization, dirty/untracked state, and every interrupted Git operation.
+- Previous PR: none; latest matching merged, manually closed, open, and draft; unrelated newer Tiger
+  project PR; wrong owner/prefix/base; and clear blocking evidence.
+- Synchronization: fast-forward, already synchronized, fork ahead/diverged, fetch/push failure, and
+  remote verification mismatch.
+- Submission: absent/already-identical/conflicting branch and files, exact destination/hash/diff,
+  deterministic commit, interrupted commit/push, already-pushed resume, and refusal to touch unrelated
+  changes.
+- End-to-end fake run: every interruption boundary and a fully idempotent second invocation whose only
+  remaining action is PR creation.
+- Workflow/static tests: minimal permissions, CI gate precedes mutation, release notes source, exact
+  sealed directory upload, no regeneration after seal, draft-only behavior, and explicit handoff.
+
+Keep the existing WinGet tests passing and extend their fake-GitHub model rather than introducing
+live network dependence.
+
+## Implementation phases
+
+1. **Result and GitHub-query foundation:** shared result/handoff format, `gh` authentication,
+   exact-run/release/tag queries, and fake adapters/tests.
+2. **Release workflow prerequisite gate:** exact pushed-commit/CI verification and minimal Actions
+   permissions, with workflow/static tests.
+3. **Release notes and workflow handoff:** checked-in notes source, notes validation, draft creation
+   from the exact file, and useful workflow summary.
+4. **Release preparation helpers:** narrow version update/readiness commands and agent-facing handoff;
+   retain human review/commit/push.
+5. **Refactor post-release validation:** reusable structured results, `gh`-first authentication, and
+   provenance-bound caching while preserving the sealed-artifact rules.
+6. **Read-only fork safety:** fixed-path clone discovery/creation planning, identity checks,
+   interrupted-operation checks, and project-specific previous-PR gate.
+7. **Guarded submission mutation:** safe fork synchronization, resumable branch/copy/diff/commit/push,
+   remote verification, and final PR-only handoff.
+8. **End-to-end recovery hardening:** interruption/rerun tests, documentation updated from transition
+   to implemented commands, and removal/deprecation of unsafe public token paths.
+
+Do not combine the final mutation phase with foundational query work. Land and test read-only safety
+gates before enabling fork writes.
+
+## Acceptance criteria
+
+- A short “Prepare release `<version>`” request leaves an intentional, validated, uncommitted release
+  diff and an explicit review/commit/push handoff.
+- Release automation refuses to mutate unless the exact release commit is on `origin/main` and its
+  exact CI push run succeeded.
+- One release workflow run builds the only authoritative installer, generates/validates/seals the
+  only authoritative WinGet set, creates an annotated tag at that commit, and creates a draft with
+  useful notes.
+- The release is never auto-published and the final WinGet PR is never auto-created.
+- The post-release command refuses a draft or non-public release and proves commit/run/artifact/asset
+  provenance and hashes before fork mutation.
+- Local/pre-release manifests can never be selected or submitted; regeneration is throwaway and
+  byte-for-byte comparison only.
+- The dedicated clone and remotes are exact, the latest project-specific PR gate blocks open/draft
+  work, fork `master` is safely synchronized, and the release branch starts at current
+  `upstream/master`.
+- A `PASS` post-release run has copied only the sealed manifests, validated the exact destination,
+  committed and pushed the expected branch, and leaves only PR creation/review to the human.
+- Reruns recognize correct state, resume safely, and stop without overwrite on conflicts.
+- Output consistently uses `PASS`, `WARN`, `BLOCKED`, `FAIL`, and `READY FOR HUMAN ACTION`, with
+  evidence and exact next actions.
+- No routine PAT handling, token arguments/logging, credential-store scanning, broad Actions
+  permissions, manual hashes/copies/branches/commits/pushes, or unrelated credential fallback remains
+  in the finished human workflow.
+
+## Non-goals
+
+- Implementing any automation in this documentation task.
+- Automatically committing or pushing the TigerMarkView release-preparation changes.
+- Automatically dispatching the release workflow after CI.
+- Automatically publishing the GitHub draft release.
+- Automatically creating, approving, merging, or monitoring the final `microsoft/winget-pkgs` PR.
+- Modifying the real fork, dedicated clone, upstream repository, release, tags, or Actions runs while
+  developing tests.
+- Rebuilding or replacing published installer bytes, regenerating the authoritative manifests after
+  release, code signing without a separately approved design, or adding new package formats.
+- Generalizing into a cross-project framework before TigerMarkView's concrete workflow is complete
+  and proven. Future Tiger projects should copy the finished model, not drive premature abstraction.
+

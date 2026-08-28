@@ -1,159 +1,246 @@
 # Releasing TigerMarkView
 
-This is the operational release procedure for the Windows GUI and `tiger-mark`. `Version.props` is
-the only product version and shared metadata source. A release contains one installer plus its two
-verification records; there are no NuGet packages, portable archives, or separate CLI installers.
+This is the human-facing lifecycle for the Windows GUI and `tiger-mark`. TigerMarkView is the
+reference release model for future Tiger application projects. The human decides when a release
+moves forward; automation performs repeatable preparation, verification, packaging, and submission
+work.
 
-## Preconditions
+> **Transition status:** the authoritative installer and sealed WinGet artifact already exist in the
+> release workflow. Automated repository preparation, the release workflow's CI-success check,
+> useful workflow-produced release notes, and the one-command `winget-pkgs` branch preparation are
+> still to be built. Until then, use the [current transition procedure](#current-transition-procedure)
+> and do not treat a proposed command as available. The implementation work is defined in
+> [the release automation plan](release-automation-implementation-plan.md).
 
-- Work from a clean `main` checkout whose `origin` is the public TigerMarkView repository.
-- Install the .NET 10 SDK, Inno Setup 6 or 7, and the Edge WebView2 Runtime.
-- Provision the sibling `TigerWinLab` checkout and confirm `Test-TigerWinLab.ps1` reports a usable
-  clean checkpoint. Routine scenarios require the current token to reach Hyper-V; VM creation and
-  registration have the separate elevation requirements documented by TigerWinLab.
-- Do not add signing switches unless a real signing identity and secret delivery mechanism have been
-  approved. TigerMarkView releases are currently unsigned; no certificate path, PFX, or password
-  belongs in this repository.
+TigerMarkView publishes one installer containing the GUI and CLI, plus `SHA256SUMS.txt` and
+`release-artifacts.json`. It does not publish NuGet packages, a portable archive, or a separate CLI
+installer. `Version.props` remains the only product-version and shared-metadata source.
 
-## 1. Prepare the release commit
+## Maintainer tools and authentication
 
-1. Change `<Version>` in `Version.props`. `AssemblyVersion`, `FileVersion`, informational version,
-   binary resources, installer naming, and workflow expectations derive from it. Also update the
-   release workflow's `workflow_dispatch` input default to the same value; that default only
-   pre-populates the GitHub form, and the workflow rejects it if it differs from `Version.props`.
-2. Update user documentation or compatibility notes that genuinely changed. Do not add a second
-   current-version constant to README, scripts, project files, or workflow YAML beyond that one
-   release-dialog default.
-3. Review the closed public payload policy: the release must contain only
-   `TigerMarkView-<version>-win-x64-setup.exe`, `SHA256SUMS.txt`, and
-   `release-artifacts.json`. GitHub supplies source archives itself.
-4. Confirm `git status --short` contains only the intended release changes.
+The finished workflow requires:
 
-## 2. Run local gates
+- `git`, PowerShell 7 (`pwsh`), the .NET 10 SDK, and `winget`;
+- GitHub CLI (`gh`), authenticated to an account allowed to operate on
+  `rkozlowski/TigerMarkView` and the `rkozlowski/winget-pkgs` fork;
+- Inno Setup 6 or 7 and the Edge WebView2 Runtime for local release preparation; and
+- a provisioned sibling TigerWinLab checkout for installer, desktop, and WinGet scenarios.
 
-Run the normal zero-warning gates:
+Authenticate locally with GitHub CLI and verify the active account before release work:
 
 ```powershell
-dotnet restore TigerMarkView.slnx
-dotnet build TigerMarkView.slnx -c Release
-dotnet test TigerMarkView.slnx -c Release --no-build
+gh auth login
+gh auth status
 ```
 
-Build and inspect the complete installer:
+Maintainers must not routinely paste or export personal access tokens. Never put a token in a
+repository file or command-line argument, log a token, inspect arbitrary Git credential stores, or
+fall back to unrelated credentials. GitHub Actions must use the provided `GITHUB_TOKEN`, with
+permissions declared per job and limited to the operations that job performs. Publishing the draft
+release and creating the final `microsoft/winget-pkgs` pull request remain human actions.
+
+TigerMarkView releases are currently unsigned. Do not add signing switches unless a real signing
+identity and secret-delivery design has been approved. Certificate paths, PFX files, and passwords do
+not belong in this repository.
+
+## Release chain and decision points
+
+The authoritative chain is:
+
+```text
+release commit
+  -> successful CI for that exact commit
+  -> manually dispatched release workflow for that exact commit
+  -> one authoritative CI-built installer
+  -> generated, validated, and sealed WinGet manifests from that installer
+  -> draft GitHub Release
+  -> human publication
+  -> verification of the public release
+  -> prepared and pushed winget-pkgs submission branch
+  -> human-created microsoft/winget-pkgs pull request
+```
+
+Local installers and locally generated manifests are preparation aids only. They are never
+authoritative release or WinGet submission artifacts.
+
+### Required verification after human actions
+
+Every automated stage that follows a required human action must prove the action occurred before it
+mutates anything. It must never infer success from elapsed time or nearby state. In particular:
+
+- after commit and push, resolve the intended release commit and prove it is reachable from the
+  expected `origin/main`;
+- before dispatch or release mutation, prove CI succeeded for that exact commit;
+- after the release workflow, prove the expected workflow run for that version and commit completed
+  successfully;
+- after publication, prove the release exists, is not a draft, has the expected tag and assets, and
+  is publicly accessible without maintainer credentials; and
+- before GitHub or `winget-pkgs` operations, prove tool availability, `gh auth status`, account and
+  repository identity, remotes, worktree safety, and previous-PR state.
+
+If a prerequisite is absent or ambiguous, stop before mutation. Print `BLOCKED` or `FAIL`, describe
+the observed state, state the exact human action required, and include the command to rerun where it
+helps.
+
+All scripts, workflows, and agent tasks must use a consistent vocabulary: `PASS`, `WARN`, `BLOCKED`,
+`FAIL`, and `READY FOR HUMAN ACTION`. A stage that intentionally stops for a human decision must end
+with an unmistakable handoff, for example:
+
+```text
+READY FOR HUMAN ACTION
+
+Required action:
+1. Review the prepared release changes.
+2. Commit them and push main.
+
+Then:
+Wait for CI on <commit> to pass, then manually run Release TigerMarkView for <version>.
+```
+
+`WARN` identifies a condition the human must read but which does not invalidate the result.
+`BLOCKED` means a required external or human checkpoint is incomplete. `FAIL` means a check ran and
+found invalid state.
+
+## Target maintainer workflow
+
+### 1. Ask an agent to prepare the release
+
+A normal request is intentionally short:
+
+```text
+Prepare release 0.9.0 of TigerMarkView
+```
+
+Following this document, the agent must verify tools and source-repository identity, update
+`Version.props` and the release-workflow input default, prepare useful release-note content and any
+changed public documentation, run the appropriate build and test gates, prepare local release and
+WinGet inputs, and leave only intentional reviewable changes. It does not commit, push, dispatch a
+workflow, tag, or publish.
+
+The preparation stage ends with `READY FOR HUMAN ACTION`, a change summary, test results, and exact
+review/commit/push instructions.
+
+### 2. Review, commit, and push
+
+The human reviews the diff, commits the complete release preparation, and pushes it to `main`. This
+is a decision checkpoint, not work the preparation agent silently performs.
+
+CI starts on the push. Any later helper must verify both that the expected commit is on
+`origin/main` and that the `CI` workflow for that commit concluded `success`. A run for a different
+commit, a merely completed run, or a green pull-request run is not sufficient.
+
+### 3. Manually dispatch the release workflow
+
+After CI is green, the human manually starts **Release TigerMarkView** on `main`, using the exact
+version in `Version.props`. Before building or creating GitHub state, the workflow must verify:
+
+- its dispatched SHA is the expected release commit on `origin/main`;
+- the version input exactly matches `Version.props`;
+- the required `CI` run for that SHA succeeded;
+- the release tag is available; and
+- its checkout and tracked release inputs are clean and complete.
+
+The release workflow then builds once and uses those exact outputs throughout. It:
+
+1. restores, builds with warnings as errors, and tests;
+2. publishes GUI and CLI without rebuilding;
+3. builds and validates the authoritative installer;
+4. writes and verifies its hash, length, version, and commit records;
+5. generates WinGet manifests from that exact installer and immutable release URL;
+6. runs `winget validate` and seals the exact three-file submission set;
+7. uploads `TigerMarkView-WinGet-<version>-<commit>` and records its digest;
+8. transfers and reverifies the release and WinGet artifacts without rebuilding or regenerating;
+9. creates annotated tag `v<version>` at the validated commit; and
+10. creates a draft GitHub Release with the installer, verification records, and useful prepared
+    release notes.
+
+The workflow must end with `READY FOR HUMAN ACTION`, identify the draft URL, version, tag, commit,
+artifact and digests, and list the exact publication review. It never publishes the release and
+never creates the final WinGet pull request.
+
+### 4. Review and publish the draft
+
+The human verifies the tag and commit, the three expected assets, the recorded hashes, and the
+release notes, then explicitly publishes the draft. The release notes must be a useful user-facing
+summary. GitHub `--generate-notes` produced only a **Full Changelog** link for 0.8.1, so generic
+generated notes alone are not an acceptable finished implementation. Until signing is introduced,
+the notes must also state the runtime prerequisites and current unsigned status.
+
+### 5. Prepare the WinGet submission branch
+
+After publication, the human runs one command from an elevated PowerShell 7 session at the
+TigerMarkView repository root. The provisional interface is:
 
 ```powershell
-pwsh installer/Build-Installer.ps1 -Configuration Release
-$version = ([xml](Get-Content Version.props -Raw)).Project.PropertyGroup.Version
-pwsh eng/release-automation/Assert-ProductMetadata.ps1 `
-  -PublishDirectory artifacts/publish/win-x64 `
-  -ExpectedVersion $version
-pwsh eng/release-automation/Assert-Installer.ps1 `
-  -InstallerPath "artifacts/installer/TigerMarkView-$version-win-x64-setup.exe" `
-  -ExpectedVersion $version
+.\eng\winget\Prepare-TigerMarkViewWinGetSubmission.ps1 -Version <version>
 ```
 
-The metadata gate checks all four shipped assemblies, `tiger-mark --version`, and the repository/help
-links generated by TigerCli. The installer gate checks filename, version resource, publisher,
-copyright, privilege model, environment-change contract, and the default PATH task. It does not
-install on the maintainer workstation.
+The command first verifies that the expected release workflow completed successfully and that the
+release is public, non-draft, and byte-consistent. It retrieves and verifies the sealed workflow
+artifact, performs throwaway byte-for-byte regeneration, runs `winget validate` and TigerWinLab,
+manages the dedicated `C:\Projects\winget-pkgs-TigerMarkView\` clone, enforces the previous-PR safety
+gate, synchronizes the fork, creates the release branch, copies the exact sealed manifests, validates
+the final diff, commits, and pushes.
 
-## 3. Run Windows release scenarios in TigerWinLab
+When it ends in `PASS`, its final handoff must say that the **only** remaining action is to create and
+review the `microsoft/winget-pkgs` pull request, and provide the branch and suggested PR command or
+URL. See [Preparing the TigerMarkView WinGet package](winget-tigermarkview.md) for the authoritative
+artifact and clone rules.
 
-Final installer and automated desktop verification belongs in TigerWinLab:
+## Current transition procedure
 
-```powershell
-pwsh eng/lab/Test-TigerMarkViewRelease.ps1
-```
+Until the planned preparation and submission orchestrators exist, perform the following additional
+steps manually. These are current-state instructions, not the target human experience.
 
-The script resets the guest, provisions the declared .NET Desktop and WebView2 prerequisites, runs
-the machine-scope installer scenario (files, ARP, PATH, CLI smoke, reinstall, uninstall), and runs the
-semantic/physical desktop scenario against a self-contained payload from the
-same source. Evidence and structured results are written below `artifacts/lab/<version>/`.
+1. Update `<Version>` in `Version.props` and the `workflow_dispatch` default in
+   `.github/workflows/release.yml`. Update user documentation and release-note content as required.
+2. Run:
 
-When a previous public installer exists, exercise upgrade replacement as well:
+   ```powershell
+   dotnet restore TigerMarkView.slnx
+   dotnet build TigerMarkView.slnx -c Release
+   dotnet test TigerMarkView.slnx -c Release --no-build
+   pwsh installer/Build-Installer.ps1 -Configuration Release
+   $version = ([xml](Get-Content Version.props -Raw)).Project.PropertyGroup.Version
+   pwsh eng/release-automation/Assert-ProductMetadata.ps1 `
+     -PublishDirectory artifacts/publish/win-x64 `
+     -ExpectedVersion $version
+   pwsh eng/release-automation/Assert-Installer.ps1 `
+     -InstallerPath "artifacts/installer/TigerMarkView-$version-win-x64-setup.exe" `
+     -ExpectedVersion $version
+   pwsh eng/lab/Test-TigerMarkViewRelease.ps1
+   ```
 
-```powershell
-pwsh eng/lab/Test-TigerMarkViewRelease.ps1 `
-  -UpgradeFromInstallerPath C:\releases\TigerMarkView-<old>-win-x64-setup.exe `
-  -UpgradeFromVersion <old>
-```
+3. Review, commit, and push. Verify the pushed commit and wait for its `CI` run to succeed. Then
+   manually dispatch **Release TigerMarkView** from `main`.
+4. Review the workflow result and draft. Replace weak generic notes with an accurate summary, then
+   publish manually.
+5. Run the existing post-release gate:
 
-Review `docs/maintainers/tigerwinlab-testing.md` before accepting the result. It records scenarios the
-current TigerWinLab contract cannot yet combine automatically. Do not compensate by letting an agent
-drive the active host desktop.
+   ```powershell
+   .\eng\winget\Test-TigerMarkViewWinGet.ps1 -Version <version>
+   ```
 
-## 4. Commit and dispatch
+   Prefer `gh auth login`; existing compatibility token parameters do not define the finished
+   authentication contract. A `PASS` currently validates and retains the sealed manifests but does
+   not manage the fork, branch, commit, or push. Follow the interim submission instructions in the
+   WinGet maintainer document with exceptional care.
 
-Commit the complete preparation and push it to `main`. In GitHub Actions, select **Release
-TigerMarkView** and choose the `main` branch. The version field is pre-populated for convenience;
-confirm that it is the exact `<Version>` from `Version.props` before starting the run.
+For an upgrade release, also run the lab gate with `-UpgradeFromInstallerPath` and
+`-UpgradeFromVersion` as documented in [TigerWinLab testing](tigerwinlab-testing.md).
 
-The workflow refuses another branch, a dirty/inconsistent commit, a mismatched version, or an existing
-tag. It then:
+## Recovery principles
 
-1. restores for win-x64;
-2. builds the solution once with warnings as errors;
-3. runs tests against that build;
-4. publishes GUI and CLI from the already-built outputs;
-5. compiles and behavior-tests the one installer;
-6. records SHA-256 and byte lengths in the closed artifact manifest;
-7. generates the schema 1.12 WinGet manifests from that exact installer hash, validates them
-   non-interactively, seals the directory as the submission set, and uploads it as
-   `TigerMarkView-WinGet-<version>-<commit>`;
-8. transfers the exact validated bytes to the publication job and rechecks the transfer hash and
-   the sealed WinGet submission digest;
-9. creates annotated tag `v<version>` at the workflow commit; and
-10. creates a **draft** GitHub Release with the installer and verification records.
-
-No artifact is rebuilt in the publication job, and no WinGet manifest is regenerated after
-validation: the uploaded artifact **is** the submission set, and it is the only WinGet manifest set the
-post-release gate will accept. The workflow never publishes the draft and never opens a `winget-pkgs`
-pull request.
-
-## 5. Review and publish the draft
-
-Before pressing **Publish release**:
-
-- confirm the tag is annotated and resolves to the dispatched workflow SHA;
-- confirm the release is still a draft;
-- verify the three expected assets are present and no additional package/ZIP assets appeared;
-- edit generated notes into an accurate user-facing summary, including prerequisites and the current
-  unsigned status; and
-- retain the workflow artifact and log until post-publication checks finish.
-
-Publish the draft manually only after this review.
-
-## 6. Verify the public bytes
-
-Download the three assets from the now-public release. Hash the installer and compare it with both
-`SHA256SUMS.txt` and the installer entry in `release-artifacts.json`; also compare length and
-`releaseVersion`. Keep the workflow artifact if any value differs and do not replace a published asset
-while investigating.
-
-The WinGet readiness gate performs the same public, unauthenticated download and cross-check. It then
-downloads the release workflow's sealed `TigerMarkView-WinGet-<version>-<commit>` artifact, verifies it
-against the digest GitHub recorded for it, and validates those exact bytes with `winget validate` and
-TigerWinLab. Run it from an elevated PowerShell 7 session at the repository root:
-
-```powershell
-.\eng\winget\Test-TigerMarkViewWinGet.ps1 -Version <version>
-```
-
-Downloading the artifact needs a token with `actions:read` (`GH_TOKEN`, `gh auth login`, or
-`-GitHubToken`). Nothing is generated locally first: `Prepare-TigerMarkViewWinGet.ps1` writes a
-local/pre-release set that hashes a local installer, and the gate deliberately cannot read it.
-
-It must end in `PASS` before a WinGet pull request is prepared, and the files then copied into
-`winget-pkgs` are the sealed manifests from
-`artifacts\winget-release\<version>\submission\`, unchanged. See
-`docs/maintainers/winget-tigermarkview.md`.
-
-## Partial failure and recovery
-
-- **Before the tag exists:** fix the cause, commit it, push `main`, and dispatch the new commit. Do not
-  reuse artifacts from a failed validation build.
-- **Tag exists, draft creation/upload is incomplete:** preserve the validated workflow artifact and
-  its manifest. Download it without rebuilding, check out the validated commit, and run:
+- Reruns must recognize already-correct state and continue safely where possible.
+- Conflicting tags, releases, assets, branches, files, remotes, or commits cause a clear stop; never
+  overwrite or silently repair ambiguous state.
+- Before a tag exists, fix the cause in a new release commit, push it, wait for that commit's CI, and
+  dispatch that commit. Never reuse validation artifacts from another commit.
+- Never move an existing release tag. If it identifies different bytes or a different commit,
+  resolve the release identity explicitly and use a new version when necessary.
+- Recovery after partial draft creation must use the retained validated artifact and the compatible
+  draft-only behavior of `eng/release-automation/Publish-GitHubDraftRelease.ps1`; it must not rebuild.
+  First inspect the plan against the retained artifact, version, and validated SHA:
 
   ```powershell
   pwsh eng/release-automation/Publish-GitHubDraftRelease.ps1 `
@@ -163,17 +250,9 @@ It must end in `PASS` before a WinGet pull request is prepared, and the files th
     -PlanOnly
   ```
 
-  Review the plan, then omit `-PlanOnly`. The helper accepts only the same tag/commit and compatible
-  draft, verifies existing asset digest and length, and uploads only missing assets without clobbering.
-  If the repaired helper necessarily lives on a later checkout, add
-  `-AllowDifferentHeadForRecovery`; the retained manifest and tag must still name the original SHA.
-- **An existing tag points elsewhere:** stop. Never move it. Resolve the state explicitly and use a
-  new version if the original release identity is no longer valid.
-- **A draft asset has different bytes or the release is already public:** stop. The helper refuses to
-  overwrite it. Establish which retained bytes are authoritative before any manual action.
-- **WinGet validation fails:** fix only the generator or tooling and regenerate against the already
-  published installer. Do not rebuild or replace the installer to make a manifest pass, and do not
-  hand-edit a stored manifest: the set that gets submitted must be a set that was validated.
-
-Workflow artifacts expire, so download the retained installer, checksums, manifest, and run logs
-immediately when recovery is required.
+  If the plan proves the existing tag/draft/assets are compatible, rerun without `-PlanOnly`. Use
+  `-AllowDifferentHeadForRecovery` only when a necessary helper fix is on a later checkout; the
+  retained manifest and tag must still identify the original validated SHA.
+- Never replace a public release asset merely to make a manifest pass.
+- Workflow artifacts currently expire after 30 days. Preserve the validated release artifact,
+  sealed WinGet artifact, digests, and run logs immediately when recovery is needed.

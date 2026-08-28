@@ -28,7 +28,7 @@ Automated TigerMarkView UI interaction should run in TigerWinLab rather than on 
 
 ## Release and Documentation Boundaries
 
-TigerMarkView ships one installer containing the GUI and `tiger-mark`. It does not publish NuGet packages, a separate CLI installer, or a portable ZIP. Release automation must build once, validate and hash the exact installer bytes, create an annotated tag at the validated commit, and create a draft GitHub Release; WinGet submission remains a separate manual action. Public documentation belongs in `README.md` and `docs/`. Do not add DocFX, generated API documentation, or an API-doc website for this application repository.
+TigerMarkView ships one installer containing the GUI and `tiger-mark`. It does not publish NuGet packages, a separate CLI installer, or a portable ZIP. Release automation must build once, validate and hash the exact installer bytes, create an annotated tag at the validated commit, and create a draft GitHub Release. Publishing that draft and creating the final `microsoft/winget-pkgs` PR remain explicit human actions; deterministic post-release automation may prepare and push the exact sealed-manifest branch. Every stage after a human checkpoint must verify that checkpoint before mutation. Public documentation belongs in `README.md` and `docs/`. Do not add DocFX, generated API documentation, or an API-doc website for this application repository.
 
 ## Commit & Pull Request Guidelines
 
