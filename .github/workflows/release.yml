@@ -7,7 +7,7 @@ on:
       version:
         description: Exact release version already recorded in Version.props
         required: true
-        default: '0.8.0'
+        default: '0.8.1'
         type: string
 
 permissions:
@@ -26,6 +26,7 @@ jobs:
     runs-on: windows-latest
     outputs:
       manifest_sha256: ${{ steps.transfer.outputs.manifest_sha256 }}
+      submission_sha256: ${{ steps.submission.outputs.submission_sha256 }}
     steps:
       - name: Check out the dispatched commit
         uses: actions/checkout@v6
@@ -45,7 +46,9 @@ jobs:
             'eng/release-automation/Assert-ReleaseArtifactManifest.ps1'
             'eng/release-automation/Publish-GitHubDraftRelease.ps1'
             'installer/Build-Installer.ps1'
+            'eng/winget/TigerMarkViewWinGet.ps1'
             'eng/winget/Prepare-TigerMarkViewWinGet.ps1'
+            'eng/winget/Assert-TigerMarkViewWinGetSubmission.ps1'
           )
           foreach ($path in $requiredScripts) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -224,20 +227,40 @@ jobs:
           Write-Host "Using WinGet at '$($winget.Source)'."
           "path=$($winget.Source)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Prepare and validate first-submission WinGet manifests
+      - name: Generate and validate the WinGet submission set from this exact installer
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           $installer = "artifacts/release/TigerMarkView-$env:RELEASE_VERSION-win-x64-setup.exe"
           $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+          $url = "https://github.com/${{ github.repository }}/releases/download/v$env:RELEASE_VERSION/" +
+            [IO.Path]::GetFileName($installer)
           ./eng/winget/Prepare-TigerMarkViewWinGet.ps1 `
             -InstallerPath $installer `
             -OutputRoot artifacts/winget `
             -ExpectedVersion $env:RELEASE_VERSION `
+            -InstallerUrl $url `
             -ExpectedInstallerSha256 $hash `
             -WinGetPath '${{ steps.winget.outputs.path }}' `
             -Validate | Out-Host
+
+      # These validated bytes are the submission. Nothing later in this workflow
+      # regenerates them: the artifact uploaded below is what a winget-pkgs pull
+      # request must carry, and the recorded digest is how the publication job
+      # proves the upload did not change them.
+      - name: Seal and record the validated WinGet submission set
+        id: submission
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          $installer = "artifacts/release/TigerMarkView-$env:RELEASE_VERSION-win-x64-setup.exe"
+          ./eng/winget/Assert-TigerMarkViewWinGetSubmission.ps1 `
+            -ManifestDirectory "artifacts/winget/manifests/i/ItTiger/TigerMarkView/$env:RELEASE_VERSION" `
+            -Version $env:RELEASE_VERSION `
+            -ExpectedInstallerSha256 (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash `
+            -GitHubOutput $env:GITHUB_OUTPUT | Out-Host
 
       - name: Verify release construction did not mutate committed inputs
         run: git diff --exit-code
@@ -271,14 +294,13 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload prepared WinGet manifests for manual submission
+      # One directory, proven above to hold exactly the three submission manifests, so
+      # the artifact root is the submission directory itself.
+      - name: Upload the exact validated WinGet submission set
         uses: actions/upload-artifact@v7
         with:
           name: TigerMarkView-WinGet-${{ inputs.version }}-${{ github.sha }}
-          path: |
-            artifacts/winget/manifests/i/ItTiger/TigerMarkView/${{ inputs.version }}/ItTiger.TigerMarkView.installer.yaml
-            artifacts/winget/manifests/i/ItTiger/TigerMarkView/${{ inputs.version }}/ItTiger.TigerMarkView.locale.en-US.yaml
-            artifacts/winget/manifests/i/ItTiger/TigerMarkView/${{ inputs.version }}/ItTiger.TigerMarkView.yaml
+          path: artifacts/winget/manifests/i/ItTiger/TigerMarkView/${{ inputs.version }}
           if-no-files-found: error
           retention-days: 30
 
@@ -314,6 +336,23 @@ jobs:
             -ArtifactDirectory artifacts/release `
             -ExpectedVersion $env:RELEASE_VERSION `
             -ExpectedCommit $env:GITHUB_SHA
+
+      - name: Download the validated WinGet submission set
+        uses: actions/download-artifact@v7
+        with:
+          name: TigerMarkView-WinGet-${{ inputs.version }}-${{ github.sha }}
+          path: artifacts/winget-submission
+
+      - name: Verify the WinGet submission set survived the artifact transfer
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          EXPECTED_SUBMISSION_SHA256: ${{ needs.validate.outputs.submission_sha256 }}
+        run: |
+          ./eng/winget/Assert-TigerMarkViewWinGetSubmission.ps1 `
+            -ManifestDirectory artifacts/winget-submission `
+            -Version $env:RELEASE_VERSION `
+            -ExpectedDigest $env:EXPECTED_SUBMISSION_SHA256 | Out-Host
 
       - name: Create annotated tag and compatible draft release
         shell: pwsh

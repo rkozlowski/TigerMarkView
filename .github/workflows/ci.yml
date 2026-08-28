@@ -32,7 +32,9 @@ jobs:
             'eng/release-automation/Assert-ReleaseArtifactManifest.ps1'
             'eng/release-automation/Publish-GitHubDraftRelease.ps1'
             'installer/Build-Installer.ps1'
+            'eng/winget/TigerMarkViewWinGet.ps1'
             'eng/winget/Prepare-TigerMarkViewWinGet.ps1'
+            'eng/winget/Assert-TigerMarkViewWinGetSubmission.ps1'
           )
           foreach ($path in $requiredScripts) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -69,7 +71,7 @@ jobs:
           -m:1
           /nodeReuse:false
 
-      - name: Test WinGet manifest generation
+      - name: Test WinGet manifest generation and submission sealing
         shell: pwsh
         run: ./eng/winget/tests/TigerMarkViewWinGet.Tests.ps1
 

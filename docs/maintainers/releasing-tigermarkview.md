@@ -97,14 +97,17 @@ tag. It then:
 4. publishes GUI and CLI from the already-built outputs;
 5. compiles and behavior-tests the one installer;
 6. records SHA-256 and byte lengths in the closed artifact manifest;
-7. force-provisions pinned WinGet 1.29.290, records `winget --info`, and validates schema 1.12
-   manifests non-interactively without submitting them;
-8. transfers the exact validated bytes to the publication job and rechecks the transfer hash;
+7. generates the schema 1.12 WinGet manifests from that exact installer hash, validates them
+   non-interactively, seals the directory as the submission set, and uploads it as
+   `TigerMarkView-WinGet-<version>-<commit>`;
+8. transfers the exact validated bytes to the publication job and rechecks the transfer hash and
+   the sealed WinGet submission digest;
 9. creates annotated tag `v<version>` at the workflow commit; and
 10. creates a **draft** GitHub Release with the installer and verification records.
 
-No artifact is rebuilt in the publication job. The workflow never publishes the draft and never
-opens a `winget-pkgs` pull request.
+No artifact is rebuilt in the publication job, and no WinGet manifest is regenerated after
+validation: the uploaded artifact is the submission set. The workflow never publishes the draft and
+never opens a `winget-pkgs` pull request.
 
 ## 5. Review and publish the draft
 
@@ -126,14 +129,17 @@ Download the three assets from the now-public release. Hash the installer and co
 `releaseVersion`. Keep the workflow artifact if any value differs and do not replace a published asset
 while investigating.
 
-The WinGet readiness command performs the same public, unauthenticated download and cross-check:
+The WinGet readiness gate performs the same public, unauthenticated download and cross-check, then
+validates the stored submission set and runs TigerWinLab. Run it from an elevated PowerShell 7
+session at the repository root:
 
 ```powershell
-pwsh eng/winget/Test-TigerMarkViewWinGet.ps1 -Version <version>
+.\eng\winget\Prepare-TigerMarkViewWinGet.ps1
+.\eng\winget\Test-TigerMarkViewWinGet.ps1 -Version <version>
 ```
 
-It must end in `PASS` before a WinGet pull request is prepared. See
-`docs/maintainers/winget-tigermarkview.md`.
+It must end in `PASS` before a WinGet pull request is prepared, and the files then copied into
+`winget-pkgs` are the stored manifests, unchanged. See `docs/maintainers/winget-tigermarkview.md`.
 
 ## Partial failure and recovery
 
@@ -158,8 +164,9 @@ It must end in `PASS` before a WinGet pull request is prepared. See
   new version if the original release identity is no longer valid.
 - **A draft asset has different bytes or the release is already public:** stop. The helper refuses to
   overwrite it. Establish which retained bytes are authoritative before any manual action.
-- **WinGet validation fails:** fix only the manifests/tooling and rerun validation against the already
-  published installer. Do not rebuild or replace the installer to make a manifest pass.
+- **WinGet validation fails:** fix only the generator or tooling and regenerate against the already
+  published installer. Do not rebuild or replace the installer to make a manifest pass, and do not
+  hand-edit a stored manifest: the set that gets submitted must be a set that was validated.
 
 Workflow artifacts expire, so download the retained installer, checksums, manifest, and run logs
 immediately when recovery is required.

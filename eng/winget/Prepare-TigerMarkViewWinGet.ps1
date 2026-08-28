@@ -13,20 +13,21 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+. (Join-Path $PSScriptRoot 'TigerMarkViewWinGet.ps1')
+
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-[xml] $versionProps = Get-Content -LiteralPath (Join-Path $repoRoot 'Version.props') -Raw
-$properties = $versionProps.Project.PropertyGroup
+$properties = Get-TigerMarkViewWinGetVersionProperty -RepositoryRoot $repoRoot
 $version = [string] $properties.Version
 if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion) -and $version -cne $ExpectedVersion) {
     throw "Version.props '$version' does not match expected version '$ExpectedVersion'."
 }
 
-$packageIdentifier = 'ItTiger.TigerMarkView'
-$manifestVersion = [version] '1.12.0'
-$repositoryUrl = [string] $properties.RepositoryUrl
+$repositoryUrl = ([string] $properties.RepositoryUrl).TrimEnd('/')
+$release = Get-TigerMarkViewWinGetRelease -Version $version -RepositoryUrl $repositoryUrl
+$packageIdentifier = $release.packageIdentifier
 $issueTrackerUrl = ([string] $properties.IssueTrackerUrl).Replace('$(RepositoryUrl)', $repositoryUrl)
 $websiteUrl = [string] $properties.WebsiteUrl
-$installerFileName = "TigerMarkView-$version-win-x64-setup.exe"
+$installerFileName = $release.installerFileName
 if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
     $InstallerPath = Join-Path $repoRoot "artifacts\installer\$installerFileName"
 }
@@ -38,7 +39,7 @@ if ([IO.Path]::GetFileName($InstallerPath) -cne $installerFileName) {
     throw "Installer filename must be '$installerFileName'."
 }
 
-$expectedUrl = "https://github.com/rkozlowski/TigerMarkView/releases/download/v$version/$installerFileName"
+$expectedUrl = $release.installerUrl
 if ([string]::IsNullOrWhiteSpace($InstallerUrl)) { $InstallerUrl = $expectedUrl }
 if ($InstallerUrl -cne $expectedUrl) { throw "Installer URL must be '$expectedUrl'." }
 
@@ -63,7 +64,7 @@ else {
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) { $OutputRoot = Join-Path $repoRoot 'artifacts\winget' }
 $OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
-$manifestDirectory = Join-Path $OutputRoot "manifests\i\ItTiger\TigerMarkView\$version"
+$manifestDirectory = Get-TigerMarkViewWinGetManifestDirectory -OutputRoot $OutputRoot -Version $version
 if (Test-Path -LiteralPath $manifestDirectory) {
     $safeRoot = $OutputRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
     $resolved = [IO.Path]::GetFullPath($manifestDirectory)
@@ -170,12 +171,9 @@ Set-Content -LiteralPath (Join-Path $manifestDirectory "$packageIdentifier.insta
 Set-Content -LiteralPath (Join-Path $manifestDirectory "$packageIdentifier.locale.en-US.yaml") -Value $localeManifest -Encoding utf8NoBOM
 Set-Content -LiteralPath (Join-Path $manifestDirectory "$packageIdentifier.yaml") -Value $versionManifest -Encoding utf8NoBOM
 
-foreach ($path in Get-ChildItem -LiteralPath $manifestDirectory -File -Filter '*.yaml') {
-    $bytes = [IO.File]::ReadAllBytes($path.FullName)
-    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-        throw "'$($path.Name)' must be UTF-8 without a byte-order mark."
-    }
-}
+# Reading the set back is the shape gate: exactly the three submission manifests, no
+# extra file, and no byte-order mark. What is on disk from here on is the submission.
+$submission = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $manifestDirectory -Version $version
 if ($installerManifest -notmatch '(?ms)Scope: machine.*?/ALLUSERS.*?Scope: user.*?/CURRENTUSER' -or
     $installerManifest -notmatch [regex]::Escape($installerHash) -or
     $installerManifest -notmatch [regex]::Escape($productCode)) {
@@ -183,41 +181,9 @@ if ($installerManifest -notmatch '(?ms)Scope: machine.*?/ALLUSERS.*?Scope: user.
 }
 
 if ($Validate) {
-    if ([string]::IsNullOrWhiteSpace($WinGetPath)) {
-        $winget = Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue
-        if ($null -eq $winget) { throw 'winget.exe is required for -Validate.' }
-        $WinGetPath = $winget.Source
-    }
-    $WinGetPath = [IO.Path]::GetFullPath($WinGetPath)
-    if (-not (Test-Path -LiteralPath $WinGetPath -PathType Leaf)) {
-        throw "WinGet executable not found: $WinGetPath"
-    }
-
-    Write-Host "Validating manifest schema $manifestVersion with WinGet at '$WinGetPath'."
-    $validationOutput = @(
-        & $WinGetPath validate --manifest $manifestDirectory --disable-interactivity 2>&1
-    )
-    $validationExitCode = $LASTEXITCODE
-    $validationOutput | ForEach-Object { Write-Host $_ }
-
-    # WinGet documents 0x8A150028 as MANIFEST_VALIDATION_WARNING: validation succeeded
-    # with warnings. Accept only that HRESULT; the client itself decides whether it
-    # understands the manifest schema.
-    $validationWarningExitCode = -1978335192
-    if ($validationExitCode -eq $validationWarningExitCode) {
-        Write-Warning 'WinGet manifest validation succeeded with warnings.'
-
-        # The accepted warning HRESULT still lives in the caller's $LASTEXITCODE. Clear the
-        # global copy so a hosting shell -- notably the GitHub Actions pwsh step, which ends
-        # with 'exit $LASTEXITCODE' -- does not fail on a result this script treats as success.
-        $global:LASTEXITCODE = 0
-    }
-    elseif ($validationExitCode -ne 0) {
-        $unsignedExitCode = [uint32] ([int64] $validationExitCode -band 0xffffffffL)
-        throw ('winget validate failed with exit code {0} (0x{1:X8}).' -f `
-            $validationExitCode, $unsignedExitCode)
-    }
+    $null = Invoke-TigerMarkViewWinGetValidation -ManifestDirectory $manifestDirectory -WinGetPath $WinGetPath
 }
 
 Write-Host "PASS: prepared $packageIdentifier $version manifests at '$manifestDirectory'." -ForegroundColor Green
+Write-Host "Submission digest: $($submission.digest)"
 Write-Output $manifestDirectory

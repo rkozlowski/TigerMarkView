@@ -300,6 +300,180 @@ exit /b 2
     Assert-True ($failureStepExitCode -ne 0) `
         'A genuine WinGet validation failure must fail the workflow pwsh process.'
     Write-Host 'PASS: genuine validation failure exits the workflow pwsh process non-zero'
+
+    # --- The submission set: exactly three files, and a digest that means something ---
+
+    . (Join-Path $wingetDirectory 'TigerMarkViewWinGet.ps1')
+    $assertScript = Join-Path $wingetDirectory 'Assert-TigerMarkViewWinGetSubmission.ps1'
+    $release = Get-TigerMarkViewWinGetRelease -Version $version
+    $storedDirectory = Join-Path $defaultOutput $release.manifestRelativePath
+
+    $stored = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $storedDirectory -Version $version
+    Assert-True ($stored.documents.Count -eq 3) 'A submission set is exactly three documents.'
+    Assert-True (
+        (@($stored.documents | ForEach-Object Name) -join ',') -ceq ($release.manifestFileNames -join ',')) `
+        'The submission documents must be the three expected manifests in submission order.'
+    Assert-True ($stored.installer.installerUrl -ceq $release.installerUrl) `
+        'The installer manifest must declare the immutable release asset URL.'
+    Write-Host 'PASS: a prepared directory reads back as the three-file submission set'
+
+    $extraFile = Join-Path $storedDirectory 'notes.txt'
+    Set-Content -LiteralPath $extraFile -Value 'not part of the submission' -Encoding utf8NoBOM
+    Assert-Throws -MessagePattern 'only the three' -Action {
+        Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $storedDirectory -Version $version
+    }
+    Remove-Item -LiteralPath $extraFile -Force
+    Write-Host 'PASS: an extra file disqualifies the directory as a submission set'
+
+    $bomDirectory = Join-Path $testRoot 'bom'
+    New-Item -ItemType Directory -Path $bomDirectory -Force | Out-Null
+    foreach ($document in $stored.documents) {
+        Copy-Item -LiteralPath $document.path -Destination (Join-Path $bomDirectory $document.name)
+    }
+    $bomTarget = Join-Path $bomDirectory $release.manifestFileNames[2]
+    [IO.File]::WriteAllBytes(
+        $bomTarget,
+        (@([byte] 0xEF, [byte] 0xBB, [byte] 0xBF) + [IO.File]::ReadAllBytes($bomTarget)))
+    Assert-Throws -MessagePattern 'byte-order mark' -Action {
+        Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $bomDirectory -Version $version
+    }
+    Write-Host 'PASS: a byte-order mark disqualifies the directory as a submission set'
+
+    $missingDirectory = Join-Path $testRoot 'missing'
+    New-Item -ItemType Directory -Path $missingDirectory -Force | Out-Null
+    Copy-Item -LiteralPath $stored.documents[0].path -Destination $missingDirectory
+    Assert-Throws -MessagePattern 'incomplete' -Action {
+        Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $missingDirectory -Version $version
+    }
+    Write-Host 'PASS: an incomplete directory disqualifies the directory as a submission set'
+
+    # The digest is the transfer proof, so it must be stable across a copy and must
+    # notice a single changed byte in any of the three files.
+    $copyDirectory = Join-Path $testRoot 'copy'
+    New-Item -ItemType Directory -Path $copyDirectory -Force | Out-Null
+    foreach ($document in $stored.documents) {
+        Copy-Item -LiteralPath $document.path -Destination (Join-Path $copyDirectory $document.name)
+    }
+    $copied = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $copyDirectory -Version $version
+    Assert-True ($copied.digest -ceq $stored.digest) 'Copying a submission set must preserve its digest.'
+    $tamperTarget = Join-Path $copyDirectory $release.manifestFileNames[1]
+    Add-Content -LiteralPath $tamperTarget -Value '# an edit nothing validated' -Encoding utf8NoBOM
+    $tampered = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $copyDirectory -Version $version
+    Assert-True ($tampered.digest -cne $stored.digest) 'An edited manifest must change the submission digest.'
+    Write-Host 'PASS: the submission digest survives a copy and detects an edit'
+
+    # --- The sealing gate ---
+
+    $installerHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash
+    $sealOutput = Join-Path $testRoot 'github-output.txt'
+    Set-Content -LiteralPath $sealOutput -Value '' -Encoding utf8NoBOM
+    $sealedDigest = & $assertScript `
+        -ManifestDirectory $storedDirectory `
+        -Version $version `
+        -ExpectedInstallerSha256 $installerHash `
+        -GitHubOutput $sealOutput | Select-Object -Last 1
+    Assert-True ($sealedDigest -ceq $stored.digest) 'The sealing gate must report the stored submission digest.'
+    Assert-True (@(Get-Content -LiteralPath $sealOutput) -contains "submission_sha256=$($stored.digest)") `
+        'The sealing gate must publish submission_sha256 to GITHUB_OUTPUT.'
+    Write-Host 'PASS: sealing a validated set records its digest for the publication job'
+
+    Assert-Throws -MessagePattern 'hashes to' -Action {
+        & $assertScript `
+            -ManifestDirectory $storedDirectory `
+            -Version $version `
+            -ExpectedInstallerSha256 ('0' * 64) | Out-Host
+    }
+    Write-Host 'PASS: a manifest that does not describe the installer is refused'
+
+    Assert-Throws -MessagePattern 'not the same manifests' -Action {
+        & $assertScript `
+            -ManifestDirectory $copyDirectory `
+            -Version $version `
+            -ExpectedDigest $stored.digest | Out-Host
+    }
+    Write-Host 'PASS: a set that changed after validation is refused at the transfer check'
+
+    # --- Workflow shape: what is uploaded is what was validated ---
+
+    $releaseWorkflow = Get-Content -LiteralPath (
+        Join-Path $repositoryRoot '.github\workflows\release.yml') -Raw
+
+    $uploadMatch = [regex]::Match(
+        $releaseWorkflow,
+        '(?ms)^      - name: Upload the exact validated WinGet submission set\r?\n' +
+            '.*?^          name: (?<name>[^\r\n]+)\r?\n' +
+            '          path: (?<path>[^\r\n]+)\r?$')
+    Assert-True $uploadMatch.Success 'The release workflow must upload the validated WinGet submission set.'
+    $artifactName = $uploadMatch.Groups['name'].Value
+    Assert-True ($artifactName.Contains('${{ inputs.version }}') -and $artifactName.Contains('${{ github.sha }}')) `
+        'The WinGet artifact name must be version- and commit-specific.'
+
+    $uploadPath = $uploadMatch.Groups['path'].Value.Replace('${{ inputs.version }}', $version)
+    $sealMatch = [regex]::Match(
+        $releaseWorkflow,
+        '(?ms)^      - name: Seal and record the validated WinGet submission set\r?\n' +
+            '.*?-ManifestDirectory "(?<path>[^"]+)"')
+    Assert-True $sealMatch.Success 'The release workflow must seal the generated submission set.'
+    $sealPath = $sealMatch.Groups['path'].Value.Replace('$env:RELEASE_VERSION', $version)
+    Assert-True ($sealPath -ceq $uploadPath) `
+        "The sealed directory '$sealPath' and the uploaded directory '$uploadPath' must be the same directory."
+    Write-Host 'PASS: the release workflow uploads exactly the directory it sealed'
+
+    # Resolve the workflow's upload path against a workspace holding a freshly generated
+    # set, exactly as the runner would, and prove the resolved files are the validated
+    # bytes and nothing else.
+    $workspace = Join-Path $testRoot 'workspace'
+    New-Item -ItemType Directory -Path $workspace -Force | Out-Null
+    & $prepareScript `
+        -InstallerPath $installerPath `
+        -OutputRoot (Join-Path $workspace 'artifacts\winget') `
+        -ExpectedVersion $version `
+        -InstallerUrl $installerUrl | Out-Host
+    $workspaceDirectory = Join-Path $workspace ($uploadPath -replace '/', '\')
+    $validated = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $workspaceDirectory -Version $version
+
+    $uploaded = @(Get-ChildItem -LiteralPath $workspaceDirectory -Force)
+    Assert-True ($uploaded.Count -eq 3) `
+        "The uploaded artifact must contain exactly three files; the upload path resolves to $($uploaded.Count)."
+    foreach ($document in $validated.documents) {
+        $uploadedBytes = [IO.File]::ReadAllBytes((Join-Path $workspaceDirectory $document.name))
+        $storedBytes = [IO.File]::ReadAllBytes((Join-Path $storedDirectory $document.name))
+        Assert-True ([Linq.Enumerable]::SequenceEqual($uploadedBytes, $storedBytes)) `
+            "$($document.name) is not byte-identical between the validated set and the uploaded artifact."
+    }
+    Assert-True ($validated.digest -ceq $stored.digest) `
+        'Generation must be deterministic: two runs over the same installer must seal to one digest.'
+    Write-Host 'PASS: the uploaded WinGet artifact is byte-for-byte the validated submission set'
+
+    Assert-True ($releaseWorkflow.Contains('-ExpectedDigest $env:EXPECTED_SUBMISSION_SHA256')) `
+        'The publication job must re-verify the downloaded submission set against the recorded digest.'
+    Assert-True ($releaseWorkflow -cmatch '(?m)^      submission_sha256: \$\{\{ steps\.submission\.outputs\.submission_sha256 \}\}\r?$') `
+        'The validation job must publish the sealed submission digest to the publication job.'
+    Write-Host 'PASS: the publication job proves the artifact it downloaded is the set that was validated'
+
+    # --- The post-release gate consumes the stored set rather than replacing it ---
+
+    $gateScript = Get-Content -LiteralPath (Join-Path $wingetDirectory 'Test-TigerMarkViewWinGet.ps1') -Raw
+    Assert-True ($gateScript.Contains('$submission = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $ManifestDirectory')) `
+        'The post-release gate must read the stored submission set.'
+    # The gate may regenerate only to compare. Proving that means proving there is one
+    # generator invocation and that it writes to the throwaway directory, not the store.
+    $prepareInvocations = [regex]::Matches(
+        $gateScript,
+        [regex]::Escape("& (Join-Path `$PSScriptRoot 'Prepare-TigerMarkViewWinGet.ps1')"))
+    Assert-True ($prepareInvocations.Count -eq 1) `
+        "The post-release gate must invoke the generator exactly once; it invokes it $($prepareInvocations.Count) times."
+    $invocationStart = $prepareInvocations[0].Index
+    $invocationTail = $gateScript.Substring(
+        $invocationStart,
+        [Math]::Min(400, $gateScript.Length - $invocationStart))
+    Assert-True ($invocationTail.Contains('-OutputRoot $regeneratedRoot')) `
+        'Regeneration in the post-release gate must target the throwaway directory.'
+    Assert-True ($gateScript.Contains("`$regeneratedRoot = Join-Path `$validationRoot 'regenerated'")) `
+        'The throwaway regeneration directory must sit under the per-version validation directory.'
+    Assert-True ($gateScript.Contains('Invoke-TigerMarkViewWinGetValidation -ManifestDirectory $submission.directory')) `
+        'The post-release gate must run winget validate against the stored submission set.'
+    Write-Host 'PASS: the post-release gate validates and submits the stored manifests'
 }
 finally {
     Remove-Item Env:TIGERMARKVIEW_TEST_WINGET_VERSION -ErrorAction SilentlyContinue
