@@ -59,8 +59,11 @@
     the digest GitHub recorded for it.
 
     .PARAMETER TigerWinLabRoot
-    The TigerWinLab working copy. Defaults to TIGERWINLAB_ROOT, then to a
-    TigerWinLab checkout beside this repository.
+    An explicit TigerWinLab working copy. Omit it and the lab is discovered from
+    the TigerAiCore configuration named by TigerAiCoreConfig. There is no sibling
+    checkout or environment-variable fallback: an unregistered lab fails the lab
+    check rather than being guessed at, because validating a release against a
+    lab nobody chose is worse than not validating it here.
 
     .PARAMETER SkipLab
     Runs the manifest and published-asset checks only. Useful for re-checking a
@@ -88,6 +91,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot 'TigerMarkViewWinGet.ps1')
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'TigerAiCore.ps1')
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $configuredVersion = [string] (Get-TigerMarkViewWinGetVersionProperty -RepositoryRoot $repoRoot).Version
@@ -334,21 +338,18 @@ elseif ($null -eq $publishedHash) {
         -Message 'The published installer could not be downloaded, so there was nothing to validate in TigerWinLab.'))
 }
 else {
-    $labSource = 'the -TigerWinLabRoot argument'
-    if ([string]::IsNullOrWhiteSpace($TigerWinLabRoot)) {
-        $TigerWinLabRoot = $env:TIGERWINLAB_ROOT
-        $labSource = 'TIGERWINLAB_ROOT'
-    }
-    if ([string]::IsNullOrWhiteSpace($TigerWinLabRoot)) {
-        $TigerWinLabRoot = Join-Path (Split-Path -Parent $repoRoot) 'TigerWinLab'
-        $labSource = 'a sibling checkout'
-    }
-    $TigerWinLabRoot = [IO.Path]::GetFullPath($TigerWinLabRoot)
-    $labCommand = Join-Path $TigerWinLabRoot 'Invoke-TigerWinLabWinGetScenario.ps1'
+    # The lab is discovered from the TigerAiCore configuration, or supplied outright.
+    # Nothing else: a guessed lab that happens to exist would produce a PASS nobody
+    # can trace to a machine's declared resources.
+    $resolvedLab = Get-TigerAiCoreLab -Name 'TigerWinLab' -Type 'WindowsLab' -Path $TigerWinLabRoot `
+        -RequiredCommand 'Invoke-TigerWinLabWinGetScenario.ps1'
+    $labSource = $resolvedLab.Source
+    $TigerWinLabRoot = $resolvedLab.Path
+    $labCommand = if ($resolvedLab.Available) { Join-Path $TigerWinLabRoot 'Invoke-TigerWinLabWinGetScenario.ps1' } else { $null }
 
-    if (-not (Test-Path -LiteralPath $labCommand -PathType Leaf)) {
+    if (-not $resolvedLab.Available) {
         $checks.Add((New-TigerMarkViewWinGetCheck -Name 'lab/location' -Status 'FAIL' `
-            -Message "TigerWinLab's WinGet scenario was not found at '$labCommand' (resolved from $labSource)."))
+            -Message $resolvedLab.Reason))
     }
     else {
         $checks.Add((New-TigerMarkViewWinGetCheck -Name 'lab/location' -Status 'PASS' `
@@ -415,6 +416,7 @@ else {
         $lab = [pscustomobject][ordered]@{
             root = $TigerWinLabRoot
             source = $labSource
+            configurationPath = $resolvedLab.ConfigurationPath
             scenario = $labCommand
             specPath = $specPath
             manifestDirectory = $submission.directory

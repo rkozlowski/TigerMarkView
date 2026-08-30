@@ -229,6 +229,11 @@ installer and release records, regenerates into throwaway storage for byte compa
 `winget validate`, and runs TigerWinLab. `-SkipLab` is useful for diagnosis but can never produce a
 submission-ready `PASS`.
 
+TigerWinLab is resolved from the TigerAiCore configuration named by `TigerAiCoreConfig`, or from an
+explicit `-TigerWinLabRoot`. A lab that is not registered fails the `lab/location` check with the
+reason; the gate never guesses a location, because a `PASS` produced by an unchosen lab would be
+worthless. See [release testing in TigerWinLab](tigerwinlab-testing.md).
+
 For artifact-acquisition diagnosis without the public-release and lab gates, the existing lower-level
 command is:
 

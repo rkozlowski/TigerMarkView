@@ -207,7 +207,8 @@ installer/                  Inno Setup build files
 reuse its renderer, and both use `TigerMarkView.Pdf` for PDF generation. `Version.props` is the single
 source of product version and shared application metadata; production projects import it explicitly.
 
-Contributor guidance is in `AGENTS.md` and the architecture notes in `CLAUDE.md`.
+Contributor, architecture, and release guidance is in `AGENTS.md`; maintainer procedures are in
+`docs/maintainers/`.
 
 ## Licence
 

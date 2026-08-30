@@ -5,6 +5,29 @@ maintainer's pointer, steal focus, close a live application, or mutate the works
 PATH, ARP, WinGet, or prerequisite state. TigerHyperLab remains the registered-VM, lifecycle,
 checkpoint, and lease substrate; TigerMarkView scripts call TigerWinLab's public commands only.
 
+## Discovering the lab
+
+TigerMarkView does not know where TigerWinLab lives. The machine declares it once, in the TigerAiCore
+TOML file named by the `TigerAiCoreConfig` environment variable:
+
+```toml
+[labs.TigerWinLab]
+type = "WindowsLab"
+path = "<the TigerWinLab working copy>"
+```
+
+`eng/TigerAiCore.ps1` is the only discovery route this repository has. It resolves the entry named
+above, checks the registered `type`, and checks that the scenario commands a script depends on exist.
+There is no sibling-checkout guess, no `TIGERWINLAB_ROOT`, and no hardcoded path: when the lab is not
+registered, the script says why and the lab check does not run. A guessed lab that happened to exist
+would produce a `PASS` nobody could trace to a declared resource, which is worse than a missing one.
+
+A maintainer may still pass `-TigerWinLabRoot` to point at a specific working copy. That is an
+explicit decision rather than a guess, and it is verified the same way.
+
+`eng/tests/TigerAiCore.Tests.ps1` covers this, including the refusal to find a checkout sitting exactly
+where the old fallback used to look.
+
 ## Lab interface used by this repository
 
 TigerWinLab provides the supported lifecycle and workload boundary:
@@ -31,9 +54,12 @@ Build the candidate installer, confirm the lab is ready, then run:
 
 ```powershell
 pwsh installer/Build-Installer.ps1 -Configuration Release
-pwsh C:\Projects\TigerWinLab\Test-TigerWinLab.ps1
+pwsh (Join-Path (Get-TigerAiCoreLab -Name TigerWinLab -Type WindowsLab).Path 'Test-TigerWinLab.ps1')
 pwsh eng/lab/Test-TigerMarkViewRelease.ps1
 ```
+
+`Get-TigerAiCoreLab` comes from `eng/TigerAiCore.ps1`; dot-source it first. The wrapper resolves the
+lab the same way, so the readiness check and the release run always concern the same working copy.
 
 The TigerMarkView wrapper first provisions the framework-dependent product prerequisites in a reset
 guest. Its installer specification then verifies the all-users path: GUI and CLI files, bundled docs,

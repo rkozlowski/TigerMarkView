@@ -71,6 +71,10 @@ jobs:
           -m:1
           /nodeReuse:false
 
+      - name: Test TigerAiCore resource discovery
+        shell: pwsh
+        run: ./eng/tests/TigerAiCore.Tests.ps1
+
       - name: Test WinGet manifest generation and submission sealing
         shell: pwsh
         run: ./eng/winget/tests/TigerMarkViewWinGet.Tests.ps1

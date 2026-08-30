@@ -1,3 +1,13 @@
+#Requires -Version 7.0
+<#
+    .SYNOPSIS
+    Runs the TigerMarkView installer and desktop release scenarios in TigerWinLab.
+
+    .PARAMETER TigerWinLabRoot
+    An explicit TigerWinLab working copy. Omit it and the lab is discovered from
+    the TigerAiCore configuration named by TigerAiCoreConfig; there is no sibling
+    checkout or environment-variable fallback.
+#>
 [CmdletBinding()]
 param(
     [string] $InstallerPath,
@@ -13,6 +23,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $env:AVALONIA_TELEMETRY_OPTOUT = '1'
 
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'TigerAiCore.ps1')
+
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 [xml] $versionProps = Get-Content -LiteralPath (Join-Path $repoRoot 'Version.props') -Raw
 $version = [string] $versionProps.Project.PropertyGroup.Version
@@ -22,20 +34,13 @@ if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
 $InstallerPath = [IO.Path]::GetFullPath($InstallerPath)
 if (-not (Test-Path -LiteralPath $InstallerPath -PathType Leaf)) { throw "Installer not found: $InstallerPath" }
 
-if ([string]::IsNullOrWhiteSpace($TigerWinLabRoot)) { $TigerWinLabRoot = $env:TIGERWINLAB_ROOT }
-if ([string]::IsNullOrWhiteSpace($TigerWinLabRoot)) {
-    $TigerWinLabRoot = Join-Path (Split-Path -Parent $repoRoot) 'TigerWinLab'
-}
-$TigerWinLabRoot = [IO.Path]::GetFullPath($TigerWinLabRoot)
-foreach ($command in @(
+$lab = Assert-TigerAiCoreLab -Name 'TigerWinLab' -Type 'WindowsLab' -Path $TigerWinLabRoot -RequiredCommand @(
     'Invoke-TigerWinLabJob.ps1'
     'Invoke-TigerWinLabInstallerScenario.ps1'
     'Invoke-TigerWinLabDesktopScenario.ps1'
-)) {
-    if (-not (Test-Path -LiteralPath (Join-Path $TigerWinLabRoot $command) -PathType Leaf)) {
-        throw "TigerWinLab command not found: $command"
-    }
-}
+)
+$TigerWinLabRoot = $lab.Path
+Write-Host "TigerWinLab resolved from $($lab.Source): $TigerWinLabRoot"
 
 $outputRoot = Join-Path $repoRoot "artifacts\lab\$version"
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null

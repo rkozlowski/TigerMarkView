@@ -24,7 +24,8 @@ The finished workflow requires:
 - GitHub CLI (`gh`), authenticated to an account allowed to operate on
   `rkozlowski/TigerMarkView` and the `rkozlowski/winget-pkgs` fork;
 - Inno Setup 6 or 7 and the Edge WebView2 Runtime for local release preparation; and
-- a provisioned sibling TigerWinLab checkout for installer, desktop, and WinGet scenarios.
+- a provisioned TigerWinLab, registered as `[labs.TigerWinLab]` in the TigerAiCore configuration named
+  by `TigerAiCoreConfig`, for installer, desktop, and WinGet scenarios.
 
 Authenticate locally with GitHub CLI and verify the active account before release work:
 

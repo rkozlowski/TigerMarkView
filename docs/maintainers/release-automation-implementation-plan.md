@@ -9,7 +9,7 @@ decisions; automation performs deterministic preparation, verification, artifact
 work. The completed TigerMarkView implementation becomes the reference for future Tiger projects.
 
 This is a current implementation plan. Remove or substantially reduce it when the work is complete;
-the durable contracts belong in the two maintainer guides and `CLAUDE.md`.
+the durable contracts belong in the two maintainer guides and `AGENTS.md`.
 
 ## Current behavior
 
@@ -80,6 +80,11 @@ UI action. Do not end with a bare “ready”.
 
 Required local tools are `git`, `gh`, `pwsh`, `winget`, `dotnet`, TigerWinLab, and Inno Setup where
 local installer preparation needs it. Continue to require WebView2 for local PDF/installer checks.
+
+TigerWinLab and any other shared Tiger resource are resolved through `eng/TigerAiCore.ps1` from the
+TigerAiCore configuration named by `TigerAiCoreConfig`. New scripts must use it rather than adding a
+second discovery route, must report the resolved path and its source in structured results, and must
+report an unregistered resource as `NOT RUN` with the reason instead of guessing a location.
 
 The maintainer-facing scripts must:
 
@@ -171,8 +176,11 @@ submission `PASS` or `READY FOR HUMAN ACTION` to open the PR.
 
 ## winget-pkgs clone, PR gate, and synchronization
 
-Hard-code the project-specific clone destination from a narrowly scoped configuration value:
-`C:\Projects\winget-pkgs-TigerMarkView\`. If absent, clone only
+Take the project-specific clone destination from a narrowly scoped configuration value, currently
+documented as `C:\Projects\winget-pkgs-TigerMarkView\`. The clone is neither a Lab nor a registered
+shared tool, so TigerAiCore discovery does not yet cover it; whether it becomes a registered resource
+is an open Architect decision. Until it is decided, the destination must be an explicit configured
+value rather than a discovered one. If absent, clone only
 `rkozlowski/winget-pkgs`, add/verify `microsoft/winget-pkgs` as `upstream`, and verify repository
 identity. If present, reject non-Git, wrong origin/upstream, non-`master` default, dirty/unsafe, or
 interrupted-operation state.
