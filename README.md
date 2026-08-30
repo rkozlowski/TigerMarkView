@@ -156,13 +156,15 @@ The command surface is:
 - `--orientation <Portrait|Landscape>`;
 - `--margins <Narrow|Normal|Wide>`;
 - `--page-numbers`;
+- `--header-left`, `--header-center`, `--header-right`, `--footer-left`, `--footer-center` and
+  `--footer-right`, each taking a template;
+- `--timestamped-fallback`;
 - `--help` and `--version`; and
 - `--help-errors` for the documented exit-code meanings.
 
 Enum values are case-insensitive. TigerCli's grammar places the input before TigerMarkView's options:
 `tiger-mark <input> [options]`. There are no subcommands, configuration files, multi-file publishing,
-custom page dimensions, headers/footers, TOC generation, or CLI switches for emoji or syntax
-highlighting.
+custom page dimensions, TOC generation, or CLI switches for emoji or syntax highlighting.
 
 `--help` also lists TigerCli's standard presentation and diagnostics options, including `-h`,
 `--version-full`, `--help-env`, `--non-interactive`, `--theme`, `--color`, `--no-color`, and
@@ -170,8 +172,65 @@ highlighting.
 change the PDF palette.
 
 On success the command writes `Created: <path>` to standard output and exits with code `0`. Conversion
-failures return `1`, usage errors return `2`, and cancellation returns `3`. Errors are written to
-standard error. The CLI is Windows-only and requires WebView2, like the desktop application.
+failures return `1`, usage errors return `2`, and cancellation returns `3`. `4` means a PDF was created
+but the requested output file could not be replaced, and only `--timestamped-fallback` can produce it.
+Errors are written to standard error. The CLI is Windows-only and requires WebView2, like the desktop
+application.
+
+### Headers and footers
+
+Six independent slots print in the page margins, above and below the text:
+
+```text
+tiger-mark report.md --header-left "{Title}" --header-right "{Date}" --footer-center "Page {Page} of {TotalPages}"
+```
+
+Each slot takes a template: ordinary text plus placeholders.
+
+| Placeholder | Prints |
+|---|---|
+| `{Page}` | The current page number |
+| `{TotalPages}` | The number of pages in the PDF |
+| `{Title}` | The document's title (see below) |
+| `{FileName}` | The Markdown file name without its extension |
+| `{FileNameWithExt}` | The Markdown file name |
+| `{FilePath}` | The Markdown file's full path |
+| `{Date}` | The date the PDF was generated (`yyyy-MM-dd`) |
+| `{Time}` | The time it was generated (`HH:mm:ss`) |
+| `{DateTime}` | Both (`yyyy-MM-dd HH:mm:ss`) |
+
+`{Date}`, `{Time}` and `{DateTime}` take an optional format after a colon — a
+[.NET date and time format string](https://learn.microsoft.com/dotnet/standard/base-types/custom-date-and-time-format-strings),
+applied with the invariant culture so the same command produces the same PDF on any machine. For
+example `{Date:dd MMM yyyy}` prints `30 Aug 2026` and `{Time:HH:mm}` prints `14:25`. Placeholder names
+are case-insensitive, and `{{` and `}}` print literal braces.
+
+`{Title}` is the first of these the document offers: a `title:` key in its YAML front matter, then its
+first level-one heading, then the file name without its extension.
+
+One timestamp is taken when generation starts and used for every page, so a conversion that runs across
+midnight still prints one date throughout. `--page-numbers` is shorthand for
+`--footer-center "{Page}"`; an explicit `--footer-center` wins over the flag. Page space is reserved
+automatically: a margin too shallow to hold a running head is widened to 14 mm, so headers and footers
+never overlap the text. A slot left empty prints nothing and reserves nothing.
+
+A malformed template — an unknown placeholder, a stray brace, an unusable date format — is a usage
+error (`2`), reported before the document is read.
+
+### Writing over a PDF that is open
+
+By default the PDF is written straight to its destination, so a target that is open in a reader fails
+the conversion after the work has been done. `--timestamped-fallback` writes to
+`report-20260830142530.pdf` beside the destination first and then replaces the destination with it:
+
+```text
+tiger-mark report.md -o report.pdf --timestamped-fallback
+```
+
+If the replacement succeeds the command behaves exactly as it always has — `Created: report.pdf`, exit
+`0`, and no timestamped file left behind. If it fails, the timestamped PDF is kept, the existing
+`report.pdf` is left untouched, `Created:` names the file that was kept, an explanation goes to standard
+error, and the exit code is `4`. Nothing is retried and nothing is deleted.
 
 ## Building and testing
 

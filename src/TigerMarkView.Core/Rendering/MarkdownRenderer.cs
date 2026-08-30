@@ -37,7 +37,12 @@ public static class MarkdownRenderer
         return pipelines;
     }
 
-    private static MarkdownPipeline PipelineFor(MarkdownRenderingOptions options) =>
+    /// <summary>
+    /// The one pipeline built for <paramref name="options"/>. Internal rather than private only so
+    /// that <see cref="MarkdownDocumentTitle"/> can <em>parse</em> with the very pipeline the document
+    /// renders with; nothing outside this assembly assembles or obtains a pipeline.
+    /// </summary>
+    internal static MarkdownPipeline PipelineFor(MarkdownRenderingOptions options) =>
         Pipelines[(options.EmojiShortcodes ? 1 : 0) | (options.SyntaxHighlighting ? 2 : 0)].Value;
 
     private static MarkdownPipeline BuildPipeline(MarkdownRenderingOptions options)

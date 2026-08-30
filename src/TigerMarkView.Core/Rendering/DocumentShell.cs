@@ -236,13 +236,14 @@ internal static class DocumentShell
     /// <remarks>
     /// The only part that varies is the <c>@page</c> rule, which is written from
     /// <paramref name="page"/>; every rule inside <c>@media print</c> is fixed. So a change of paper,
-    /// orientation, margins, or page numbering is a different page box around the same typography,
-    /// never a different stylesheet.
+    /// orientation, margins, or running heads and feet is a different page box around the same
+    /// typography, never a different stylesheet.
     /// </remarks>
     public static string PrintCss(PdfPageSetup page) => PageRule(page) + Environment.NewLine + PrintRules;
 
     /// <summary>
-    /// The page box: physical sheet, printable inset, and — when asked for — the page number.
+    /// The page box: physical sheet, printable inset, and — when asked for — the running heads and
+    /// feet.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -251,40 +252,66 @@ internal static class DocumentShell
     /// uses the paper the document was laid out for.
     /// </para>
     /// <para>
-    /// Page numbers are a CSS margin box supported by the WebView2 Chromium engine. That keeps
-    /// numbering inside the one
-    /// rendering pipeline — no second PDF renderer, no JavaScript pagination, no post-processing.
-    /// Because a margin box lives in the <em>margin</em>, the printable area shrinks to make room for
-    /// it and document content can never be overprinted or clipped by a number; the deterministic
-    /// widening of a too-small bottom margin is <see cref="PdfPageSetup.PrintMargins"/>.
+    /// Headers and footers are CSS margin boxes, supported by the WebView2 Chromium engine. That keeps
+    /// them inside the one rendering pipeline — no second PDF renderer, no JavaScript pagination, no
+    /// post-processing. Because a margin box lives in the <em>margin</em>, the printable area shrinks
+    /// to make room for it and document content can never be overprinted or clipped by a running head;
+    /// the deterministic widening of a too-shallow margin is <see cref="PdfPageSetup.PrintMargins"/>.
+    /// </para>
+    /// <para>
+    /// A slot with nothing to print writes no box at all, rather than an empty one, so a template that
+    /// resolves to nothing costs no page space and leaves the generated CSS exactly as it was before
+    /// running heads existed.
     /// </para>
     /// </remarks>
     private static string PageRule(PdfPageSetup page)
     {
         var margins = page.PrintMargins;
+        var furniture = page.HeaderFooter;
 
-        var pageNumber = page.ShowPageNumbers
-            ? """
-
-                @bottom-center {
-                  content: counter(page);
-                  font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
-                  font-size: 9pt;
-                  /* The light theme's muted text colour, stated literally: a margin box sits outside
-                     the document tree, so it does not inherit the :root custom properties. */
-                  color: #57606a;
-                }
-              """
-            : string.Empty;
+        var boxes = string.Concat(
+            MarginBox("top-left", furniture.HeaderLeft, furniture.Document),
+            MarginBox("top-center", furniture.HeaderCenter, furniture.Document),
+            MarginBox("top-right", furniture.HeaderRight, furniture.Document),
+            MarginBox("bottom-left", furniture.FooterLeft, furniture.Document),
+            MarginBox("bottom-center", furniture.FooterCenter, furniture.Document),
+            MarginBox("bottom-right", furniture.FooterRight, furniture.Document));
 
         return string.Create(
             CultureInfo.InvariantCulture,
             $$"""
               @page {
                 size: {{Mm(page.WidthMillimetres)}} {{Mm(page.HeightMillimetres)}};
-                margin: {{Mm(margins.TopMillimetres)}} {{Mm(margins.RightMillimetres)}} {{Mm(margins.BottomMillimetres)}} {{Mm(margins.LeftMillimetres)}};{{pageNumber}}
+                margin: {{Mm(margins.TopMillimetres)}} {{Mm(margins.RightMillimetres)}} {{Mm(margins.BottomMillimetres)}} {{Mm(margins.LeftMillimetres)}};{{boxes}}
               }
               """);
+    }
+
+    /// <summary>
+    /// One <c>@page</c> margin box, or nothing at all when its template prints nothing.
+    /// </summary>
+    /// <remarks>
+    /// All six boxes are typeset identically — the page's furniture should read as one voice, quieter
+    /// than the document it frames — so this is the only place any of it is styled.
+    /// </remarks>
+    private static string MarginBox(string box, string? template, PdfDocumentFacts? document)
+    {
+        if (HeaderFooterTemplate.ToCssContent(template, document) is not { } content)
+        {
+            return string.Empty;
+        }
+
+        return $$"""
+
+                  @{{box}} {
+                    content: {{content}};
+                    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+                    font-size: 9pt;
+                    /* The light theme's muted text colour, stated literally: a margin box sits outside
+                       the document tree, so it does not inherit the :root custom properties. */
+                    color: #57606a;
+                  }
+                """;
     }
 
     /// <summary>
@@ -376,19 +403,35 @@ internal static class DocumentShell
             orphans: 2;
             widows: 2;
           }
-          code { font-size: 9pt; background: #f2f4f6; color: #000; overflow-wrap: anywhere; }
+          /* `break-word` for the same reason the table cells use it: inline code appears inside table
+             cells constantly in this project's own documents, and `anywhere` would let a column
+             holding `--page-numbers` be measured as one character wide. A `pre` block is not a table
+             cell and keeps `anywhere` above, where breaking a long line is the whole point. */
+          code { font-size: 9pt; background: #f2f4f6; color: #000; overflow-wrap: break-word; }
           pre code { font-size: inherit; background: none; }
 
           table {
-            /* Fixed layout keeps wide tables inside the page box; automatic layout lets them run off
-               the right edge, and print has no way to scroll to the clipped columns. */
-            table-layout: fixed;
+            /* Automatic layout, exactly as on screen, so a printed table has the column widths the
+               reader reviewed. Fixed layout looks safer and is not: with no column widths in the markup
+               to go on it divides the page evenly, so a Yes/No column is handed as much of the page as
+               a paragraph of prose and the table stops resembling the one in the viewer. */
+            table-layout: auto;
             width: 100%;
             font-size: 9pt;
             break-inside: auto;
             page-break-inside: auto;
           }
-          th, td { padding: 4px 7px; overflow-wrap: anywhere; }
+          /* `break-word` rather than `anywhere`, and the difference is the whole column layout:
+             `anywhere` lets a cell be measured as one character wide, so automatic layout hands every
+             narrow column its minimum and gives the rest of the page to whichever column holds the
+             longest sentence — an "ID" heading printed one letter per line. `break-word` keeps a
+             column's minimum at its longest word, which is what the viewer sizes by, and still breaks
+             a word too long for the column it ended up in. The price is the viewer's own: a table whose
+             longest words together exceed the text width is wider than the page, exactly as it is wider
+             than the reading column on screen. That takes an unbroken token in every column at once,
+             and it is the right way round — the alternative disfigured every ordinary table to protect
+             a rare one. */
+          th, td { padding: 4px 7px; overflow-wrap: break-word; }
           thead { display: table-header-group; }
           tr { break-inside: avoid; page-break-inside: avoid; }
 

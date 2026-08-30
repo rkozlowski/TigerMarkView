@@ -68,6 +68,13 @@ public class TigerMarkAppTests : IDisposable
         Assert.Contains("--orientation", run.StdOut, StringComparison.Ordinal);
         Assert.Contains("--margins", run.StdOut, StringComparison.Ordinal);
         Assert.Contains("--page-numbers", run.StdOut, StringComparison.Ordinal);
+        Assert.Contains("--header-left", run.StdOut, StringComparison.Ordinal);
+        Assert.Contains("--header-center", run.StdOut, StringComparison.Ordinal);
+        Assert.Contains("--header-right", run.StdOut, StringComparison.Ordinal);
+        Assert.Contains("--footer-left", run.StdOut, StringComparison.Ordinal);
+        Assert.Contains("--footer-center", run.StdOut, StringComparison.Ordinal);
+        Assert.Contains("--footer-right", run.StdOut, StringComparison.Ordinal);
+        Assert.Contains("--timestamped-fallback", run.StdOut, StringComparison.Ordinal);
 
         // The framework's own options are part of what this application offers, too.
         Assert.Contains("--non-interactive", run.StdOut, StringComparison.Ordinal);
@@ -202,6 +209,72 @@ public class TigerMarkAppTests : IDisposable
             "--page-numbers");
 
         AssertFailed(run, TigerMarkExitCode.ConversionFailed);
+    }
+
+    /// <summary>
+    /// Each running-head slot is its own option, and a template is an ordinary string value — braces,
+    /// spaces, dashes and all. Accepted means "got as far as the document", which a boundary test can
+    /// tell from "rejected" without needing a browser.
+    /// </summary>
+    [Theory]
+    [InlineData("--header-left")]
+    [InlineData("--header-center")]
+    [InlineData("--header-right")]
+    [InlineData("--footer-left")]
+    [InlineData("--footer-center")]
+    [InlineData("--footer-right")]
+    public async Task EveryHeaderAndFooterSlotAcceptsATemplate(string option)
+    {
+        AssertFailed(
+            await RunAsync(Path.Combine(_dir, "does-not-exist.md"), option, "{Title} — page {Page} of {TotalPages}"),
+            TigerMarkExitCode.ConversionFailed);
+    }
+
+    [Fact]
+    public async Task AllSixSlotsAndTheFallbackModeAreAcceptedTogether()
+    {
+        var run = await RunAsync(
+            Path.Combine(_dir, "does-not-exist.md"),
+            "--header-left", "{Title}",
+            "--header-center", "Draft",
+            "--header-right", "{Date:dd MMM yyyy}",
+            "--footer-left", "{FilePath}",
+            "--footer-center", "{Page}/{TotalPages}",
+            "--footer-right", "{Time}",
+            "--timestamped-fallback");
+
+        AssertFailed(run, TigerMarkExitCode.ConversionFailed);
+    }
+
+    /// <summary>
+    /// A mistyped placeholder is a mistyped command line, so it is a usage error — refused before the
+    /// document is even looked for, which is why the named file never has to exist.
+    /// </summary>
+    [Theory]
+    [InlineData("--header-left", "{Autor}")]
+    [InlineData("--header-center", "{Title")]
+    [InlineData("--footer-right", "Page }")]
+    [InlineData("--footer-center", "{Date:}")]
+    [InlineData("--footer-left", "{Page:0}")]
+    public async Task AMalformedTemplateIsAUsageError(string option, string template)
+    {
+        var run = await RunAsync(Path.Combine(_dir, "does-not-exist.md"), option, template);
+
+        AssertFailed(run, TigerMarkExitCode.UsageError);
+        Assert.Contains(option.TrimStart('-'), run.StdErr, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The exit code that says "there is a PDF, but not where you asked for it" is part of the
+    /// published contract, so it has to be documented like the rest.
+    /// </summary>
+    [Fact]
+    public async Task TheFallbackExitCodeIsDocumented()
+    {
+        var run = await RunAsync("--help-errors");
+
+        Assert.Contains("4", run.StdOut, StringComparison.Ordinal);
+        Assert.Contains(nameof(TigerMarkExitCode.TargetNotReplaced), run.StdOut, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -43,10 +43,20 @@ internal sealed class ConvertCommand : TigerCliAsyncCommandHandler<ConvertSettin
     {
         ArgumentNullException.ThrowIfNull(settings);
 
+        // The one clock reading of the whole run, taken before anything is read or written. Every date
+        // a header prints and the suffix of any fallback file come from it, so the PDF is dated once
+        // and cannot contradict itself — a run that crosses midnight still prints one date on every
+        // page, and the file it leaves behind is named for the same moment.
+        var request = new PdfConversionRequest(
+            settings.Input,
+            settings.Output,
+            settings.PageSetup,
+            settings.TimestampedFallback,
+            DateTimeOffset.Now);
+
         var activity = await TigerTui.RunActivityAsync(
             ProgressDialog(),
-            (_, cancellationToken) => PdfConversion.RunAsync(
-                settings.Input, settings.Output, settings.PageSetup, cancellationToken),
+            (_, cancellationToken) => PdfConversion.RunAsync(request, cancellationToken),
             // The run token, threaded in explicitly — an activity does not pick it up implicitly, and
             // without it a headless run is stoppable by nothing at all. TigerCliSettings.CancellationToken
             // combines the token TigerCliApp.RunAsync was given with TigerCli's own Ctrl-C/Ctrl-Break
@@ -54,11 +64,23 @@ internal sealed class ConvertCommand : TigerCliAsyncCommandHandler<ConvertSettin
             // instead of Windows tearing the process down. See TigerMarkApp.
             ct: settings.CancellationToken);
 
-        if (activity.Outcome == ActivityOutcome.Completed)
+        if (activity.Outcome == ActivityOutcome.Completed && activity.Value is { } conversion)
         {
-            // The one line a script reads. Nothing else is ever written to stdout.
-            Console.Out.WriteLine($"Created: {activity.Value}");
-            return TigerMarkExitCode.Success;
+            // The one line a script reads, and it always names a PDF that exists. Nothing else is ever
+            // written to stdout — including the notice below, because a fallback still produced a file
+            // and a script parsing stdout must not have to tell the two cases apart by reading prose.
+            Console.Out.WriteLine($"Created: {conversion.OutputPath}");
+
+            if (conversion.UnreplacedTarget is not { } target)
+            {
+                return TigerMarkExitCode.Success;
+            }
+
+            Console.Error.WriteLine(
+                $"Could not replace {target} — it may be open in another application. " +
+                $"The PDF was kept as {conversion.OutputPath}.");
+
+            return TigerMarkExitCode.TargetNotReplaced;
         }
 
         if (WasInterrupted(activity.Outcome, activity.Exception))

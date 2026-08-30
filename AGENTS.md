@@ -170,18 +170,37 @@ PDF export uses this retained snapshot so it exports the version currently visib
 on disk is newer. Theme, rendering-option, and page-setting changes re-render the retained Markdown;
 they must not re-read the file and silently replace the reviewed version.
 
-`PdfPageSetup` is physical geometry in millimetres plus margins and page-number state. Named paper,
-orientation, and margin choices are translated only by `PdfPageSetup.For`. The same setup must reach
-both the generated `@page` rule and `PdfExportRequest`; otherwise the HTML layout and PDF MediaBox
-disagree. Format CSS dimensions with invariant culture.
+`PdfPageSetup` is physical geometry in millimetres plus margins and the page's running heads and feet.
+Named paper, orientation, and margin choices are translated only by `PdfPageSetup.For`. The same setup
+must reach both the generated `@page` rule and `PdfExportRequest`; otherwise the HTML layout and PDF
+MediaBox disagree. Format CSS dimensions with invariant culture.
 
 The GUI exposes only A3/A4/A5/Letter/Legal, Portrait/Landscape, Narrow/Normal/Wide, and page numbers
 on/off. `File > Export to PDF...` remains a single save dialog; persistent choices live under
-`Tools > PDF Export Settings`.
+`Tools > PDF Export Settings`. Header/footer templates are a command-line capability; do not add a GUI
+surface for them without a product decision.
 
-Page numbers use the CSS `@bottom-center` margin box. Keep WebView2 headers and footers disabled,
-because they add date and URL content. `PdfPageSetup.PrintMargins` expands a bottom margin that is too
-small for the number band.
+Headers and footers are the six CSS `@page` margin boxes, written from `PdfHeaderFooter`'s six template
+slots. Keep WebView2 headers and footers disabled, because they add date and URL content. Page numbering
+is not a separate mechanism: `PdfPageSetup.ShowPageNumbers` is derived from the footer-centre slot
+holding `HeaderFooterTemplate.PageNumber`, and `PdfPageSetup.PrintMargins` widens any margin too shallow
+for the band on the edge that has something printed on it. A slot that prints nothing writes no margin
+box and reserves no space.
+
+`HeaderFooterTemplate` owns the template language and is the only thing that turns a template into CSS.
+`{Page}` and `{TotalPages}` must stay unresolved as `counter(page)`/`counter(pages)`; every other
+placeholder is resolved once, from `PdfDocumentFacts`, so all pages carry identical text. One timestamp
+is captured at generation start and carried in those facts. Dates use invariant culture. Template text
+reaching CSS must be escaped, including `<`, because the stylesheet lives inside a `<style>` element. A
+malformed template is refused at the command line and dropped — never thrown — during rendering.
+`MarkdownDocumentTitle` resolves `{Title}` as front matter `title:`, then first H1, then file name, and
+parses with the shared Markdig pipeline rather than matching text.
+
+Print tables use automatic layout with `overflow-wrap: break-word` cells, so printed column widths match
+the viewer's. Do not restore `table-layout: fixed` (it divides the page evenly, ignoring content) and do
+not widen cell wrapping to `overflow-wrap: anywhere` (it makes a cell's minimum one character, which
+collapses every narrow column). Inline `code` wraps the same way for the same reason; `pre` keeps
+`anywhere`.
 
 ## WebView and window integration
 
@@ -300,9 +319,10 @@ Help links may open another bundled document, send `http`/`https`/`mailto` to
 ## The command line
 
 `tiger-mark` converts one Markdown input to one PDF. It reuses
-`MarkdownDocumentLoader.LoadHtmlDocument`, `PdfPageSetup.For`, and `PdfExporter.ExportAsync`.
+`MarkdownDocumentLoader.RenderHtmlDocument`, `PdfPageSetup.For`, and `PdfExporter.ExportAsync`.
 The GUI exports the retained viewed version; the CLI has no viewer and reads the file when invoked.
-CLI rendering options remain at their default.
+It reads that file exactly once: the same text is rendered and resolves `{Title}`, so a running head
+cannot describe a version the PDF does not contain. CLI rendering options remain at their default.
 
 TigerCli owns parsing, help, version display, error rendering, exit-code resolution, and interaction
 policy. Do not pre-parse arguments, rewrite argv, add local usage text, or vendor/patch the framework
@@ -319,6 +339,17 @@ cancellation so a completed PDF is reported as success.
 
 The CLI page-option defaults must be explicit: A4, Portrait, Normal, and no page numbers. Some enum
 zero values differ from those defaults. No dimensions or margin values belong in the CLI project.
+
+The six `--header-*`/`--footer-*` options bind straight to `PdfHeaderFooter`'s slots; the template
+language, its validation, and its CSS belong to Core. `--page-numbers` remains shorthand for
+`--footer-center "{Page}"`, and an explicit `--footer-center` wins over the flag. A malformed template
+is refused through `ConvertSettings.Validate` — a usage error, before anything is read or written.
+
+`--timestamped-fallback` is opt-in and is the only way to reach `TigerMarkExitCode.TargetNotReplaced`.
+It writes to `PdfFileNaming.TimestampedVariant` beside the destination and then moves the file over the
+destination. A failed move keeps the timestamped PDF, leaves the destination untouched, still writes one
+`Created:` line naming the file that exists, and explains itself on stderr. It never retries, waits for a
+lock, or deletes anything, and the default direct-write path must stay unchanged.
 
 ## Versioning and packaging
 

@@ -110,7 +110,7 @@ public class ConvertSettingsTests
     {
         var numbered = Settings(margins: PdfMarginPreset.Narrow, pageNumbers: true).PageSetup;
 
-        Assert.Equal(PdfPageSetup.PageNumberBandMillimetres, numbered.PrintMargins.BottomMillimetres);
+        Assert.Equal(PdfPageSetup.MarginBoxBandMillimetres, numbered.PrintMargins.BottomMillimetres);
         Assert.Equal(PdfPageMargins.For(PdfMarginPreset.Narrow).BottomMillimetres, numbered.Margins.BottomMillimetres);
     }
 

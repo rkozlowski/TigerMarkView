@@ -110,7 +110,8 @@ public class MarkdownRendererTests
     [Theory]
     [InlineData("break-after: avoid;")]      // headings not stranded at a page foot
     [InlineData("display: table-header-group;")] // table headers repeat across pages
-    [InlineData("table-layout: fixed;")]     // wide tables stay inside the page box
+    [InlineData("table-layout: auto;")]      // table columns sized by their content, as on screen
+    [InlineData("overflow-wrap: break-word;")] // and cells break a word too long for their column
     [InlineData("white-space: pre-wrap;")]   // long code lines wrap instead of clipping
     [InlineData("max-width: 100%;")]         // images constrained to the content width
     public void PrintStylesCoverThePaginationRulesPhase6Requires(string expectedRule)

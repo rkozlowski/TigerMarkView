@@ -26,9 +26,12 @@ public class PdfConversionTests : IDisposable
 
     public void Dispose() => Directory.Delete(_dir, recursive: true);
 
+    private static PdfConversionRequest Request(string? input, string? output = null, bool timestampedFallback = false) =>
+        new(input, output, PdfPageSetup.Default, timestampedFallback, DateTimeOffset.Now);
+
     private Task<TigerCliCommandException> ConvertFailsAsync(string? input, string? output = null) =>
         Assert.ThrowsAsync<TigerCliCommandException>(() =>
-            PdfConversion.RunAsync(input, output, PdfPageSetup.Default, CancellationToken.None));
+            PdfConversion.RunAsync(Request(input, output), CancellationToken.None));
 
     private string WriteDocument(string name = "notes.md")
     {
@@ -95,6 +98,6 @@ public class PdfConversionTests : IDisposable
         await cancellation.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => PdfConversion.RunAsync(
-            WriteDocument(), Path.Combine(_dir, "out.pdf"), PdfPageSetup.Default, cancellation.Token));
+            Request(WriteDocument(), Path.Combine(_dir, "out.pdf")), cancellation.Token));
     }
 }

@@ -162,7 +162,8 @@ Two things are worth knowing:
   document, because that is what prints and shares sensibly.
 
 No browser headers, footers, or page URLs are added. Tables, code blocks, and images are fitted to the
-page.
+page, and a table's columns are sized by their content exactly as they are on screen — the exported
+table looks like the one you were reading.
 
 ### Page setup
 
