@@ -385,6 +385,25 @@ exit /b 2
     }
     Write-Host 'PASS: a manifest that does not describe the installer is refused'
 
+    # The release workflow passes the installer itself rather than a hash it computed
+    # in YAML, so the sealed set is tied to the release bytes with nothing in between.
+    $sealedFromInstaller = & $assertScript `
+        -ManifestDirectory $storedDirectory `
+        -Version $version `
+        -InstallerPath $installerPath | Select-Object -Last 1
+    Assert-True ($sealedFromInstaller -ceq $stored.digest) `
+        'Sealing against the installer file must reach the same submission digest.'
+
+    $otherInstaller = Join-Path $testRoot ([IO.Path]::GetFileName($installerPath))
+    [IO.File]::WriteAllBytes($otherInstaller, [byte[]] (1..32))
+    Assert-Throws -MessagePattern 'hashes to' -Action {
+        & $assertScript `
+            -ManifestDirectory $storedDirectory `
+            -Version $version `
+            -InstallerPath $otherInstaller | Out-Host
+    }
+    Write-Host 'PASS: sealing hashes the installer it is given and refuses a different one'
+
     Assert-Throws -MessagePattern 'not the same manifests' -Action {
         & $assertScript `
             -ManifestDirectory $copyDirectory `

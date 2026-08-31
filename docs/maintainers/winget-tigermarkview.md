@@ -318,14 +318,22 @@ or TigerWinLab are blockers. Never rebuild the installer, regenerate the submiss
 manifests, or substitute `artifacts\winget\` to make a post-release gate pass.
 
 Tests are isolated: fake GitHub responses and local bare Git repositories, never the real fork,
-upstream, releases, credentials, or lab VM.
+upstream, releases, credentials, or lab VM. Run them all with one command:
 
-| Suite | Covers |
-| --- | --- |
-| `eng\release-automation\tests\ReleaseAutomation.Tests.ps1` | Result vocabulary, `gh` preflight, the artifact download route, workflow-run selection, tag dereference, release state. |
-| `eng\winget\tests\TigerMarkViewWinGet.Tests.ps1` | Generation, sealing, upload shape, artifact selection by version and commit, digest checking, public-release checks, reproducibility, provenance-bound reuse, and refusal to use stale local output. |
-| `eng\winget\tests\WinGetPkgsClone.Tests.ps1` | Clone configuration, slug normalization, interrupted operations, clone identity, and the previous-PR gate. |
-| `eng\winget\tests\WinGetPkgsSubmission.Tests.ps1` | Clone creation, fork synchronization, branch create/resume/refuse, exact copy, final diff, commit, push, every interruption boundary, and an idempotent second run. |
+```powershell
+pwsh eng/tests/Invoke-EngineeringTests.ps1
+```
+
+| Suite | Scope | Covers |
+| --- | --- | --- |
+| `eng\release-automation\tests\ReleaseAutomation.Tests.ps1` | Repository | Result vocabulary, `gh` preflight, the artifact download route, workflow-run selection, tag dereference, release state, the closed release artifact set, and the scripts the workflows call. |
+| `eng\winget\tests\TigerMarkViewWinGet.Tests.ps1` | Repository | Generation, sealing, upload shape, artifact selection by version and commit, digest checking, public-release checks, reproducibility, provenance-bound reuse, and refusal to use stale local output. |
+| `eng\winget\tests\WinGetPkgsClone.Tests.ps1` | Maintainer | Clone configuration, slug normalization, interrupted operations, clone identity, and the previous-PR gate. |
+| `eng\winget\tests\WinGetPkgsSubmission.Tests.ps1` | Maintainer | Clone creation, fork synchronization, branch create/resume/refuse, exact copy, final diff, commit, push, every interruption boundary, and an idempotent second run. |
+
+The two `Maintainer` suites build real Git repositories and run the submission gates against the
+developer's own Git configuration. They belong on the machine that performs a submission, so normal
+CI runs only the `Repository` scope and never simulates the local submission state machine.
 
 Authoritative WinGet references are the community repository's
 [manifest documentation](https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest),

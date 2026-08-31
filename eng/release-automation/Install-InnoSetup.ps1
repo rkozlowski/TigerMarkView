@@ -1,3 +1,26 @@
+#Requires -Version 7.0
+<#
+    .SYNOPSIS
+    Resolves the pinned Inno Setup compiler, installing it when it is absent.
+
+    .DESCRIPTION
+    A hosted runner has no Inno Setup; a maintainer workstation normally does. The
+    installer is downloaded only when the pinned version is not already present,
+    and it is accepted only when its SHA-256 matches the pinned hash and its
+    Authenticode signature is valid.
+
+    .PARAMETER Version
+    The pinned Inno Setup version.
+
+    .PARAMETER InstallerUri
+    Where to download that exact version from.
+
+    .PARAMETER InstallerSha256
+    The hash the downloaded installer must have.
+
+    .PARAMETER GitHubOutput
+    When supplied, a GITHUB_OUTPUT file to append 'compiler' to.
+#>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
@@ -9,12 +32,24 @@ param(
 
     [Parameter(Mandatory)]
     [ValidatePattern('^[0-9A-Fa-f]{64}$')]
-    [string] $InstallerSha256
+    [string] $InstallerSha256,
+
+    [string] $GitHubOutput
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not $IsWindows) { throw 'Inno Setup can only be provisioned on Windows.' }
+
+function Write-CompilerPath {
+    param([Parameter(Mandatory)][string] $Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "ISCC.exe was not provisioned at '$Path'." }
+    if (-not [string]::IsNullOrWhiteSpace($GitHubOutput)) {
+        "compiler=$Path" | Out-File -FilePath $GitHubOutput -Encoding utf8 -Append
+    }
+    Write-Output $Path
+}
 
 $innoKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 7_is1'
 function Resolve-InnoSetupCompiler {
@@ -33,7 +68,7 @@ function Resolve-InnoSetupCompiler {
 
 $compilerPath = Resolve-InnoSetupCompiler -ExpectedVersion $Version
 if ($null -ne $compilerPath) {
-    Write-Output $compilerPath
+    Write-CompilerPath -Path $compilerPath
     return
 }
 
@@ -60,7 +95,7 @@ try {
 
     $compilerPath = Resolve-InnoSetupCompiler -ExpectedVersion $Version
     if ($null -eq $compilerPath) { throw "Inno Setup $Version installed without a resolvable ISCC.exe." }
-    Write-Output $compilerPath
+    Write-CompilerPath -Path $compilerPath
 }
 finally {
     if (Test-Path -LiteralPath $temporaryRoot) {

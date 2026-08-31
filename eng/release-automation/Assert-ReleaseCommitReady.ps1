@@ -11,9 +11,11 @@
     `CI` push run for that exact SHA on the default branch and requires
     status=completed, conclusion=success.
 
-    It also confirms the dispatched version matches Version.props and that
-    .github/release-notes/<version>.md is present and useful, so the workflow
-    stops at this cheap gate rather than after a full build.
+    It also confirms the dispatched version matches Version.props, that
+    .github/release-notes/<version>.md is present and useful, and that the release
+    tag is still free, so the workflow stops at this one cheap gate rather than
+    after a full build. Everything the release workflow needs to know before it
+    builds is checked here; the workflow itself asserts nothing inline.
 
     GitHub is reached only through the authenticated `gh` session. In GitHub
     Actions that session is the job's scoped GITHUB_TOKEN, delivered as GH_TOKEN;
@@ -109,6 +111,23 @@ if ($null -ne $cli) {
         $run = Get-TigerMarkViewWorkflowRunForCommit -Cli $cli -CommitSha $commit -Repository $Repository `
             -WorkflowFile $constant.ciWorkflowFile -Event 'push' -Branch $constant.defaultBranch -CheckId 'ci/run'
         $checks.Add($run.check)
+
+        # 5. The release tag is still free. This is a fresh-release gate: an existing
+        #    tag is never moved and publication is never silently resumed, whether it
+        #    names this commit or another one.
+        $tagState = Resolve-TigerMarkViewReleaseTagCommit -Cli $cli -Version $Version -Repository $Repository
+        $tag = $constant.tagPrefix + $Version
+        $checks.Add($(if ($null -eq $tagState.commit) {
+            New-TigerMarkViewReleaseCheck -Id 'tag/available' -Status 'PASS' `
+                -Observed "Tag '$tag' does not exist yet." -Expected "no tag '$tag'"
+        }
+        else {
+            New-TigerMarkViewReleaseCheck -Id 'tag/available' -Status 'BLOCKED' `
+                -Observed "Tag '$tag' already exists at $($tagState.commit)." `
+                -Expected "no tag '$tag'" -Evidence $tagState.commit `
+                -Remediation ('This workflow only creates a fresh release. Use the retained-artifact ' +
+                    'recovery path in docs/maintainers/releasing-tigermarkview.md, or prepare a new version.')
+        }))
     }
 }
 

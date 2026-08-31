@@ -12,6 +12,9 @@ permissions:
 env:
   AVALONIA_TELEMETRY_OPTOUT: '1'
 
+# Normal CI builds, tests, and runs the fast engineering test suites. Release and
+# WinGet submission work lives in eng/ scripts that are executed and verified
+# locally; CI does not simulate them.
 jobs:
   windows:
     name: Windows build and test
@@ -19,37 +22,6 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v6
-
-      - name: Verify release workflow scripts are tracked
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $requiredScripts = @(
-            'eng/release-automation/ReleaseAutomation.ps1'
-            'eng/release-automation/Assert-ReleaseCommitReady.ps1'
-            'eng/release-automation/Assert-ReleaseNotes.ps1'
-            'eng/release-automation/Install-InnoSetup.ps1'
-            'eng/release-automation/Assert-ProductMetadata.ps1'
-            'eng/release-automation/Assert-Installer.ps1'
-            'eng/release-automation/New-ReleaseArtifactManifest.ps1'
-            'eng/release-automation/Assert-ReleaseArtifactManifest.ps1'
-            'eng/release-automation/Publish-GitHubDraftRelease.ps1'
-            'installer/Build-Installer.ps1'
-            'eng/winget/TigerMarkViewWinGet.ps1'
-            'eng/winget/Prepare-TigerMarkViewWinGet.ps1'
-            'eng/winget/Assert-TigerMarkViewWinGetSubmission.ps1'
-            'eng/winget/WinGetReleaseValidation.ps1'
-            'eng/winget/WinGetPkgsClone.ps1'
-            'eng/winget/WinGetPkgsSubmission.ps1'
-            'eng/winget/Prepare-TigerMarkViewWinGetSubmission.ps1'
-          )
-          foreach ($path in $requiredScripts) {
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-              throw "Required release workflow script is missing: $path"
-            }
-            git ls-files --error-unmatch -- $path | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "Required release workflow script is not tracked: $path" }
-          }
 
       - name: Set up .NET 10
         uses: actions/setup-dotnet@v5
@@ -78,29 +50,9 @@ jobs:
           -m:1
           /nodeReuse:false
 
-      - name: Test TigerAiCore resource discovery
+      - name: Test engineering automation
         shell: pwsh
-        run: ./eng/tests/TigerAiCore.Tests.ps1
-
-      - name: Test release automation foundation
-        shell: pwsh
-        run: ./eng/release-automation/tests/ReleaseAutomation.Tests.ps1
-
-      - name: Test release preparation helpers
-        shell: pwsh
-        run: ./eng/release-automation/tests/ReleasePreparation.Tests.ps1
-
-      - name: Test WinGet manifest generation and submission sealing
-        shell: pwsh
-        run: ./eng/winget/tests/TigerMarkViewWinGet.Tests.ps1
-
-      - name: Test winget-pkgs clone safety checks
-        shell: pwsh
-        run: ./eng/winget/tests/WinGetPkgsClone.Tests.ps1
-
-      - name: Test winget-pkgs submission mutation
-        shell: pwsh
-        run: ./eng/winget/tests/WinGetPkgsSubmission.Tests.ps1
+        run: ./eng/tests/Invoke-EngineeringTests.ps1 -Scope Repository
 
       - name: Verify tracked-file whitespace
         run: git diff --check

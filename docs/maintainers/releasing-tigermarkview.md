@@ -148,13 +148,17 @@ commit, a merely completed run, or a green pull-request run is not sufficient.
 ### 3. Manually dispatch the release workflow
 
 After CI is green, the human manually starts **Release TigerMarkView** on `main`, using the exact
-version in `Version.props`. Before building or creating GitHub state, the workflow must verify:
+version in `Version.props`. Its first job runs one script,
+`eng/release-automation/Assert-ReleaseCommitReady.ps1`, which proves before anything is built that:
 
-- its dispatched SHA is the expected release commit on `origin/main`;
+- the dispatched SHA is the expected release commit on `origin/main`;
 - the version input exactly matches `Version.props`;
-- the required `CI` run for that SHA succeeded;
-- the release tag is available; and
-- its checkout and tracked release inputs are clean and complete.
+- `.github/release-notes/<version>.md` is present and useful;
+- the required `CI` push run for that SHA succeeded; and
+- the release tag does not exist yet.
+
+That script is the gate, and it can be run locally against any commit. The workflow itself asserts
+nothing inline: every remaining step is one call into an `eng/` or `installer/` script.
 
 The release workflow then builds once and uses those exact outputs throughout. It:
 
@@ -170,9 +174,10 @@ The release workflow then builds once and uses those exact outputs throughout. I
 10. creates a draft GitHub Release with the installer, verification records, and useful prepared
     release notes.
 
-The workflow must end with `READY FOR HUMAN ACTION`, identify the draft URL, version, tag, commit,
-artifact and digests, and list the exact publication review. It never publishes the release and
-never creates the final WinGet pull request.
+The run ends with the `READY FOR HUMAN ACTION` handoff `Publish-GitHubDraftRelease.ps1` writes -
+draft URL, version, tag, commit, assets, the sealed WinGet artifact and its digest, and the exact
+publication review - in the terminal and in the workflow step summary. It never publishes the
+release and never creates the final WinGet pull request.
 
 ### 4. Review and publish the draft
 
@@ -232,6 +237,16 @@ gh auth status
 
 # 6. Create and review the microsoft/winget-pkgs pull request from the branch step 5 names.
 ```
+
+To verify the release automation itself - the vocabulary, the artifact set, manifest generation and
+sealing, the clone gates, and the submission state machine - run its tests locally:
+
+```powershell
+pwsh eng/tests/Invoke-EngineeringTests.ps1
+```
+
+Normal CI runs only the fast `Repository` scope of those suites; the winget-pkgs ones belong on the
+maintainer machine that actually performs a submission.
 
 To re-check a published release without touching the winget-pkgs clone, run the gate alone:
 

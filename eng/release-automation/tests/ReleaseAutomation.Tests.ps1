@@ -378,6 +378,109 @@ try {
         'The release info records the observed shape.'
     Write-Host 'PASS: release-state checks separate missing, draft, wrong-commit, and wrong-asset releases'
 
+    # --- Workflow script references -----------------------------------
+
+    # A workflow step is only ever a call into a script here, so the one thing the
+    # workflows can get wrong on their own is naming a script that is missing or
+    # untracked. That is checked here rather than as a CI-only step.
+    $workflowFiles = @(
+        Join-Path $repositoryRoot '.github/workflows/ci.yml'
+        Join-Path $repositoryRoot '.github/workflows/release.yml'
+    )
+    $referenced = [Collections.Generic.List[string]]::new()
+    foreach ($workflowFile in $workflowFiles) {
+        $text = Get-Content -LiteralPath $workflowFile -Raw
+        foreach ($match in [regex]::Matches($text, '\./(?<path>(?:eng|installer)/[^\s''"]+\.ps1)')) {
+            $path = $match.Groups['path'].Value
+            if (-not $referenced.Contains($path)) { $referenced.Add($path) }
+        }
+    }
+    Assert-True ($referenced.Count -ge 5) `
+        "The workflows must call the release scripts; only $($referenced.Count) references were found."
+    # Existence is the whole check, and it is a complete one: this suite also runs in
+    # CI, where a checkout contains only committed files, so a script that was never
+    # committed fails here rather than in the middle of a release. An ignored path
+    # would pass locally and vanish in CI, so it is refused outright.
+    foreach ($path in $referenced) {
+        Assert-True (Test-Path -LiteralPath (Join-Path $repositoryRoot $path) -PathType Leaf) `
+            "A workflow calls '$path', which does not exist in this checkout."
+        $previousNative = $PSNativeCommandUseErrorActionPreference
+        try {
+            $PSNativeCommandUseErrorActionPreference = $false
+            & git -C $repositoryRoot check-ignore --quiet -- $path
+            $ignored = $LASTEXITCODE -eq 0
+        }
+        finally {
+            $PSNativeCommandUseErrorActionPreference = $previousNative
+            $global:LASTEXITCODE = 0
+        }
+        Assert-True (-not $ignored) "A workflow calls '$path', which Git ignores and CI would never see."
+    }
+    Write-Host "PASS: every script the workflows call is present and committable ($($referenced.Count) scripts)"
+
+    # --- Release artifact set ------------------------------------------
+
+    # The release workflow no longer stages, copies, or hashes anything itself:
+    # these two scripts close the artifact set and prove it, and the transfer
+    # check is what makes "the same bytes" checkable across the artifact upload.
+    $artifactVersion = '0.9.0'
+    $artifactCommit = 'd' * 40
+    $installerName = "TigerMarkView-$artifactVersion-win-x64-setup.exe"
+    $buildRoot = Join-Path $testRoot 'build'
+    $releaseRoot = Join-Path $testRoot 'release'
+    New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
+    $builtInstaller = Join-Path $buildRoot $installerName
+    [IO.File]::WriteAllBytes($builtInstaller, [byte[]] (1..64))
+
+    # A leftover file from an earlier attempt must not survive into the set.
+    New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $releaseRoot 'stale.txt') -Value 'left over' -Encoding utf8NoBOM
+
+    $outputFile = Join-Path $testRoot 'artifact-output.txt'
+    & (Join-Path $automationRoot 'New-ReleaseArtifactManifest.ps1') `
+        -InstallerPath $builtInstaller `
+        -ArtifactDirectory $releaseRoot `
+        -Version $artifactVersion `
+        -CommitSha $artifactCommit `
+        -GitHubOutput $outputFile | Out-Null
+
+    $releaseNames = @(Get-ChildItem -LiteralPath $releaseRoot -File | ForEach-Object Name | Sort-Object)
+    $expectedNames = @(@('SHA256SUMS.txt', 'release-artifacts.json', $installerName) | Sort-Object)
+    Assert-True (($releaseNames -join ',') -ceq ($expectedNames -join ',')) `
+        "Staging must leave exactly the closed set; it left $($releaseNames -join ', ')."
+
+    $recordedHash = @(Get-Content -LiteralPath $outputFile |
+        Where-Object { $_ -match '^manifest_sha256=(?<hash>[0-9a-f]{64})$' } |
+        ForEach-Object { $Matches['hash'] })
+    Assert-True ($recordedHash.Count -eq 1) 'Closing the set must publish exactly one manifest_sha256.'
+
+    & (Join-Path $automationRoot 'Assert-ReleaseArtifactManifest.ps1') `
+        -ArtifactDirectory $releaseRoot `
+        -ExpectedVersion $artifactVersion `
+        -ExpectedCommit $artifactCommit `
+        -ExpectedManifestSha256 $recordedHash[0] | Out-Null
+    Write-Host 'PASS: the artifact set is staged, closed, and verified against its recorded manifest'
+
+    Assert-Throws -MessagePattern 'changed in transit' -Action {
+        & (Join-Path $automationRoot 'Assert-ReleaseArtifactManifest.ps1') `
+            -ArtifactDirectory $releaseRoot `
+            -ExpectedVersion $artifactVersion `
+            -ExpectedCommit $artifactCommit `
+            -ExpectedManifestSha256 ('0' * 64) | Out-Null
+    }
+    Write-Host 'PASS: a manifest that is not the validated one fails the transfer check'
+
+    $wrongName = Join-Path $buildRoot 'TigerMarkView-setup.exe'
+    Copy-Item -LiteralPath $builtInstaller -Destination $wrongName
+    Assert-Throws -MessagePattern 'must be named' -Action {
+        & (Join-Path $automationRoot 'New-ReleaseArtifactManifest.ps1') `
+            -InstallerPath $wrongName `
+            -ArtifactDirectory (Join-Path $testRoot 'release-wrong') `
+            -Version $artifactVersion `
+            -CommitSha $artifactCommit | Out-Null
+    }
+    Write-Host 'PASS: only the expected release installer can close the set'
+
     Write-Host
     Write-Host 'PASS: release automation foundation' -ForegroundColor Green
 }

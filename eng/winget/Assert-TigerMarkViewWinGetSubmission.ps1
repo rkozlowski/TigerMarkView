@@ -27,6 +27,11 @@
     .PARAMETER ExpectedInstallerSha256
     When supplied, the digest the installer manifest must declare.
 
+    .PARAMETER InstallerPath
+    When supplied, the release installer itself. It is hashed here and the
+    manifest must declare that hash, so the sealed set is tied to the exact bytes
+    the release publishes without the caller computing anything.
+
     .PARAMETER ExpectedDigest
     When supplied, the submission digest the set must reproduce. This is the
     transfer check.
@@ -44,6 +49,8 @@ param(
 
     [string] $ExpectedInstallerSha256,
 
+    [string] $InstallerPath,
+
     [string] $ExpectedDigest,
 
     [string] $GitHubOutput
@@ -53,6 +60,19 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot 'TigerMarkViewWinGet.ps1')
+
+if (-not [string]::IsNullOrWhiteSpace($InstallerPath)) {
+    $InstallerPath = [IO.Path]::GetFullPath($InstallerPath)
+    if (-not (Test-Path -LiteralPath $InstallerPath -PathType Leaf)) {
+        throw "Installer not found: $InstallerPath"
+    }
+    $installerHash = (Get-FileHash -LiteralPath $InstallerPath -Algorithm SHA256).Hash.ToUpperInvariant()
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedInstallerSha256) -and
+        $ExpectedInstallerSha256.ToUpperInvariant() -cne $installerHash) {
+        throw "Installer '$InstallerPath' hashes to '$installerHash', not '$ExpectedInstallerSha256'."
+    }
+    $ExpectedInstallerSha256 = $installerHash
+}
 
 $submission = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $ManifestDirectory -Version $Version
 $release = $submission.release

@@ -60,8 +60,9 @@ Other routine commands:
 
 - `dotnet run --project src/TigerMarkView` launches the Windows desktop app.
 - `dotnet run --project src/TigerMarkView.Cli -- README.md -o README.pdf` exercises the CLI.
-- `pwsh eng/tests/TigerAiCore.Tests.ps1` covers TigerAiCore resource discovery.
-- `pwsh eng/winget/tests/TigerMarkViewWinGet.Tests.ps1` covers manifest generation and submission sealing.
+- `pwsh eng/tests/Invoke-EngineeringTests.ps1` runs every engineering PowerShell suite; `-Scope
+  Repository` runs the fast ones normal CI also runs, `-Scope Maintainer` the winget-pkgs submission
+  ones. Each suite is still an ordinary script that can be run on its own.
 - `pwsh installer/Build-Installer.ps1` publishes win-x64 output and builds the Inno Setup installer.
 - `pwsh eng/lab/Test-TigerMarkViewRelease.ps1` runs installer and desktop release scenarios in TigerWinLab.
 - `git diff --check` before proposing a commit; CI runs it.
@@ -388,6 +389,16 @@ lifecycle is in `docs/maintainers/releasing-tigermarkview.md` and the artifact a
 are in `docs/maintainers/winget-tigermarkview.md`. Those two documents are the contract; the release
 automation they describe is implemented.
 
+Automation is verified where it runs. Normal CI stays lightweight: restore, build at zero warnings,
+`dotnet test`, the `Repository`-scope engineering suites, and `git diff --check`. GitHub workflows
+stay thin and declarative: a step is one call into an `eng/` or `installer/` script that a maintainer
+can read and run locally, never a block of logic that only ever executes on a runner. The release
+workflow carries only intrinsically CI-bound work - the authoritative build, WinGet generation,
+validation and sealing, the draft release, and the human publication handoff - and post-release
+WinGet submission stays one local maintainer command. Do not add CI behaviour that exists only to
+simulate the local submission state machine, and do not give a runner a Git identity or otherwise
+patch a fixture so a maintainer-environment suite passes there; move the suite instead.
+
 The human decides when to publish. Automation may prepare release changes and, after publication,
 prepare, commit, and push the exact WinGet submission branch. It must never commit/push the source
 release preparation, publish the GitHub draft, or create the final `microsoft/winget-pkgs` pull
@@ -449,7 +460,10 @@ a real summary with no placeholder text, bare changelog link, or leaked secret/p
 `Publish-GitHubDraftRelease.ps1` passes the file to `gh release create --notes-file`. Version
 preparation touches only `Version.props` and the release-workflow dispatch default
 (`eng/release-automation/Set-TigerMarkViewReleaseVersion.ps1`); no shipped `src/` or `installer/`
-source may hardcode the version.
+source may hardcode the version. `Assert-ReleaseCommitReady.ps1` is the release workflow's
+one pre-build gate - version, notes, commit on `origin/main`, that commit's successful `CI` push run,
+and an unused release tag - and `Publish-GitHubDraftRelease.ps1` writes the `READY FOR HUMAN ACTION`
+handoff itself, so neither check nor handoff is expressed in YAML.
 
 The dedicated-clone path, fork/upstream slugs, default branch, and submission branch prefix are
 configured in `eng/winget/winget-pkgs.clone.json` (an explicit value, not TigerAiCore discovery; only

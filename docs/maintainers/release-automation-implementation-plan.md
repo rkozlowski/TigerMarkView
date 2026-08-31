@@ -18,8 +18,8 @@ It is not a source of requirements: if it ever disagrees with the two guides or 
 | Area | Implementation | Tests |
 | --- | --- | --- |
 | Result vocabulary and GitHub queries | `eng/release-automation/ReleaseAutomation.ps1` - `PASS`/`WARN`/`BLOCKED`/`FAIL`/`READY FOR HUMAN ACTION` objects with one text/Markdown/JSON renderer, fixed repository constants, an injectable `gh`-only adapter (reads and binary downloads), session preflight, exact-SHA run selection, annotated-tag dereference, release-state inspection | `eng/release-automation/tests/ReleaseAutomation.Tests.ps1` |
-| Release workflow prerequisite gate | `Assert-ReleaseCommitReady.ps1` and the `prerequisites` job (`actions: read` + `contents: read`), which `validate` needs | workflow static assertions |
-| Version-specific release notes | `.github/release-notes/`, `Assert-ReleaseNotes.ps1`, `Publish-GitHubDraftRelease.ps1 -NotesFile`, and the `always()` publication checklist | `ReleaseAutomation.Tests.ps1` |
+| Release workflow prerequisite gate | `Assert-ReleaseCommitReady.ps1` and the `prerequisites` job (`actions: read` + `contents: read`), which `validate` needs: version, notes, commit on `origin/main`, that commit's `CI` push run, and an unused tag | `ReleaseAutomation.Tests.ps1` |
+| Version-specific release notes and the publication handoff | `.github/release-notes/`, `Assert-ReleaseNotes.ps1`, and `Publish-GitHubDraftRelease.ps1`, which takes `-NotesFile` and writes the `READY FOR HUMAN ACTION` checklist itself | `ReleaseAutomation.Tests.ps1` |
 | Release preparation | `Set-TigerMarkViewReleaseVersion.ps1`, `Test-TigerMarkViewReleaseReadiness.ps1` | `eng/release-automation/tests/ReleasePreparation.Tests.ps1` |
 | Post-release validation | `eng/winget/WinGetReleaseValidation.ps1` (the gate as a callable function), `Test-TigerMarkViewWinGet.ps1` (the command around it), provenance-bound reuse of a retained sealed set | `eng/winget/tests/TigerMarkViewWinGet.Tests.ps1` |
 | Read-only fork safety | `eng/winget/winget-pkgs.clone.json`, `eng/winget/WinGetPkgsClone.ps1` | `eng/winget/tests/WinGetPkgsClone.Tests.ps1` |
@@ -59,6 +59,15 @@ read-only gate tolerates nothing.
 current `upstream/master`, and a remote branch at a different commit each stop the run with evidence.
 The plan said a force operation would need its own design and additional guards; none was required, so
 none exists.
+
+**Verification lives where it can be run.** The workflows are thin: every release step is one call
+into an `eng/` or `installer/` script, so the checks a release depends on can be read and executed
+locally rather than only on a runner. Normal CI is a build, the tests, the fast `Repository`-scope
+engineering suites, and `git diff --check`. The winget-pkgs clone and submission suites build real
+Git repositories and exercise the local submission state machine against the developer's own Git
+configuration; they run on the maintainer machine through
+`eng/tests/Invoke-EngineeringTests.ps1`, and CI neither simulates them nor is given a Git identity to
+make them pass.
 
 ## Open architect question
 

@@ -1,3 +1,23 @@
+#Requires -Version 7.0
+<#
+    .SYNOPSIS
+    Proves a directory holds exactly the recorded TigerMarkView release bytes.
+
+    .PARAMETER ArtifactDirectory
+    The release directory to check.
+
+    .PARAMETER ExpectedVersion
+    The version the manifest must describe.
+
+    .PARAMETER ExpectedCommit
+    The commit the manifest must name.
+
+    .PARAMETER ExpectedManifestSha256
+    When supplied, the SHA-256 release-artifacts.json itself must have. This is
+    the transfer check: the validation job records the hash and the publication
+    job repeats it over the downloaded artifact, so an upload that changed the
+    manifest cannot survive both.
+#>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
@@ -8,7 +28,9 @@ param(
 
     [Parameter(Mandatory)]
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
-    [string] $ExpectedCommit
+    [string] $ExpectedCommit,
+
+    [string] $ExpectedManifestSha256
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,6 +39,13 @@ Set-StrictMode -Version Latest
 $ArtifactDirectory = [IO.Path]::GetFullPath($ArtifactDirectory)
 $manifestPath = Join-Path $ArtifactDirectory 'release-artifacts.json'
 $checksumPath = Join-Path $ArtifactDirectory 'SHA256SUMS.txt'
+if (-not [string]::IsNullOrWhiteSpace($ExpectedManifestSha256)) {
+    $manifestSha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($manifestSha256 -cne $ExpectedManifestSha256.ToLowerInvariant()) {
+        throw ("release-artifacts.json hashes to '$manifestSha256'; the validated manifest hashed to " +
+            "'$($ExpectedManifestSha256.ToLowerInvariant())'. The artifact changed in transit.")
+    }
+}
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 if ($manifest.schemaVersion -ne 1 -or
     $manifest.releaseVersion -cne $ExpectedVersion -or
