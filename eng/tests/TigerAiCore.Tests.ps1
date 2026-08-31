@@ -204,7 +204,7 @@ path = '$toolPath'
     Write-Host 'PASS: a required lab fails with configuration guidance'
 
     # 12. The scripts must not carry a private copy of the rule they just lost.
-    foreach ($relativePath in @('eng\lab\Test-TigerMarkViewRelease.ps1', 'eng\winget\Test-TigerMarkViewWinGet.ps1')) {
+    foreach ($relativePath in @('eng\lab\Test-TigerMarkViewRelease.ps1', 'eng\winget\WinGetReleaseValidation.ps1')) {
         $text = Get-Content -LiteralPath (Join-Path $repositoryRoot $relativePath) -Raw
         Assert-True ($text -notmatch 'TIGERWINLAB_ROOT') `
             "$relativePath must not read a per-lab environment variable."

@@ -5,14 +5,11 @@ reference release model for future Tiger application projects. The human decides
 moves forward; automation performs repeatable preparation, verification, packaging, and submission
 work.
 
-> **Transition status:** the authoritative installer and sealed WinGet artifact, the release
-> workflow's exact-commit CI-success gate, the checked-in version-specific release notes, and the
-> deterministic preparation/readiness helpers now exist. Still to be built: the one-command
-> `winget-pkgs` fork/branch/commit/push orchestrator (`Prepare-TigerMarkViewWinGetSubmission.ps1`)
-> and the migration of `Test-TigerMarkViewWinGet.ps1` off its raw-token client. Until then, use the
-> [current transition procedure](#current-transition-procedure) for the post-release WinGet steps and
-> do not treat that proposed command as available. Remaining work is tracked in
-> [the release automation plan](release-automation-implementation-plan.md).
+This document is the contract, and the automation it describes is implemented: the authoritative
+installer and sealed WinGet artifact, the release workflow's exact-commit CI-success gate, the
+checked-in version-specific release notes, the preparation and readiness helpers, and the one-command
+`winget-pkgs` submission orchestrator. Every GitHub operation uses the `gh auth login` session; no
+command takes a token.
 
 TigerMarkView publishes one installer containing the GUI and CLI, plus `SHA256SUMS.txt` and
 `release-artifacts.json`. It does not publish NuGet packages, a portable archive, or a separate CLI
@@ -20,7 +17,7 @@ installer. `Version.props` remains the only product-version and shared-metadata 
 
 ## Maintainer tools and authentication
 
-The finished workflow requires:
+The workflow requires:
 
 - `git`, PowerShell 7 (`pwsh`), the .NET 10 SDK, and `winget`;
 - GitHub CLI (`gh`), authenticated to an account allowed to operate on
@@ -104,7 +101,7 @@ Wait for CI on <commit> to pass, then manually run Release TigerMarkView for <ve
 `BLOCKED` means a required external or human checkpoint is incomplete. `FAIL` means a check ran and
 found invalid state.
 
-## Target maintainer workflow
+## Maintainer workflow
 
 ### 1. Ask an agent to prepare the release
 
@@ -188,56 +185,67 @@ the notes must also state the runtime prerequisites and current unsigned status.
 ### 5. Prepare the WinGet submission branch
 
 After publication, the human runs one command from an elevated PowerShell 7 session at the
-TigerMarkView repository root. The provisional interface is:
+TigerMarkView repository root:
 
 ```powershell
 .\eng\winget\Prepare-TigerMarkViewWinGetSubmission.ps1 -Version <version>
 ```
 
-The command first verifies that the expected release workflow completed successfully and that the
-release is public, non-draft, and byte-consistent. It retrieves and verifies the sealed workflow
-artifact, performs throwaway byte-for-byte regeneration, runs `winget validate` and TigerWinLab,
-manages the dedicated `C:\Projects\winget-pkgs-TigerMarkView\` clone, enforces the previous-PR safety
-gate, synchronizes the fork, creates the release branch, copies the exact sealed manifests, validates
-the final diff, commits, and pushes.
+The command verifies the authenticated `gh` session, that this checkout is TigerMarkView, that
+`v<version>` resolves to a commit, that the `CI` push run and the **Release TigerMarkView** run for
+that exact commit both succeeded, and that the release is public, non-draft, at that commit, and
+carries its three assets. It then retrieves and verifies the sealed workflow artifact, performs
+throwaway byte-for-byte regeneration, runs `winget validate` and TigerWinLab, manages the dedicated
+`C:\Projects\winget-pkgs-TigerMarkView\` clone, enforces the previous-PR safety gate, synchronizes the
+fork, creates the release branch from current `upstream/master`, copies the exact sealed manifests,
+validates the destination and the final diff, commits, and pushes.
 
-When it ends in `PASS`, its final handoff must say that the **only** remaining action is to create and
-review the `microsoft/winget-pkgs` pull request, and provide the branch and suggested PR command or
-URL. See [Preparing the TigerMarkView WinGet package](winget-tigermarkview.md) for the authoritative
-artifact and clone rules.
+When it ends in `PASS`, its final handoff says that the **only** remaining action is to create and
+review the `microsoft/winget-pkgs` pull request, and gives the branch, the compare URL, and a
+`gh pr create` command. `-PlanOnly` runs the read-only gates and prepares nothing. Rerunning after an
+interruption is safe: it recognises the work already done and makes no second commit or push. See
+[Preparing the TigerMarkView WinGet package](winget-tigermarkview.md) for the authoritative artifact
+and clone rules.
 
-## Current transition procedure
+## The command sequence
 
-Preparation, the CI-success gate, and the release notes are automated (see
-[step 1](#1-ask-an-agent-to-prepare-the-release)). Only the post-release WinGet submission still has
-manual steps, below. These are current-state instructions, not the target human experience.
+The five steps above, as commands. Everything between them is a human decision.
 
-1. Prepare with the helpers, write `.github/release-notes/<version>.md`, and run readiness:
+```powershell
+# 1. Prepare. Deterministic edit, then the judgment-based content, then the read-only report.
+pwsh eng/release-automation/Set-TigerMarkViewReleaseVersion.ps1 -Version <version>
+# write .github/release-notes/<version>.md, update README.md / docs/HELP.md as needed
+pwsh eng/release-automation/Test-TigerMarkViewReleaseReadiness.ps1 -Version <version> -Full
 
-   ```powershell
-   pwsh eng/release-automation/Set-TigerMarkViewReleaseVersion.ps1 -Version <version>
-   # write .github/release-notes/<version>.md, update README.md / docs/HELP.md as needed
-   pwsh eng/release-automation/Test-TigerMarkViewReleaseReadiness.ps1 -Version <version> -Full
-   ```
+# 2. Review the diff, commit, and push to main yourself. Automation never does this.
 
-2. Review, commit, and push. The release workflow's `prerequisites` job now proves the pushed commit
-   is on `origin/main` and that its exact `CI` push run concluded `success` before it builds or tags
-   anything, so wait for that `CI` run, then manually dispatch **Release TigerMarkView** from `main`.
-3. Review the workflow result and draft. The draft notes come from the checked-in
-   `.github/release-notes/<version>.md`; edit on GitHub if needed, then publish manually.
-4. Run the existing post-release gate:
+# 3. Wait for that commit's CI run, then dispatch "Release TigerMarkView" from main by hand.
+#    The workflow's prerequisites job proves the commit is on origin/main and that its exact CI
+#    push run concluded success before it builds or tags anything.
 
-   ```powershell
-   .\eng\winget\Test-TigerMarkViewWinGet.ps1 -Version <version>
-   ```
+# 4. Review the draft - tag, commit, three assets, hashes, and the notes from
+#    .github/release-notes/<version>.md - then publish it yourself.
 
-   Prefer `gh auth login`; existing compatibility token parameters do not define the finished
-   authentication contract. A `PASS` currently validates and retains the sealed manifests but does
-   not manage the fork, branch, commit, or push. Follow the interim submission instructions in the
-   WinGet maintainer document with exceptional care.
+# 5. Prepare and push the WinGet submission branch.
+gh auth status
+.\eng\winget\Prepare-TigerMarkViewWinGetSubmission.ps1 -Version <version>
+
+# 6. Create and review the microsoft/winget-pkgs pull request from the branch step 5 names.
+```
+
+To re-check a published release without touching the winget-pkgs clone, run the gate alone:
+
+```powershell
+.\eng\winget\Test-TigerMarkViewWinGet.ps1 -Version <version>
+```
+
+All of these use the `gh auth login` session; none takes a token.
 
 For an upgrade release, also run the lab gate with `-UpgradeFromInstallerPath` and
 `-UpgradeFromVersion` as documented in [TigerWinLab testing](tigerwinlab-testing.md).
+
+[What was built, and why a few decisions went the way they did](release-automation-implementation-plan.md)
+records the automation's construction; this document and the WinGet guide are the contract.
 
 ## Recovery principles
 

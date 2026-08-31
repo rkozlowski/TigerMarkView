@@ -453,7 +453,17 @@ exit /b 2
 
     # --- The post-release gate consumes the sealed workflow artifact ---
 
-    $gateScript = Get-Content -LiteralPath (Join-Path $wingetDirectory 'Test-TigerMarkViewWinGet.ps1') -Raw
+    # The gate itself lives in the dot-sourceable library, so the submission
+    # orchestrator can require its result without a child process. The command
+    # script is only a thin wrapper around that one function.
+    $gateScript = Get-Content -LiteralPath (Join-Path $wingetDirectory 'WinGetReleaseValidation.ps1') -Raw
+    $gateCommand = Get-Content -LiteralPath (Join-Path $wingetDirectory 'Test-TigerMarkViewWinGet.ps1') -Raw
+    Assert-True ($gateCommand.Contains('Invoke-TigerMarkViewWinGetReleaseValidation')) `
+        'The post-release gate command must run the shared validation function.'
+    foreach ($text in @($gateScript, $gateCommand)) {
+        Assert-True ($text -notmatch 'GH_TOKEN|GITHUB_TOKEN|auth token|-GitHubToken') `
+            'The post-release gate must not read, forward, or log a token.'
+    }
 
     Assert-True ($gateScript.Contains('Get-TigerMarkViewWinGetSealedSubmission')) `
         'The post-release gate must obtain the submission set from the sealed workflow artifact.'
@@ -533,28 +543,26 @@ exit /b 2
             owner = 'rkozlowski'
             name = 'TigerMarkView'
             slug = 'rkozlowski/TigerMarkView'
-            apiRoot = 'https://api.github.com/repos/rkozlowski/TigerMarkView'
-            tokenSource = 'the test harness'
-            hasToken = $true
+            apiRoot = 'repos/rkozlowski/TigerMarkView'
             invoke = {
-                param([Parameter(Mandatory)][string] $Uri)
+                param([Parameter(Mandatory)][string] $Path)
 
                 foreach ($entry in $responses.GetEnumerator()) {
-                    if ($Uri -like $entry.Key) {
-                        if ($null -eq $entry.Value) { throw "HTTP 404 for '$Uri'." }
+                    if ($Path -like $entry.Key) {
+                        if ($null -eq $entry.Value) { throw "HTTP 404 for '$Path'." }
                         return $entry.Value
                     }
                 }
-                throw "The fake GitHub client has no response for '$Uri'."
+                throw "The fake GitHub client has no response for '$Path'."
             }.GetNewClosure()
             download = {
                 param(
-                    [Parameter(Mandatory)][string] $Uri,
+                    [Parameter(Mandatory)][string] $Path,
                     [Parameter(Mandatory)][string] $OutFile
                 )
 
                 if ([string]::IsNullOrWhiteSpace($ArchiveSource)) {
-                    throw "The fake GitHub client was asked to download '$Uri' with no archive."
+                    throw "The fake GitHub client was asked to download '$Path' with no archive."
                 }
                 Copy-Item -LiteralPath $ArchiveSource -Destination $OutFile -Force
             }.GetNewClosure()
@@ -743,6 +751,109 @@ exit /b 2
             -Version $version -Client $offline -ArchivePath $staleArchive.path
     }
     Write-Host 'PASS: a supplied archive is verified against the same recorded digest'
+
+    # --- Every GitHub read goes through the authenticated gh session ---
+
+    # The repository client is a face on the shared gh adapter, so the whole release
+    # chain has one authentication contract. The paths it asks for must be gh api
+    # paths, and no token may appear anywhere in the invocation.
+    $recordedGhArgs = [Collections.Generic.List[object]]::new()
+    $recordingCli = New-TigerMarkViewGitHubCli -Invoker {
+        param([string[]] $GhArgs)
+        $recordedGhArgs.Add($GhArgs)
+        [pscustomobject]@{ ExitCode = 0; StdOut = '{"login":"octocat"}'; StdErr = '' }
+    }.GetNewClosure() -Downloader {
+        param([string[]] $GhArgs, [string] $OutFile)
+        $recordedGhArgs.Add($GhArgs)
+        [IO.File]::WriteAllBytes($OutFile, [byte[]] (1, 2, 3))
+        [pscustomobject]@{ ExitCode = 0; StdErr = '' }
+    }.GetNewClosure()
+    $ghBacked = New-TigerMarkViewGitHubClient -Cli $recordingCli `
+        -RepositoryUrl 'https://github.com/rkozlowski/TigerMarkView'
+    Assert-True ($ghBacked.apiRoot -ceq 'repos/rkozlowski/TigerMarkView') `
+        'The client addresses GitHub by gh api path, not by absolute URL.'
+    $null = & $ghBacked.invoke "$($ghBacked.apiRoot)/releases/tags/v$version"
+    & $ghBacked.download "$($ghBacked.apiRoot)/actions/artifacts/1/zip" (Join-Path $testRoot 'gh-download.bin')
+    Assert-True (@($recordedGhArgs).Count -eq 2) 'Both the read and the download reached the session.'
+    foreach ($invocation in $recordedGhArgs) {
+        Assert-True ($invocation[0] -ceq 'api') 'Every GitHub call is a gh api call.'
+        Assert-True (@($invocation | Where-Object { $_ -match 'ghp_|github_pat_|token' }).Count -eq 0) `
+            'No token ever appears in a gh invocation.'
+    }
+    $libraryText = Get-Content -LiteralPath (Join-Path $wingetDirectory 'TigerMarkViewWinGet.ps1') -Raw
+    Assert-True ($libraryText -notmatch 'GH_TOKEN|GITHUB_TOKEN|auth token|-GitHubToken') `
+        'The WinGet library never reads, forwards, or logs a token.'
+    Write-Host 'PASS: WinGet GitHub reads go through the shared gh session with no token route'
+
+    # --- Provenance-bound reuse of a retained sealed set ---
+
+    # A rerun after an interruption should not re-download what is already proven,
+    # and must never reuse a directory whose provenance no longer matches GitHub.
+    function New-CountingClient {
+        param(
+            [Parameter(Mandatory)][object[]] $Artifacts,
+            [Parameter(Mandatory)][string] $ArchiveSource,
+            [Parameter(Mandatory)][ref] $Counter
+        )
+        $inner = New-FakeGitHubClient -Artifacts $Artifacts -ArchiveSource $ArchiveSource
+        $innerDownload = $inner.download
+        [pscustomobject][ordered]@{
+            owner = $inner.owner
+            name = $inner.name
+            slug = $inner.slug
+            apiRoot = $inner.apiRoot
+            invoke = $inner.invoke
+            download = {
+                param(
+                    [Parameter(Mandatory)][string] $Path,
+                    [Parameter(Mandatory)][string] $OutFile
+                )
+                $Counter.Value++
+                & $innerDownload $Path $OutFile
+            }.GetNewClosure()
+        }
+    }
+
+    $downloads = 0
+    $counting = New-CountingClient -Artifacts @($goodArtifact) -ArchiveSource $sealedArchive.path `
+        -Counter ([ref] $downloads)
+    $reused = Get-TigerMarkViewWinGetSealedSubmission -RepositoryRoot $fakeRepoRoot -Version $version -Client $counting
+    Assert-True ($downloads -eq 0) 'A rerun whose provenance still binds must not re-download the artifact.'
+    Assert-True ($reused.submission.digest -ceq $sealedSet.digest) 'The reused set is still the sealed set.'
+    Assert-True ($reused.provenance.archiveSource -match 'provenance-bound') `
+        'The provenance record says the set was reused rather than downloaded.'
+
+    $forced = Get-TigerMarkViewWinGetSealedSubmission -RepositoryRoot $fakeRepoRoot -Version $version `
+        -Client $counting -Force
+    Assert-True ($downloads -eq 1) '-Force always re-downloads.'
+    Assert-True ($forced.submission.digest -ceq $sealedSet.digest) 'A forced re-download yields the same sealed set.'
+
+    # A different sealed artifact for the same version and commit is a different
+    # binding, so the retained copy is not a cache hit for it.
+    $rerunArtifact = New-FakeArtifactRecord -Name $artifactName -Commit $releaseCommit -Id 424242 `
+        -Digest $sealedArchive.sha256
+    $rebound = New-CountingClient -Artifacts @($rerunArtifact) -ArchiveSource $sealedArchive.path `
+        -Counter ([ref] $downloads)
+    $reacquired = Get-TigerMarkViewWinGetSealedSubmission -RepositoryRoot $fakeRepoRoot -Version $version `
+        -Client $rebound
+    Assert-True ($reacquired.provenance.archiveSource -notmatch 'provenance-bound') `
+        'A changed artifact id invalidates the retained set rather than being reused.'
+    Assert-True ($reacquired.provenance.artifactId -eq 424242) `
+        'The rewritten provenance record names the artifact that was actually verified.'
+
+    # A retained set whose bytes have moved on since the record was written is not a
+    # cache hit either; the sealed archive is re-verified and re-extracted over it.
+    $tamperedPath = Join-Path $reused.submission.directory $release.manifestFileNames[2]
+    Add-Content -LiteralPath $tamperedPath -Value '# tampered' -Encoding utf8NoBOM
+    $tamperedClient = New-CountingClient -Artifacts @($rerunArtifact) -ArchiveSource $sealedArchive.path `
+        -Counter ([ref] $downloads)
+    $restored = Get-TigerMarkViewWinGetSealedSubmission -RepositoryRoot $fakeRepoRoot -Version $version `
+        -Client $tamperedClient
+    Assert-True ($restored.provenance.archiveSource -notmatch 'provenance-bound') `
+        'A retained set that no longer hashes to its record is not reused.'
+    Assert-True ($restored.submission.digest -ceq $sealedSet.digest) `
+        'Re-extracting the verified archive restores the sealed bytes.'
+    Write-Host 'PASS: a retained sealed set is reused only while its whole provenance still binds'
 
     # The published installer is what the sealed manifests must describe. A release whose
     # asset hashes to something else fails the same seal the workflow ran.

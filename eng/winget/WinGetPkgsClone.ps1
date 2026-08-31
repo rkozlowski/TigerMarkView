@@ -22,8 +22,10 @@
         `ItTiger-TigerMarkView-`. Open or draft blocks; merged or manually closed
         passes.
 
-    Nothing here fetches, writes, resets, or pushes. Mutation belongs to the
-    guarded submission phase, which runs only after every check here is PASS.
+    Nothing here fetches, writes, resets, or pushes. Mutation belongs to
+    WinGetPkgsSubmission.ps1, which runs only after every check here is PASS. The
+    one thing the two share is Invoke-TigerCloneGit, so there is a single way this
+    repository invokes git against the clone.
 #>
 
 Set-StrictMode -Version Latest
@@ -209,7 +211,15 @@ function Get-TigerWinGetPkgsInterruptedOperation {
 function Invoke-TigerCloneGit {
     <#
         .SYNOPSIS
-        Runs a read-only git command in a clone and returns exit code and output.
+        Runs a git command in a clone and returns its exit code and output.
+
+        .DESCRIPTION
+        The one way this repository's automation invokes git against the dedicated
+        clone, so failures are always values rather than terminating errors and a
+        native exit code can never leak into the caller's own status. Every check
+        here uses it read-only; the guarded mutation in WinGetPkgsSubmission.ps1
+        uses the same function to write, which is why it lives here rather than
+        being duplicated.
     #>
     [CmdletBinding()]
     param(
@@ -229,6 +239,40 @@ function Invoke-TigerCloneGit {
     finally {
         $PSNativeCommandUseErrorActionPreference = $previous
         $global:LASTEXITCODE = 0
+    }
+}
+
+function Get-TigerCloneRemoteUrl {
+    <#
+        .SYNOPSIS
+        Reads both the URL a remote declares and the URL git will really contact.
+
+        .DESCRIPTION
+        These are not always the same. `git config --get remote.<name>.url` is what
+        the clone was configured with; `git remote get-url` is that value after any
+        url.<base>.insteadOf rewriting. Identity is judged on the declared value,
+        and a difference between the two is reported separately rather than being
+        hidden behind whichever one happened to be read.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $ClonePath,
+
+        [Parameter(Mandatory)]
+        [string] $Remote
+    )
+
+    $declared = (Invoke-TigerCloneGit -ClonePath $ClonePath `
+        -GitArgs @('config', '--get', "remote.$Remote.url")).Output
+    $effective = (Invoke-TigerCloneGit -ClonePath $ClonePath `
+        -GitArgs @('remote', 'get-url', $Remote)).Output
+
+    [pscustomobject][ordered]@{
+        remote = $Remote
+        declared = $declared
+        effective = $effective
+        isRedirected = -not [string]::IsNullOrWhiteSpace($declared) -and $effective -cne $declared
     }
 }
 
@@ -259,12 +303,38 @@ function Test-TigerWinGetPkgsCloneIdentity {
         Returns a list of checks. An absent clone is BLOCKED (the orchestrator may
         create it from the plan); any wrong, dirty, or interrupted existing clone
         is FAIL and must be resolved by hand.
+
+        .PARAMETER SubmissionBranch
+        The submission branch this run would prepare, when there is one. A previous
+        successful run deliberately leaves the clone on that branch so its diff can
+        be read, so finding HEAD there is expected rather than noteworthy. Without
+        it, only the default branch is expected.
+
+        .PARAMETER SubmissionPath
+        The repository-relative version directory this run owns, when there is one.
+        An interrupted run can leave exactly those three files in the worktree, and
+        a rerun re-copies and rehashes them before anything is committed, so they
+        are resumable rather than dirty. Everything outside that directory still has
+        to be clean. Without it - the standalone read-only gate - nothing at all is
+        tolerated.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [object] $Config
+        [object] $Config,
+
+        [string] $SubmissionBranch,
+
+        [string] $SubmissionPath
     )
+
+    $ownedPrefix = if ([string]::IsNullOrWhiteSpace($SubmissionPath)) { $null } else { "$SubmissionPath/" }
+    $isOwned = {
+        param([string] $Path)
+        $null -ne $ownedPrefix -and
+            ($Path -replace '\\', '/').StartsWith($ownedPrefix, [StringComparison]::Ordinal)
+    }.GetNewClosure()
+    $porcelainPath = { param([string] $Line) ($Line -replace '^.{3}', '').Trim().Trim('"') }
 
     $checks = [Collections.Generic.List[object]]::new()
     $clonePath = $Config.clonePath
@@ -288,37 +358,63 @@ function Test-TigerWinGetPkgsCloneIdentity {
         -Remediation 'Remove or relocate the directory so the clone can be created cleanly.'))
     if (-not $isWorktree) { return $checks.ToArray() }
 
-    $originUrl = (Invoke-TigerCloneGit -ClonePath $clonePath -GitArgs @('remote', 'get-url', 'origin')).Output
+    $origin = Get-TigerCloneRemoteUrl -ClonePath $clonePath -Remote 'origin'
     $checks.Add((New-TigerMarkViewReleaseAssertion -Id 'clone/origin' `
-        -Condition (Test-TigerGitHubSlugMatch -Url $originUrl -ExpectedSlug $Config.forkSlug) `
+        -Condition (Test-TigerGitHubSlugMatch -Url $origin.declared -ExpectedSlug $Config.forkSlug) `
         -PassObserved "origin is $($Config.forkSlug)." `
-        -FailObserved "origin is '$originUrl', not $($Config.forkSlug)." `
-        -Expected $Config.forkSlug -Evidence $originUrl `
+        -FailObserved "origin is '$($origin.declared)', not $($Config.forkSlug)." `
+        -Expected $Config.forkSlug -Evidence $origin.declared `
         -Remediation 'Never silently rewrite the remote; resolve the clone identity by hand.'))
 
-    $upstreamUrl = (Invoke-TigerCloneGit -ClonePath $clonePath -GitArgs @('remote', 'get-url', 'upstream')).Output
+    $upstream = Get-TigerCloneRemoteUrl -ClonePath $clonePath -Remote 'upstream'
     $checks.Add((New-TigerMarkViewReleaseAssertion -Id 'clone/upstream' `
-        -Condition (Test-TigerGitHubSlugMatch -Url $upstreamUrl -ExpectedSlug $Config.upstreamSlug) `
+        -Condition (Test-TigerGitHubSlugMatch -Url $upstream.declared -ExpectedSlug $Config.upstreamSlug) `
         -PassObserved "upstream is $($Config.upstreamSlug)." `
-        -FailObserved "upstream is '$upstreamUrl', not $($Config.upstreamSlug)." `
-        -Expected $Config.upstreamSlug -Evidence $upstreamUrl `
+        -FailObserved "upstream is '$($upstream.declared)', not $($Config.upstreamSlug)." `
+        -Expected $Config.upstreamSlug -Evidence $upstream.declared `
         -Remediation "Add it: git -C `"$clonePath`" remote add upstream $($Config.upstreamUrl)"))
 
+    # A url.<base>.insteadOf rule can send a correctly-declared remote somewhere
+    # else entirely. Neither URL alone would show that, so both are read and any
+    # difference is named with the address git will really contact.
+    $redirected = @(@($origin, $upstream) | Where-Object { $_.isRedirected })
+    $checks.Add((New-TigerMarkViewReleaseAssertion -Id 'clone/remote-redirect' `
+        -Condition ($redirected.Count -eq 0) `
+        -PassObserved 'Git contacts both remotes at the URLs the clone declares.' `
+        -FailObserved ("Git rewrites " + (($redirected | ForEach-Object {
+                "$($_.remote) '$($_.declared)' to '$($_.effective)'" }) -join '; ') +
+            ' through a url.<base>.insteadOf rule, so the submission would not reach the declared repository.') `
+        -FailStatus 'WARN' `
+        -Evidence (($redirected | ForEach-Object { "$($_.remote)=$($_.effective)" }) -join ', ') `
+        -Remediation 'Confirm the redirect is deliberate, or remove the url.<base>.insteadOf rule.'))
+
     $currentBranch = (Invoke-TigerCloneGit -ClonePath $clonePath -GitArgs @('rev-parse', '--abbrev-ref', 'HEAD')).Output
+    $expectedBranches = @($Config.defaultBranch) +
+        @(if (-not [string]::IsNullOrWhiteSpace($SubmissionBranch)) { $SubmissionBranch })
     $checks.Add((New-TigerMarkViewReleaseAssertion -Id 'clone/default-branch' `
-        -Condition ($currentBranch -ceq $Config.defaultBranch) `
-        -PassObserved "HEAD is on '$($Config.defaultBranch)'." `
-        -FailObserved "HEAD is on '$currentBranch', not '$($Config.defaultBranch)'." `
+        -Condition ($currentBranch -cin $expectedBranches) `
+        -PassObserved "HEAD is on '$currentBranch'." `
+        -FailObserved "HEAD is on '$currentBranch', not $(($expectedBranches | ForEach-Object { "'$_'" }) -join ' or ')." `
         -FailStatus 'WARN' -Evidence $currentBranch `
         -Remediation "Check out '$($Config.defaultBranch)' before synchronizing."))
 
-    $porcelain = (Invoke-TigerCloneGit -ClonePath $clonePath -GitArgs @('status', '--porcelain')).Output
+    $porcelain = (Invoke-TigerCloneGit -ClonePath $clonePath `
+        -GitArgs @('status', '--porcelain', '--untracked-files=all')).Output
     $dirtyLines = @($porcelain -split "\r?\n" | Where-Object { $_ })
+    $resumableDirty = @($dirtyLines | Where-Object { & $isOwned (& $porcelainPath $_) })
+    $foreignDirty = @($dirtyLines | Where-Object { -not (& $isOwned (& $porcelainPath $_)) })
     $checks.Add((New-TigerMarkViewReleaseAssertion -Id 'clone/clean' `
-        -Condition ($dirtyLines.Count -eq 0) `
-        -PassObserved 'The worktree and index are clean.' `
-        -FailObserved ("The worktree has $($dirtyLines.Count) uncommitted change(s): " +
-            (($dirtyLines | Select-Object -First 5) -join ' | ')) `
+        -Condition ($foreignDirty.Count -eq 0) `
+        -PassObserved $(if ($resumableDirty.Count -eq 0) {
+                'The worktree and index are clean.'
+            }
+            else {
+                "The worktree is clean apart from $($resumableDirty.Count) file(s) under " +
+                    "$SubmissionPath, which an interrupted run leaves behind and this run re-copies " +
+                    'and rehashes before committing anything.'
+            }) `
+        -FailObserved ("The worktree has $($foreignDirty.Count) uncommitted change(s) outside this " +
+            'submission: ' + (($foreignDirty | Select-Object -First 5) -join ' | ')) `
         -Remediation 'Commit, stash, or discard the changes so synchronization starts from a clean state.'))
 
     $manifestFull = Join-Path $clonePath ($Config.manifestPath -replace '/', [IO.Path]::DirectorySeparatorChar)
@@ -326,11 +422,12 @@ function Test-TigerWinGetPkgsCloneIdentity {
     if (Test-Path -LiteralPath $manifestFull) {
         $untrackedManifest = @((Invoke-TigerCloneGit -ClonePath $clonePath `
             -GitArgs @('status', '--porcelain', '--untracked-files=all', '--', $Config.manifestPath)).Output `
-            -split "\r?\n" | Where-Object { $_ })
+            -split "\r?\n" | Where-Object { $_ } | Where-Object { -not (& $isOwned (& $porcelainPath $_)) })
     }
     $checks.Add((New-TigerMarkViewReleaseAssertion -Id 'clone/no-untracked-manifests' `
         -Condition ($untrackedManifest.Count -eq 0) `
-        -PassObserved "Nothing untracked under $($Config.manifestPath) would be overwritten." `
+        -PassObserved ("Nothing untracked under $($Config.manifestPath)" +
+            "$(if ($null -ne $ownedPrefix) { " outside $SubmissionPath" }) would be overwritten.") `
         -FailObserved ("Untracked or modified files exist under $($Config.manifestPath): " +
             (($untrackedManifest | Select-Object -First 5) -join ' | ')) `
         -Remediation 'Remove the stray manifest files before a submission branch is prepared.'))

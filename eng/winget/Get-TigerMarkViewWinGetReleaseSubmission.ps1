@@ -23,10 +23,10 @@
     locally generated set describes a locally built installer, whose hash is not the
     published one, and submitting it is the failure this script exists to prevent.
 
-    Listing the artifact needs no credential on a public repository; downloading it
-    needs a token with actions:read. Tokens are read from -GitHubToken, then
-    GH_TOKEN, then GITHUB_TOKEN, then 'gh auth token'. On a machine with none, pass
-    an already-downloaded artifact archive with -ArchivePath; it is verified against
+    GitHub is reached only through the authenticated `gh` session that
+    `gh auth login` established. No token is accepted, read from the environment,
+    or logged. On a machine that cannot reach the artifact endpoint at all, pass an
+    already-downloaded artifact archive with -ArchivePath; it is verified against
     the same recorded digest, so it is a different route to the same bytes rather
     than a weaker check.
 
@@ -41,11 +41,9 @@
     When supplied, the submission digest the sealed set must reproduce - the value
     the release workflow's sealing step recorded.
 
-    .PARAMETER GitHubToken
-    A token with actions:read. Prefer GH_TOKEN or gh auth login.
-
     .PARAMETER Force
-    Re-downloads even when a retained archive already matches the recorded digest.
+    Re-downloads even when a retained, provenance-bound copy already matches
+    everything GitHub records for the artifact.
 
     .EXAMPLE
     .\eng\winget\Get-TigerMarkViewWinGetReleaseSubmission.ps1 -Version 0.8.1
@@ -55,7 +53,6 @@ param(
     [string] $Version,
     [string] $ArchivePath,
     [string] $ExpectedSubmissionDigest,
-    [string] $GitHubToken,
     [switch] $Force,
     [switch] $Json
 )
@@ -70,7 +67,7 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = [string] (Get-TigerMarkViewWinGetVersionProperty -RepositoryRoot $repoRoot).Version
 }
 
-$client = New-TigerMarkViewGitHubClient -Token $GitHubToken
+$client = New-TigerMarkViewGitHubClient
 $acquired = Get-TigerMarkViewWinGetSealedSubmission `
     -RepositoryRoot $repoRoot `
     -Version $Version `

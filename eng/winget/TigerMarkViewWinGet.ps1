@@ -19,9 +19,16 @@
     TigerMarkView-WinGet-<version>-<commit>. The acquisition functions below fetch
     exactly that artifact, so the post-release gate never has to trust a directory
     that merely happens to exist.
+
+    GitHub is reached only through the shared, authenticated `gh` adapter in
+    eng/release-automation/ReleaseAutomation.ps1, and results are reported in that
+    file's PASS / WARN / BLOCKED / FAIL vocabulary. Nothing here accepts a token
+    argument, reads one from the environment, or logs one.
 #>
 
 Set-StrictMode -Version Latest
+
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'release-automation' 'ReleaseAutomation.ps1')
 
 function Get-TigerMarkViewWinGetRelease {
     <#
@@ -316,65 +323,33 @@ function Get-TigerMarkViewWinGetSealedSubmissionDirectory {
     Join-Path (Get-TigerMarkViewWinGetReleaseRoot -RepositoryRoot $RepositoryRoot -Version $Version) 'submission'
 }
 
-function Resolve-TigerMarkViewGitHubToken {
-    <#
-        .SYNOPSIS
-        Finds a GitHub token that can read this repository's workflow artifacts.
-
-        .DESCRIPTION
-        Listing a public repository's artifacts needs no credential, but downloading
-        one needs actions:read. The sources are tried in the order a maintainer
-        would expect and the chosen source is named in the report; the token value
-        itself is never printed or written to disk.
-    #>
-    [CmdletBinding()]
-    param(
-        [string] $Token
-    )
-
-    if (-not [string]::IsNullOrWhiteSpace($Token)) {
-        return [pscustomobject][ordered]@{ token = $Token; source = 'the -GitHubToken argument' }
-    }
-    foreach ($name in @('GH_TOKEN', 'GITHUB_TOKEN')) {
-        $value = [Environment]::GetEnvironmentVariable($name)
-        if (-not [string]::IsNullOrWhiteSpace($value)) {
-            return [pscustomobject][ordered]@{ token = $value; source = $name }
-        }
-    }
-    $gh = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($null -ne $gh) {
-        try {
-            $previous = $global:LASTEXITCODE
-            $value = (& $gh.Source auth token 2>$null | Select-Object -First 1)
-            $exitCode = $LASTEXITCODE
-            $global:LASTEXITCODE = $previous
-            if ($exitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($value)) {
-                return [pscustomobject][ordered]@{ token = ([string] $value).Trim(); source = 'gh auth token' }
-            }
-        }
-        catch {
-            # An unusable gh is not an error here; the next caller reports that no
-            # token was found at all, which is the actionable message.
-        }
-    }
-    [pscustomobject][ordered]@{ token = $null; source = $null }
-}
-
 function New-TigerMarkViewGitHubClient {
     <#
         .SYNOPSIS
-        Binds every GitHub read this gate performs to one repository and one token.
+        Binds every GitHub read this gate performs to one repository and one
+        authenticated `gh` session.
 
         .DESCRIPTION
-        The reads are expressed as two script blocks so a test can substitute a
-        recorded API without a network, and so there is exactly one place that
-        decides how a redirect and an authorization header interact.
+        This is a repository-scoped face on the shared adapter in
+        eng/release-automation/ReleaseAutomation.ps1, so there is one place that
+        decides how GitHub is reached and one authentication contract for the
+        whole release chain: whatever `gh auth login` established.
+
+        No token is accepted, read from the environment, logged, or written to
+        disk. A machine without a usable session repairs it with `gh auth login`.
+
+        .PARAMETER Cli
+        An existing shared adapter. One is created when this is omitted; tests pass
+        a fake so no check here needs a credential or a network.
+
+        .PARAMETER RepositoryUrl
+        The repository the reads are bound to. Defaults to Version.props.
     #>
     [CmdletBinding()]
     param(
-        [string] $RepositoryUrl,
+        [object] $Cli,
 
-        [string] $Token
+        [string] $RepositoryUrl
     )
 
     if ([string]::IsNullOrWhiteSpace($RepositoryUrl)) {
@@ -386,76 +361,26 @@ function New-TigerMarkViewGitHubClient {
     }
     $owner = $Matches.owner
     $name = $Matches.name
-    $resolved = Resolve-TigerMarkViewGitHubToken -Token $Token
-    $bearer = $resolved.token
-
-    $headers = [ordered]@{
-        'User-Agent' = 'TigerMarkView-WinGet-Gate'
-        'Accept' = 'application/vnd.github+json'
-        'X-GitHub-Api-Version' = '2022-11-28'
-    }
+    if ($null -eq $Cli) { $Cli = New-TigerMarkViewGitHubCli }
+    $adapter = $Cli
 
     [pscustomobject][ordered]@{
         owner = $owner
         name = $name
         slug = "$owner/$name"
-        apiRoot = "https://api.github.com/repos/$owner/$name"
-        tokenSource = $resolved.source
-        hasToken = -not [string]::IsNullOrWhiteSpace($bearer)
+        # A `gh api` path, not an absolute URL: the session decides the host.
+        apiRoot = "repos/$owner/$name"
+        cli = $adapter
         invoke = {
-            param([Parameter(Mandatory)][string] $Uri)
-
-            $requestHeaders = [Collections.Specialized.OrderedDictionary]::new()
-            foreach ($entry in $headers.GetEnumerator()) { $requestHeaders[$entry.Key] = $entry.Value }
-            if (-not [string]::IsNullOrWhiteSpace($bearer)) {
-                $requestHeaders['Authorization'] = "Bearer $bearer"
-            }
-            Invoke-RestMethod -Uri $Uri -Headers $requestHeaders -MaximumRedirection 5 -ErrorAction Stop
+            param([Parameter(Mandatory)][string] $Path)
+            & $adapter.api $Path
         }.GetNewClosure()
         download = {
             param(
-                [Parameter(Mandatory)][string] $Uri,
+                [Parameter(Mandatory)][string] $Path,
                 [Parameter(Mandatory)][string] $OutFile
             )
-
-            if ([string]::IsNullOrWhiteSpace($bearer)) {
-                throw ('Downloading a GitHub Actions artifact requires a token with actions:read. ' +
-                    'Set GH_TOKEN or GITHUB_TOKEN, sign in with gh auth login, or pass -GitHubToken.')
-            }
-            $requestHeaders = [Collections.Specialized.OrderedDictionary]::new()
-            foreach ($entry in $headers.GetEnumerator()) { $requestHeaders[$entry.Key] = $entry.Value }
-            $requestHeaders['Authorization'] = "Bearer $bearer"
-
-            $progress = $ProgressPreference
-            $ProgressPreference = 'SilentlyContinue'
-            try {
-                # The artifact endpoint answers 302 to a storage host that rejects a
-                # GitHub Authorization header, so the redirect is followed by hand and
-                # the credential is deliberately not carried across.
-                $response = Invoke-WebRequest -Uri $Uri -Headers $requestHeaders `
-                    -MaximumRedirection 0 -SkipHttpErrorCheck -ErrorAction Stop
-                $status = [int] $response.StatusCode
-                if ($status -in 301, 302, 303, 307, 308) {
-                    $location = @($response.Headers['Location'])[0]
-                    if ([string]::IsNullOrWhiteSpace($location)) {
-                        throw "GitHub answered $status for '$Uri' without a Location header."
-                    }
-                    Invoke-WebRequest -Uri $location -OutFile $OutFile -MaximumRedirection 5 -ErrorAction Stop
-                }
-                elseif ($status -eq 200) {
-                    [IO.File]::WriteAllBytes($OutFile, $response.Content)
-                }
-                elseif ($status -in 401, 403) {
-                    throw ("GitHub refused the artifact download with HTTP $status. The token was " +
-                        'accepted for reading but lacks actions:read on this repository.')
-                }
-                else {
-                    throw "GitHub answered HTTP $status for '$Uri'."
-                }
-            }
-            finally {
-                $ProgressPreference = $progress
-            }
+            $null = & $adapter.downloadApi $Path $OutFile
         }.GetNewClosure()
     }
 }
@@ -597,7 +522,7 @@ function Find-TigerMarkViewWinGetWorkflowArtifact {
         createdUtc = [string] $artifact.created_at
         workflowRunId = if ($null -ne $artifact.PSObject.Properties['workflow_run'] -and
             $null -ne $artifact.workflow_run) { [long] $artifact.workflow_run.id } else { 0L }
-        downloadUrl = "$($Client.apiRoot)/actions/artifacts/$([long] $artifact.id)/zip"
+        downloadPath = "$($Client.apiRoot)/actions/artifacts/$([long] $artifact.id)/zip"
         candidates = $matched.Count
     }
 }
@@ -659,7 +584,7 @@ function Save-TigerMarkViewWinGetWorkflowArtifact {
     }
     else {
         Write-Host "Downloading the sealed WinGet artifact '$($Artifact.name)' from $($Client.slug)."
-        & $Client.download $Artifact.downloadUrl $retainedArchive
+        & $Client.download $Artifact.downloadPath $retainedArchive
     }
 
     if (-not (Test-Path -LiteralPath $retainedArchive -PathType Leaf)) {
@@ -708,6 +633,91 @@ function Save-TigerMarkViewWinGetWorkflowArtifact {
     }
 }
 
+function Resolve-TigerMarkViewWinGetRetainedSubmission {
+    <#
+        .SYNOPSIS
+        Reuses an already-retained sealed set, but only when its provenance record
+        still binds it to exactly the artifact GitHub names now.
+
+        .DESCRIPTION
+        Rerunning the post-release gate after an interruption should not re-download
+        an artifact that is already on disk and already proven. It must also never
+        reuse one merely because a directory of the right name exists: a retag, a
+        re-run release workflow, or a hand-edited manifest all produce exactly that
+        directory with different meaning.
+
+        So reuse is conditional on the whole binding still holding - version, tag,
+        release commit, artifact name and id, GitHub's recorded artifact digest, the
+        retained archive still hashing to that digest, and the extracted set still
+        hashing to the submission digest the record claims. Returns $null, meaning
+        'download it', whenever anything does not line up. It never repairs, deletes,
+        or rewrites; a mismatch simply is not a cache hit.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $ReleaseRoot,
+
+        [Parameter(Mandatory)]
+        [string] $Version,
+
+        [Parameter(Mandatory)]
+        [object] $Tagged,
+
+        [Parameter(Mandatory)]
+        [object] $Artifact,
+
+        [Parameter(Mandatory)]
+        [string] $Repository
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Artifact.digest)) { return $null }
+
+    $recordPath = Join-Path $ReleaseRoot 'submission.json'
+    if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf)) { return $null }
+    $record = $null
+    try { $record = Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json }
+    catch { return $null }
+    if ($null -eq $record) { return $null }
+
+    foreach ($name in @('version', 'tag', 'commit', 'repository', 'artifactName', 'artifactId',
+            'artifactDigest', 'archivePath', 'archiveSha256', 'submissionDirectory', 'submissionDigest')) {
+        if ($null -eq $record.PSObject.Properties[$name]) { return $null }
+    }
+
+    $bindings = @(
+        ([string] $record.version) -ceq $Version
+        ([string] $record.tag) -ceq [string] $Tagged.tag
+        ([string] $record.commit) -ceq [string] $Tagged.commit
+        ([string] $record.repository) -ceq $Repository
+        ([string] $record.artifactName) -ceq [string] $Artifact.name
+        ([long] $record.artifactId) -eq [long] $Artifact.id
+        ([string] $record.artifactDigest) -ceq [string] $Artifact.digest
+    )
+    if (@($bindings | Where-Object { -not $_ }).Count -ne 0) { return $null }
+
+    $archivePath = [string] $record.archivePath
+    if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) { return $null }
+    $archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($archiveHash -cne [string] $Artifact.digest) { return $null }
+
+    $submissionDirectory = [string] $record.submissionDirectory
+    if (-not (Test-Path -LiteralPath $submissionDirectory -PathType Container)) { return $null }
+    $retained = $null
+    try { $retained = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $submissionDirectory -Version $Version }
+    catch { return $null }
+    if ($retained.digest -cne ([string] $record.submissionDigest)) { return $null }
+
+    Write-Host ("Reusing the retained sealed set for $($Tagged.tag): its provenance still binds " +
+        "artifact $($Artifact.name) (id $($Artifact.id)) at commit $($Tagged.commit).")
+    [pscustomobject][ordered]@{
+        source = "the provenance-bound retained set '$submissionDirectory'"
+        archivePath = $archivePath
+        archiveSha256 = $archiveHash
+        submissionDirectory = [IO.Path]::GetFullPath($submissionDirectory)
+    }
+}
+
 function Get-TigerMarkViewWinGetSealedSubmission {
     <#
         .SYNOPSIS
@@ -724,6 +734,13 @@ function Get-TigerMarkViewWinGetSealedSubmission {
         The provenance record written beside the submission is what lets a later
         run, or a reader of the result file, say which artifact these bytes came
         from without trusting the directory's mere existence.
+
+        That record is also what makes a rerun cheap without making it careless.
+        A retained submission directory is reused only when every binding in the
+        record still matches what GitHub says now - version, tag, release commit,
+        artifact name, artifact id, and GitHub's recorded artifact digest - and the
+        directory still reads back to the submission digest it recorded. Any one
+        binding that has moved re-downloads instead; -Force always re-downloads.
     #>
     [CmdletBinding()]
     param(
@@ -749,8 +766,16 @@ function Get-TigerMarkViewWinGetSealedSubmission {
     $tagged = Resolve-TigerMarkViewWinGetReleaseCommit -Client $Client -Version $Version
     Write-Host "Release $($tagged.tag) is published at commit $($tagged.commit)."
     $artifact = Find-TigerMarkViewWinGetWorkflowArtifact -Client $Client -Version $Version -Commit $tagged.commit
-    $placed = Save-TigerMarkViewWinGetWorkflowArtifact -Client $Client -Artifact $artifact `
-        -ReleaseRoot $releaseRoot -Version $Version -ArchivePath $ArchivePath -Force:$Force
+
+    $placed = $null
+    if ([string]::IsNullOrWhiteSpace($ArchivePath) -and -not $Force) {
+        $placed = Resolve-TigerMarkViewWinGetRetainedSubmission -ReleaseRoot $releaseRoot `
+            -Version $Version -Tagged $tagged -Artifact $artifact -Repository $Client.slug
+    }
+    if ($null -eq $placed) {
+        $placed = Save-TigerMarkViewWinGetWorkflowArtifact -Client $Client -Artifact $artifact `
+            -ReleaseRoot $releaseRoot -Version $Version -ArchivePath $ArchivePath -Force:$Force
+    }
 
     $submission = Read-TigerMarkViewWinGetSubmissionSet `
         -ManifestDirectory $placed.submissionDirectory -Version $Version
@@ -872,96 +897,18 @@ function Invoke-TigerMarkViewWinGetValidation {
     }
 }
 
-function New-TigerMarkViewWinGetCheck {
-    <#
-        .SYNOPSIS
-        Records one named observation about a release's WinGet readiness.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string] $Name,
-
-        [Parameter(Mandatory)]
-        [ValidateSet('PASS', 'WARN', 'FAIL')]
-        [string] $Status,
-
-        [Parameter(Mandatory)]
-        [string] $Message
-    )
-
-    [pscustomobject][ordered]@{ name = $Name; status = $Status; message = $Message }
-}
-
-function New-TigerMarkViewWinGetAssertion {
-    <#
-        .SYNOPSIS
-        Turns a condition into a PASS or FAIL check.
-
-        .DESCRIPTION
-        Reporting rather than throwing is deliberate: one run should show every
-        disagreement between the manifests and the published release, not stop at
-        the first one a maintainer would then have to rediscover.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string] $Name,
-
-        [Parameter(Mandatory)]
-        [bool] $Condition,
-
-        [Parameter(Mandatory)]
-        [string] $Message,
-
-        [Parameter(Mandatory)]
-        [string] $FailureMessage
-    )
-
-    if ($Condition) {
-        New-TigerMarkViewWinGetCheck -Name $Name -Status 'PASS' -Message $Message
-    }
-    else {
-        New-TigerMarkViewWinGetCheck -Name $Name -Status 'FAIL' -Message $FailureMessage
-    }
-}
-
-function Get-TigerMarkViewWinGetVerdict {
-    <#
-        .SYNOPSIS
-        Reduces a check list to PASS or FAIL.
-
-        .DESCRIPTION
-        A warning is something a maintainer must read, not something that blocks a
-        submission; only a FAIL does that. An empty check list is a FAIL, because
-        nothing was proven.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [AllowEmptyCollection()]
-        [object[]] $Checks
-    )
-
-    $failed = @($Checks | Where-Object { $_.status -ceq 'FAIL' })
-    $warned = @($Checks | Where-Object { $_.status -ceq 'WARN' })
-    $passed = @($Checks | Where-Object { $_.status -ceq 'PASS' })
-
-    [pscustomobject][ordered]@{
-        status = if (@($Checks).Count -eq 0 -or $failed.Count -gt 0) { 'FAIL' } else { 'PASS' }
-        passed = $passed.Count
-        warned = $warned.Count
-        failed = $failed.Count
-        total = @($Checks).Count
-    }
-}
-
 function Format-TigerMarkViewWinGetSummary {
     <#
         .SYNOPSIS
-        Renders a readiness result as coloured lines.
+        Renders a post-release validation result as coloured lines.
 
         .DESCRIPTION
+        The checks themselves are the shared release-automation result objects, so
+        the status vocabulary here is the same PASS / WARN / BLOCKED / FAIL the rest
+        of the release chain uses. What this adds is the WinGet-specific evidence a
+        maintainer needs in front of them - the published installer, the sealed
+        artifact's provenance, and the exact three files a pull request would carry.
+
         One layout serves both the terminal and the summary file a run leaves
         behind, so the record a maintainer keeps is the report they read.
     #>
@@ -979,13 +926,18 @@ function Format-TigerMarkViewWinGetSummary {
         $colour = switch ([string] $check.status) {
             'PASS' { 'DarkGray' }
             'WARN' { 'Yellow' }
+            'BLOCKED' { 'Yellow' }
             default { 'Red' }
         }
-        & $line ('  {0,-4} {1,-34} {2}' -f $check.status, $check.name, $check.message) $colour
+        & $line ('  {0,-8} {1,-34} {2}' -f $check.status, $check.id, $check.observed) $colour
+        if (-not [string]::IsNullOrWhiteSpace([string] $check.remediation)) {
+            & $line ('           -> {0}' -f $check.remediation) $colour
+        }
     }
 
     & $line
-    & $line "  $($Result.summary.passed) passed, $($Result.summary.warned) warned, $($Result.summary.failed) failed"
+    & $line ("  $($Result.summary.passed) passed, $($Result.summary.warned) warned, " +
+        "$($Result.summary.blocked) blocked, $($Result.summary.failed) failed")
     & $line "  Installer: $($Result.installer.url)"
     & $line "  Published SHA-256: $($Result.installer.publishedSha256)"
     if ($null -ne $Result.PSObject.Properties['provenance'] -and $null -ne $Result.provenance) {
@@ -993,20 +945,26 @@ function Format-TigerMarkViewWinGetSummary {
         & $line "  Sealed artifact: $($Result.provenance.artifactName)"
         & $line "    Workflow run $($Result.provenance.workflowRunId) at commit $($Result.provenance.commit)"
         & $line "    Archive SHA-256: $($Result.provenance.archiveSha256)"
+        & $line "    Archive source: $($Result.provenance.archiveSource)"
     }
-    & $line
-    & $line "  Files ready, unchanged, for microsoft/winget-pkgs at $($Result.submission.path):"
-    foreach ($file in @($Result.submission.files)) {
-        & $line "    $($file.name)"
-        & $line "      $($file.sourcePath)"
+    if ($null -ne $Result.PSObject.Properties['submission'] -and $null -ne $Result.submission) {
+        & $line
+        & $line "  Files ready, unchanged, for microsoft/winget-pkgs at $($Result.submission.path):"
+        foreach ($file in @($Result.submission.files)) {
+            & $line "    $($file.name)"
+            & $line "      $($file.sourcePath)"
+        }
+        & $line "  Submission digest: $($Result.submission.digest)"
     }
-    & $line "  Submission digest: $($Result.submission.digest)"
     & $line
     & $line "  Machine-readable result: $($Result.resultPath)"
 
     & $line
-    if ($Result.status -ceq 'PASS') {
-        & $line "PASS: TigerMarkView $($Result.version) is ready for a winget-pkgs pull request." 'Green'
+    if ($Result.status -ceq 'PASS' -or $Result.status -ceq 'WARN') {
+        & $line "$($Result.status): TigerMarkView $($Result.version) is ready for a winget-pkgs pull request." 'Green'
+    }
+    elseif ($Result.status -ceq 'BLOCKED') {
+        & $line "BLOCKED: a required checkpoint for TigerMarkView $($Result.version) is not complete." 'Yellow'
     }
     else {
         & $line "FAIL: TigerMarkView $($Result.version) is not ready for a winget-pkgs pull request." 'Red'

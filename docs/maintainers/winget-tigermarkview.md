@@ -8,16 +8,13 @@ The community package identifier is `ItTiger.TigerMarkView`. The fork is
 Do not advertise `winget install ItTiger.TigerMarkView` as live until the first pull request is
 accepted and the community source returns the package.
 
-> **Transition status:** the release workflow already generates, validates, and seals the
-> authoritative manifests, and `Test-TigerMarkViewWinGet.ps1` validates them after publication. The
-> read-only clone safety layer now exists: `eng/winget/winget-pkgs.clone.json` (the narrowly scoped
-> clone configuration) and `eng/winget/WinGetPkgsClone.ps1` (config validation, canonical
-> GitHub-slug comparison, interrupted-operation detection, clone-identity checks, and the
-> project-specific previous-PR gate), covered by `eng/winget/tests/WinGetPkgsClone.Tests.ps1`. The
-> one-command fork/branch/commit/push orchestrator described below still ties these together with the
-> artifact and lab validation, performs the synchronization and mutation, and is not implemented yet.
-> See [the implementation plan](release-automation-implementation-plan.md) and the
-> [current interim procedure](#current-interim-procedure).
+This document is the contract, and the automation it describes is implemented. After the human
+publishes the GitHub Release, one command does everything that remains except opening the pull
+request:
+
+```powershell
+.\eng\winget\Prepare-TigerMarkViewWinGetSubmission.ps1 -Version <version>
+```
 
 ## The authoritative artifact
 
@@ -38,8 +35,8 @@ release workflow generated and validated. Nothing downstream regenerates or edit
 | --- | --- |
 | `Prepare-TigerMarkViewWinGet.ps1` and `artifacts\winget\` | Local/pre-release generation. It hashes a local installer and is never a release submission set. |
 | `TigerMarkView-WinGet-<version>-<commit>` | The authoritative submission artifact. The release workflow generates it from the exact installer it publishes, validates it, seals it, and records its digest. |
-| `Test-TigerMarkViewWinGet.ps1` and `artifacts\winget-release\<version>\` | Current post-release retrieval and verification. It must obtain the sealed artifact and never fall back to local generation. |
-| Future `Prepare-TigerMarkViewWinGetSubmission.ps1` | End-to-end post-release verification and safe preparation of the pushed fork branch. |
+| `WinGetReleaseValidation.ps1`, `Test-TigerMarkViewWinGet.ps1`, and `artifacts\winget-release\<version>\` | Post-release retrieval and verification. It must obtain the sealed artifact and never fall back to local generation. The library holds the gate; the script is the command around it. |
+| `Prepare-TigerMarkViewWinGetSubmission.ps1` and `WinGetPkgsSubmission.ps1` | End-to-end post-release verification and safe preparation of the pushed fork branch. |
 
 The release workflow's artifact root is the submission directory itself: exactly the version,
 default-locale, and installer YAML files. `Assert-TigerMarkViewWinGetSubmission.ps1` proves the file
@@ -50,21 +47,27 @@ Post-release regeneration is verification-only. It writes to throwaway storage, 
 byte-for-byte with the sealed set, and can never replace the sealed files. An Inno rebuild is not
 expected to be byte-identical to the CI installer.
 
-## Target one-command contract
+## The one-command contract
 
-After the human publishes the GitHub Release, the intended single maintainer command is:
+Run it from an elevated PowerShell 7 session at the TigerMarkView repository root, after the release
+is published:
 
 ```powershell
+gh auth status
 .\eng\winget\Prepare-TigerMarkViewWinGetSubmission.ps1 -Version <version>
 ```
 
-The final name may change during implementation, but the contract may not: when the command ends in
-`PASS`, the **only** remaining maintainer action is to create and review the pull request to
-`microsoft/winget-pkgs`. There is no manual file copy, hash lookup, fork synchronization, branch
-creation, `git add`, commit, or push.
+When the command ends in `PASS`, the **only** remaining maintainer action is to create and review the
+pull request to `microsoft/winget-pkgs`. There is no manual file copy, hash lookup, fork
+synchronization, branch creation, `git add`, commit, or push.
 
-The command must order its work from cheap and fundamental checks to expensive checks and defer
-mutation until all practical preflight checks pass:
+`-PlanOnly` runs the read-only gates and prepares nothing; it can report `BLOCKED` or `FAIL` but never
+a submission `PASS`. `-ClonePath` overrides only the clone location. `-Refresh` re-downloads the
+sealed artifact. `-Json` emits the machine-readable report. There is deliberately no skip switch that
+could still produce a `PASS`.
+
+The command orders its work from cheap and fundamental checks to expensive ones and defers mutation
+until all practical preflight checks pass:
 
 1. required tools;
 2. GitHub CLI authentication and account suitability;
@@ -93,11 +96,12 @@ GitHub CLI is a required maintainer tool. The orchestrator must locate `gh`, run
 identify the authenticated account, and verify it can read the TigerMarkView Actions run and operate
 on the expected fork. Use `gh auth login` to establish or repair the session.
 
-The finished command must not require a maintainer to paste or routinely export a personal access
-token. It must not accept tokens in command-line arguments, log tokens, read arbitrary credential
-stores, or fall back to unrelated credentials. Existing lower-level compatibility inputs are not the
-target interface. GitHub Actions uses its scoped `GITHUB_TOKEN`; local orchestration uses the verified
-GitHub CLI session.
+No command here requires a maintainer to paste or export a personal access token. None accepts a token
+in a command-line argument, logs a token, reads an arbitrary credential store, or falls back to
+unrelated credentials; the token-parameter routes that once existed have been removed. Every GitHub
+read goes through the shared `gh` adapter in `eng/release-automation/ReleaseAutomation.ps1`, including
+the artifact download, which uses `gh api` with the response body written straight to a file. GitHub
+Actions uses its scoped `GITHUB_TOKEN`; local orchestration uses the verified GitHub CLI session.
 
 Publication verification must prove all of the following before any `winget-pkgs` mutation:
 
@@ -132,18 +136,26 @@ clone is neither a Lab nor a registered TigerAiCore tool, so it is a configured 
 than a discovered one.
 
 If the TigerMarkView path does not exist, the command clones the expected fork into exactly that
-path, configures `upstream`, and verifies the resulting repository identity before continuing.
+path, configures `upstream`, and verifies the resulting repository identity before continuing. An
+existing directory is never adopted, emptied, or reconfigured: absence is the only state that is
+created.
 
-If it exists, all checks occur before synchronization or other destructive work. The command must
-prove:
+If it exists, all checks occur before synchronization or other destructive work. The command proves:
 
 - the path is a Git worktree for the expected `winget-pkgs` repository;
 - `origin` resolves to `rkozlowski/winget-pkgs` and `upstream` resolves to
   `microsoft/winget-pkgs`, allowing only canonical URL-form differences;
-- the expected default branch is `master`;
-- the worktree and index are clean, with no untracked submission files that would be overwritten;
+- HEAD is on `master`, or on this version's submission branch, which a previous successful run
+  deliberately leaves checked out so its diff can be read;
+- the worktree and index are clean, with no untracked submission files that would be overwritten.
+  The one exception is this version's own manifest directory: an interrupted run can leave exactly
+  those three files behind, and the rerun re-copies and rehashes them before committing anything;
 - no merge, rebase, cherry-pick, revert, bisect, or other interrupted Git operation is active; and
-- current local and remote branch state is understood before any reset, removal, or force operation.
+- current local and remote branch state is understood before any branch or push operation.
+
+Identity is judged on the URL each remote *declares*, read with `git config --get remote.<name>.url`.
+`git remote get-url` returns that value after `url.<base>.insteadOf` rewriting, so both are read and
+any difference between them is reported as its own check with the address git would really contact.
 
 Never reuse an ambiguous directory or silently rewrite unexpected remotes. Existing correct state is
 reusable; conflicting state is a clear stop.
@@ -175,9 +187,11 @@ guarded by the identity and clean-state proofs above:
 4. push the synchronized `master` to the fork and verify the remote result; and
 5. create `ItTiger-TigerMarkView-<version>` from the current `upstream/master`.
 
-The branch name is proposed and should remain project-specific. If a local or remote branch already
-exists, reuse it only when its version, base, commit, and files are exactly the expected resumable
-state. Otherwise stop without overwriting it.
+The branch name is project-specific. An existing local branch is reused only when it contains current
+`upstream/master` and carries at most one commit of its own; anything else is a conflict that stops
+the run, and no branch is ever deleted or reset. A remote branch already at the submission commit is
+the resumed case and is reported `PASS` without a push; a remote branch at any other commit stops the
+run, because overwriting it would need a force push, which this design does not authorize.
 
 Copy the three sealed files unchanged to:
 
@@ -208,26 +222,33 @@ Then:
 
 ## Idempotency and recovery
 
-The command must be safe to rerun after any interruption:
+The command is safe to rerun after any interruption. A second complete run makes no new commit and no
+new push, and ends at the same pull-request handoff:
 
 - retained downloads and extracted artifacts are reused only after their digests are reverified;
 - an already-correct clone, remote, synchronized `master`, branch, manifest set, commit, or push is
   recognized and reported as `PASS`;
-- a partially prepared branch may resume only when every existing change is exactly what the
-  requested version implies;
+- a partially prepared branch resumes only when every existing change is exactly what the requested
+  version implies;
 - conflicting files, commits, branches, remotes, release identities, or repository state cause
   `BLOCKED` or `FAIL` before overwrite; and
-- cleanup and repair must be explicit and narrowly targeted. The command never silently repairs
-  ambiguous state.
+- cleanup and repair are explicit and narrowly targeted. The command never silently repairs ambiguous
+  state.
 
-Expensive validation results may be cached for a rerun only when their record binds the version,
-release commit, workflow run, artifact ID and digest, installer digest, sealed submission digest,
-tool versions, and relevant lab result. Any changed binding invalidates the cached result.
+The retained sealed set is reused only while its `submission.json` record still binds it to what
+GitHub says now: version, tag, release commit, artifact name and id, GitHub's recorded artifact
+digest, the retained archive's hash, and the extracted set's submission digest. A rerun after a
+re-run release workflow, a moved tag, or an edited manifest therefore fetches the sealed bytes again
+rather than trusting the directory. `-Refresh` always re-downloads.
 
-## Current interim procedure
+`eng\winget\tests\WinGetPkgsSubmission.Tests.ps1` exercises this against local bare repositories: a
+run interrupted after branch creation, after the copy, and after the commit each resume to exactly one
+commit and one pushed branch, and a second complete run changes nothing.
 
-Until the orchestrator exists, run the current read/validate gate from an elevated PowerShell 7
-session after publishing the GitHub Release:
+## Validating without submitting
+
+The submission command runs the whole post-release gate itself. To run only that gate - to re-check a
+published release without touching the clone - use:
 
 ```powershell
 gh auth status
@@ -239,6 +260,10 @@ digest, extracts it below `artifacts\winget-release\<version>\submission\`, veri
 installer and release records, regenerates into throwaway storage for byte comparison, runs
 `winget validate`, and runs TigerWinLab. `-SkipLab` is useful for diagnosis but can never produce a
 submission-ready `PASS`.
+
+Both commands run the same function, `Invoke-TigerMarkViewWinGetReleaseValidation` in
+`eng\winget\WinGetReleaseValidation.ps1`, and write the same retained result. The submission command
+calls it in-process and requires its full result, lab included, before it touches the clone.
 
 TigerWinLab is resolved from the TigerAiCore configuration named by `TigerAiCoreConfig`, or from an
 explicit `-TigerWinLabRoot`. A lab that is not registered fails the `lab/location` check with the
@@ -254,9 +279,9 @@ command is:
 
 It does not make a submission ready and must not be used to bypass the complete gate.
 
-Prefer the authenticated `gh` session. Existing `-GitHubToken`, `GH_TOKEN`, `GITHUB_TOKEN`, and
-`-ArchivePath` compatibility routes remain current implementation details; do not use them as the
-design for the new maintainer-facing command.
+All of these use the `gh auth login` session; none takes a token. `-ArchivePath` remains for a machine
+that cannot reach the artifact endpoint, and it is verified against the same GitHub-recorded digest,
+so it is a different route to the sealed bytes rather than a weaker check.
 
 The retained result includes:
 
@@ -270,10 +295,9 @@ The retained result includes:
 | `validation\regenerated\` | Throwaway comparison output; never submit it. |
 | `validation\tigerwinlab-*` | Lab specification, result, and evidence. |
 
-A current `PASS` proves the sealed files are suitable to submit, but it does not manage the dedicated
-clone or fork. Until the target command is implemented, the maintainer must perform those remaining
-steps manually and preserve the exact bytes. This temporary manual gap is the work the implementation
-plan removes.
+A `PASS` from `Test-TigerMarkViewWinGet.ps1` proves the sealed files are suitable to submit; it does
+not manage the dedicated clone or fork. `Prepare-TigerMarkViewWinGetSubmission.ps1` does that, and it
+re-runs this gate rather than trusting an earlier result.
 
 ## Manifest shape and validation scope
 
@@ -293,10 +317,15 @@ digest-mismatched artifact, release/hash disagreement, non-reproducible manifest
 or TigerWinLab are blockers. Never rebuild the installer, regenerate the submission set, edit sealed
 manifests, or substitute `artifacts\winget\` to make a post-release gate pass.
 
-`eng\winget\tests\TigerMarkViewWinGet.Tests.ps1` currently covers generation, sealing, upload shape,
-artifact selection by version and commit, digest checking, public-release checks, reproducibility,
-and refusal to use stale local output. The future clone, PR-gate, synchronization, resume, final-diff,
-commit, and push behavior requires its own isolated tests with fake GitHub and local bare Git remotes.
+Tests are isolated: fake GitHub responses and local bare Git repositories, never the real fork,
+upstream, releases, credentials, or lab VM.
+
+| Suite | Covers |
+| --- | --- |
+| `eng\release-automation\tests\ReleaseAutomation.Tests.ps1` | Result vocabulary, `gh` preflight, the artifact download route, workflow-run selection, tag dereference, release state. |
+| `eng\winget\tests\TigerMarkViewWinGet.Tests.ps1` | Generation, sealing, upload shape, artifact selection by version and commit, digest checking, public-release checks, reproducibility, provenance-bound reuse, and refusal to use stale local output. |
+| `eng\winget\tests\WinGetPkgsClone.Tests.ps1` | Clone configuration, slug normalization, interrupted operations, clone identity, and the previous-PR gate. |
+| `eng\winget\tests\WinGetPkgsSubmission.Tests.ps1` | Clone creation, fork synchronization, branch create/resume/refuse, exact copy, final diff, commit, push, every interruption boundary, and an idempotent second run. |
 
 Authoritative WinGet references are the community repository's
 [manifest documentation](https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest),

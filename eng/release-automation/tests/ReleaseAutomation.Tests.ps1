@@ -31,6 +31,24 @@ function Assert-True {
     if (-not $Condition) { throw $Message }
 }
 
+function Assert-Throws {
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock] $Action,
+
+        [Parameter(Mandatory)]
+        [string] $MessagePattern
+    )
+
+    try { & $Action }
+    catch {
+        Assert-True ($_.Exception.Message -match $MessagePattern) `
+            "Expected failure matching '$MessagePattern'; received '$($_.Exception.Message)'."
+        return
+    }
+    throw "Expected an exception matching '$MessagePattern'."
+}
+
 # A fake `gh`: maps an argument signature to a canned {ExitCode, StdOut, StdErr}.
 # 'api' routes match the API path (gh api -H Accept:... <path>); other routes
 # match on the joined argument list.
@@ -75,8 +93,11 @@ function New-GhFail {
 $commit = 'a' * 40
 $otherCommit = 'b' * 40
 $repository = (Get-TigerMarkViewReleaseConstant).repository
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('TigerReleaseAutomation-' + [Guid]::NewGuid().ToString('N'))
 
 try {
+    New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
+
     # --- Constants -----------------------------------------------------------
 
     $constant = Get-TigerMarkViewReleaseConstant
@@ -171,6 +192,49 @@ try {
     Assert-True (-not ($sourceText -match 'GH_TOKEN|GITHUB_TOKEN|auth token|-GitHubToken')) `
         'The module never reads, forwards, or logs a token.'
     Write-Host 'PASS: gh preflight distinguishes missing, unauthenticated, and unauthorized sessions'
+
+    # --- Binary download through the same session -----------------------
+
+    # A workflow artifact is a zip, so it needs its own route: piping a native
+    # command's output through PowerShell would decode it as text. The route still
+    # goes through the one session, and still carries no token.
+    $downloadRoot = Join-Path $testRoot 'download'
+    New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
+    $downloadedArgs = $null
+    $downloadingCli = New-TigerMarkViewGitHubCli -Invoker {
+        param([string[]] $GhArgs)
+        [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'not used' }
+    } -Downloader {
+        param([string[]] $GhArgs, [string] $OutFile)
+        $script:downloadedArgs = $GhArgs
+        [IO.File]::WriteAllBytes($OutFile, [byte[]] (1, 2, 3, 4))
+        [pscustomobject]@{ ExitCode = 0; StdErr = '' }
+    }
+    $downloadTarget = Join-Path $downloadRoot 'artifact.zip'
+    $returned = & $downloadingCli.downloadApi 'repos/o/n/actions/artifacts/7/zip' $downloadTarget
+    Assert-True ($returned -ceq $downloadTarget) 'downloadApi returns the file it wrote.'
+    Assert-True ([IO.File]::ReadAllBytes($downloadTarget).Length -eq 4) 'The response body reaches the file as raw bytes.'
+    Assert-True ($script:downloadedArgs[0] -ceq 'api' -and
+        $script:downloadedArgs[-1] -ceq 'repos/o/n/actions/artifacts/7/zip') `
+        'The download goes through gh api with the requested path.'
+
+    $failingDownload = New-TigerMarkViewGitHubCli -Invoker {
+        param([string[]] $GhArgs)
+        [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'not used' }
+    } -Downloader {
+        param([string[]] $GhArgs, [string] $OutFile)
+        [IO.File]::WriteAllBytes($OutFile, [byte[]] (9))
+        [pscustomobject]@{ ExitCode = 1; StdErr = 'HTTP 403' }
+    }
+    $partial = Join-Path $downloadRoot 'partial.zip'
+    Assert-Throws -MessagePattern 'HTTP 403' -Action { & $failingDownload.downloadApi 'repos/o/n/x' $partial }
+    Assert-True (-not (Test-Path -LiteralPath $partial)) 'A failed download leaves no partial file behind.'
+
+    $noDownloadRoute = New-FakeGh -Routes @{ 'auth status' = [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+    Assert-Throws -MessagePattern 'no -Downloader' -Action {
+        & $noDownloadRoute.downloadApi 'repos/o/n/x' (Join-Path $downloadRoot 'never.zip')
+    }
+    Write-Host 'PASS: artifact downloads use the same session and never fall back to a real gh'
 
     # --- Workflow run selection for an exact commit ---------------------
 
@@ -322,4 +386,7 @@ catch {
     Write-Host "FAIL: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
     exit 1
+}
+finally {
+    Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

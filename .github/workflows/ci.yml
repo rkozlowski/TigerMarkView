@@ -38,6 +38,10 @@ jobs:
             'eng/winget/TigerMarkViewWinGet.ps1'
             'eng/winget/Prepare-TigerMarkViewWinGet.ps1'
             'eng/winget/Assert-TigerMarkViewWinGetSubmission.ps1'
+            'eng/winget/WinGetReleaseValidation.ps1'
+            'eng/winget/WinGetPkgsClone.ps1'
+            'eng/winget/WinGetPkgsSubmission.ps1'
+            'eng/winget/Prepare-TigerMarkViewWinGetSubmission.ps1'
           )
           foreach ($path in $requiredScripts) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -93,6 +97,10 @@ jobs:
       - name: Test winget-pkgs clone safety checks
         shell: pwsh
         run: ./eng/winget/tests/WinGetPkgsClone.Tests.ps1
+
+      - name: Test winget-pkgs submission mutation
+        shell: pwsh
+        run: ./eng/winget/tests/WinGetPkgsSubmission.Tests.ps1
 
       - name: Verify tracked-file whitespace
         run: git diff --check

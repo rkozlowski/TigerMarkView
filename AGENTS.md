@@ -384,9 +384,9 @@ TigerMarkView is an application repository. It publishes one GUI+CLI installer, 
 a separate CLI installer, or a portable ZIP. Public documentation remains `README.md` plus `docs/`;
 do not introduce DocFX, generated API docs, or an API-documentation site. TigerMarkView's completed
 release/WinGet workflow is the reference model for future Tiger projects. The durable maintainer
-lifecycle is in `docs/maintainers/releasing-tigermarkview.md`, the artifact and submission rules are
-in `docs/maintainers/winget-tigermarkview.md`, and current implementation work is scoped by
-`docs/maintainers/release-automation-implementation-plan.md`.
+lifecycle is in `docs/maintainers/releasing-tigermarkview.md` and the artifact and submission rules
+are in `docs/maintainers/winget-tigermarkview.md`. Those two documents are the contract; the release
+automation they describe is implemented.
 
 The human decides when to publish. Automation may prepare release changes and, after publication,
 prepare, commit, and push the exact WinGet submission branch. It must never commit/push the source
@@ -401,19 +401,36 @@ The authoritative WinGet submission set for a published release is the release w
 `TigerMarkView-WinGet-<version>-<commit>` artifact, and nothing else.
 `Prepare-TigerMarkViewWinGet.ps1` is local/pre-release generation into `artifacts\winget\`; its output
 hashes a local installer and must never be submitted or validated as a release's set.
-`Test-TigerMarkViewWinGet.ps1` resolves the release tag to a commit, downloads that commit's artifact,
-verifies it against the digest GitHub recorded, and extracts it to
-`artifacts\winget-release\<version>\submission\`. It must not read `artifacts\winget\`, and it must
-fail rather than fall back when the artifact cannot be retrieved. Regeneration stays a throwaway
-byte-for-byte reproducibility comparison and never replaces the sealed set.
+`eng/winget/WinGetReleaseValidation.ps1` owns the post-release gate as a callable function: it
+resolves the release tag to a commit, downloads that commit's artifact, verifies it against the digest
+GitHub recorded, extracts it to `artifacts\winget-release\<version>\submission\`, checks the public
+installer, regenerates for comparison only, runs `winget validate`, and runs TigerWinLab. It must not
+read `artifacts\winget\`, and it must fail rather than fall back when the artifact cannot be
+retrieved. Regeneration stays a throwaway byte-for-byte reproducibility comparison and never replaces
+the sealed set. `Test-TigerMarkViewWinGet.ps1` is the thin command around that function; the
+submission orchestrator calls the function directly and requires its full result, lab included.
 
-The target post-release command manages only the dedicated
-`C:\Projects\winget-pkgs-TigerMarkView\` clone. It must verify the fork/upstream identities, `master`,
-clean and operation-safe state, and the latest project-specific TigerMarkView PR before any sync or
-submission mutation. Open and draft matching PRs block; merged and manually closed PRs do not. After
-guarded fork synchronization it copies only the sealed bytes, validates the exact final diff,
-commits, pushes, and hands PR creation to the human. Local generation is never an authority or
+A retained sealed set may be reused only while its recorded provenance still binds it to what GitHub
+says now: version, tag, release commit, artifact name and id, GitHub's recorded artifact digest, the
+retained archive's hash, and the extracted set's submission digest. Any changed binding re-downloads.
+
+`eng/winget/Prepare-TigerMarkViewWinGetSubmission.ps1` is the single post-release command, and
+`eng/winget/WinGetPkgsSubmission.ps1` is the guarded mutation behind it. It manages only the dedicated
+`C:\Projects\winget-pkgs-TigerMarkView\` clone, creating it only when its path is absent and never
+adopting an existing directory. It verifies the fork/upstream identities, `master`, clean and
+operation-safe state, and the latest project-specific TigerMarkView PR before any sync or submission
+mutation. Open and draft matching PRs block; merged and manually closed PRs do not. After guarded
+fork synchronization it copies only the sealed bytes, validates the destination and the exact final
+diff, commits, pushes, and hands PR creation to the human. Local generation is never an authority or
 fallback.
+
+Only fast-forward and additive Git operations are authorized there. No reset, force push, branch
+deletion, or history rewrite: fork-only commits, a branch based on something other than current
+`upstream/master`, and a remote branch at a different commit each stop the run with evidence. Every
+step is absent, already correct, or conflicting, so a second complete run makes no new commit and no
+new push and still ends at the same pull-request handoff. `-PlanOnly` runs the read-only gates and can
+never report a submission `PASS`. Only the requested version's manifest directory may carry leftover
+worktree changes from an interrupted run; anything else outside it must be clean.
 
 Local GitHub operations use a verified `gh auth login`/`gh auth status` session. Do not design routine
 PAT entry/export, token arguments or logging, arbitrary credential-store reads, or unrelated
@@ -439,7 +456,11 @@ configured in `eng/winget/winget-pkgs.clone.json` (an explicit value, not TigerA
 the path is overridable, with `-ClonePath`). `eng/winget/WinGetPkgsClone.ps1` holds the read-only
 safety layer - config validation, canonical GitHub-slug comparison, interrupted-operation detection,
 clone-identity checks, and the project-specific previous-PR gate - that must all pass before any
-fetch, synchronization, branch, copy, commit, or push.
+fetch, synchronization, branch, copy, commit, or push. Clone identity is judged on the URL a remote
+declares (`git config --get remote.<name>.url`), because `git remote get-url` returns it after
+`url.<base>.insteadOf` rewriting; any difference between the two is reported separately rather than
+hidden behind whichever one was read. `Invoke-TigerCloneGit` is the one way this repository invokes
+git against that clone.
 
 Inno Setup's preprocessor treats a line beginning with `#` as a directive, including in code blocks;
 use `Chr(13) + Chr(10)` rather than a line-leading `#13#10` expression.

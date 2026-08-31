@@ -449,12 +449,20 @@ function New-TigerMarkViewGitHubCli {
         For tests only: a script block `param([string[]] $GhArgs)` returning an
         object with ExitCode, StdOut, and StdErr. When supplied, `gh` is never
         actually run.
+
+        .PARAMETER Downloader
+        For tests only: a script block `param([string[]] $GhArgs, [string] $OutFile)`
+        returning an object with ExitCode and StdErr, having written the response
+        body to $OutFile. Binary responses need their own route because they must
+        reach a file as raw bytes rather than through a decoded string.
     #>
     [CmdletBinding()]
     param(
         [string] $GhPath,
 
-        [scriptblock] $Invoker
+        [scriptblock] $Invoker,
+
+        [scriptblock] $Downloader
     )
 
     $resolvedPath = $null
@@ -506,6 +514,43 @@ function New-TigerMarkViewGitHubCli {
         }.GetNewClosure()
     }
 
+    $downloadRunner = $Downloader
+    if ($null -eq $downloadRunner) {
+        if ($null -ne $Invoker) {
+            # A fake session that never declared a download route must say so rather
+            # than reaching for the real gh a test deliberately replaced.
+            $downloadRunner = {
+                param([string[]] $GhArgs, [string] $OutFile)
+                throw 'This gh session was created with -Invoker but no -Downloader, so it cannot download.'
+            }.GetNewClosure()
+        }
+        else {
+            $downloadRunner = {
+                param([string[]] $GhArgs, [string] $OutFile)
+
+                # A workflow artifact is a zip, so its body must reach the file as raw
+                # bytes. Piping a native command through PowerShell decodes text, which
+                # would silently corrupt it; the process's stdout stream is copied
+                # instead. stderr is read asynchronously so a chatty gh cannot fill its
+                # pipe and deadlock the copy.
+                $startInfo = [Diagnostics.ProcessStartInfo]::new()
+                $startInfo.FileName = $resolvedPath
+                foreach ($argument in $GhArgs) { $startInfo.ArgumentList.Add($argument) }
+                $startInfo.RedirectStandardOutput = $true
+                $startInfo.RedirectStandardError = $true
+                $startInfo.UseShellExecute = $false
+                $process = [Diagnostics.Process]::Start($startInfo)
+                $errorTask = $process.StandardError.ReadToEndAsync()
+                $stream = [IO.File]::Create($OutFile)
+                try { $process.StandardOutput.BaseStream.CopyTo($stream) }
+                finally { $stream.Dispose() }
+                $stderr = $errorTask.GetAwaiter().GetResult()
+                $process.WaitForExit()
+                [pscustomobject]@{ ExitCode = [int] $process.ExitCode; StdErr = [string] $stderr }
+            }.GetNewClosure()
+        }
+    }
+
     [pscustomobject][ordered]@{
         path = $resolvedPath
         isFake = $null -ne $Invoker
@@ -550,6 +595,25 @@ function New-TigerMarkViewGitHubCli {
             }
             try { $result.StdOut | ConvertFrom-Json }
             catch { throw "gh api $Path returned output that is not JSON: $($_.Exception.Message)" }
+        }.GetNewClosure()
+        downloadApi = {
+            param(
+                [Parameter(Mandatory)][string] $Path,
+                [Parameter(Mandatory)][string] $OutFile
+            )
+
+            # gh follows the artifact endpoint's redirect to storage itself, and it
+            # knows not to carry the GitHub credential across that hop.
+            $arguments = @('api', '-H', 'Accept: application/vnd.github+json', $Path)
+            $result = & $downloadRunner $arguments $OutFile
+            if ($result.ExitCode -ne 0) {
+                if (Test-Path -LiteralPath $OutFile) {
+                    Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
+                }
+                throw ("gh api $Path could not be downloaded (exit $($result.ExitCode)): " +
+                    (([string] $result.StdErr) -replace '\s+', ' '))
+            }
+            $OutFile
         }.GetNewClosure()
     }
 }
