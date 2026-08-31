@@ -12,6 +12,8 @@ param(
 
     [string] $Repository = 'rkozlowski/TigerMarkView',
 
+    [string] $NotesFile,
+
     [switch] $PlanOnly,
 
     [switch] $AllowDifferentHeadForRecovery
@@ -21,6 +23,18 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+
+# Prefer a deliberate, checked-in notes file over GitHub's generic generated
+# notes. When one is given it must pass the same readiness check the workflow
+# gate runs, so a draft is never created from placeholder or leaky notes.
+$resolvedNotesFile = $null
+if (-not [string]::IsNullOrWhiteSpace($NotesFile)) {
+    $resolvedNotesFile = [IO.Path]::GetFullPath($NotesFile)
+    if (-not (Test-Path -LiteralPath $resolvedNotesFile -PathType Leaf)) {
+        throw "Release notes file not found: $resolvedNotesFile"
+    }
+    & (Join-Path $PSScriptRoot 'Assert-ReleaseNotes.ps1') -Version $Version -NotesRoot (Split-Path -Parent $resolvedNotesFile)
+}
 $ArtifactDirectory = [IO.Path]::GetFullPath($ArtifactDirectory)
 & (Join-Path $PSScriptRoot 'Assert-ReleaseArtifactManifest.ps1') `
     -ArtifactDirectory $ArtifactDirectory `
@@ -88,6 +102,7 @@ if ($null -ne $release) {
 Write-Host "Release plan for $tag at $CommitSha"
 Write-Host "  annotated tag: $(if ($tagExists) { 'already compatible' } else { 'create and push' })"
 Write-Host "  draft release: $(if ($null -eq $release) { 'create' } else { 'reuse compatible draft' })"
+Write-Host "  release notes: $(if ($resolvedNotesFile) { "from $resolvedNotesFile" } else { 'GitHub --generate-notes (generic)' })"
 foreach ($asset in $assets) {
     $present = $null -ne $release -and @($release.assets | Where-Object name -CEQ $asset.Name).Count -eq 1
     Write-Host "  asset: $($asset.Name) ($(if ($present) { 'already identical' } else { 'upload' }))"
@@ -115,14 +130,21 @@ if (-not $tagExists) {
 }
 
 if ($null -eq $release) {
+    $notesArguments = if ($resolvedNotesFile) {
+        @('--notes-file', $resolvedNotesFile)
+    }
+    else {
+        # Generic generated notes are a last resort, not the finished design: the
+        # workflow gate requires a checked-in notes file before it reaches here.
+        @('--generate-notes')
+    }
     $arguments = @(
         'release', 'create', $tag,
         '--repo', $Repository,
         '--draft',
         '--verify-tag',
-        '--generate-notes',
         '--title', $title
-    ) + @($assets | ForEach-Object FullName)
+    ) + $notesArguments + @($assets | ForEach-Object FullName)
     & gh @arguments
     if ($LASTEXITCODE -ne 0) { throw "Could not create draft release '$tag'." }
 }

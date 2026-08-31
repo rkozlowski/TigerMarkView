@@ -9,10 +9,15 @@ Do not advertise `winget install ItTiger.TigerMarkView` as live until the first 
 accepted and the community source returns the package.
 
 > **Transition status:** the release workflow already generates, validates, and seals the
-> authoritative manifests. The existing `Test-TigerMarkViewWinGet.ps1` validates them after release
-> publication. The one-command fork/branch/commit/push orchestrator described below is a target and
-> is not implemented yet. See [the implementation plan](release-automation-implementation-plan.md)
-> and the [current interim procedure](#current-interim-procedure).
+> authoritative manifests, and `Test-TigerMarkViewWinGet.ps1` validates them after publication. The
+> read-only clone safety layer now exists: `eng/winget/winget-pkgs.clone.json` (the narrowly scoped
+> clone configuration) and `eng/winget/WinGetPkgsClone.ps1` (config validation, canonical
+> GitHub-slug comparison, interrupted-operation detection, clone-identity checks, and the
+> project-specific previous-PR gate), covered by `eng/winget/tests/WinGetPkgsClone.Tests.ps1`. The
+> one-command fork/branch/commit/push orchestrator described below still ties these together with the
+> artifact and lab validation, performs the synchronization and mutation, and is not implemented yet.
+> See [the implementation plan](release-automation-implementation-plan.md) and the
+> [current interim procedure](#current-interim-procedure).
 
 ## The authoritative artifact
 
@@ -119,6 +124,12 @@ C:\Projects\winget-pkgs-TigerMarkView\
 The general pattern for future Tiger projects is
 `C:\Projects\winget-pkgs-<TigerProjectName>\`. A shared or heuristically discovered clone is not an
 acceptable substitute.
+
+The path, the fork and upstream slugs, the default branch, and the submission branch prefix are read
+from `eng/winget/winget-pkgs.clone.json`. A maintainer may override only the path, with an explicit
+`-ClonePath`, because that is a decision rather than a guess; it is still validated identically. The
+clone is neither a Lab nor a registered TigerAiCore tool, so it is a configured value here rather
+than a discovered one.
 
 If the TigerMarkView path does not exist, the command clones the expected fork into exactly that
 path, configures `upstream`, and verifies the resulting repository identity before continuing.

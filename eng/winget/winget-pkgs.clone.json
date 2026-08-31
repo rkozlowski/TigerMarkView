@@ -1,0 +1,10 @@
+{
+  "comment": "Narrowly scoped configuration for the dedicated winget-pkgs clone TigerMarkView submits from. The clone is neither a Lab nor a registered TigerAiCore tool, so it is an explicit configured value here rather than a discovered one. Override clonePath with -ClonePath when a maintainer deliberately points elsewhere.",
+  "clonePath": "C:\\Projects\\winget-pkgs-TigerMarkView",
+  "forkSlug": "rkozlowski/winget-pkgs",
+  "upstreamSlug": "microsoft/winget-pkgs",
+  "defaultBranch": "master",
+  "branchPrefix": "ItTiger-TigerMarkView-",
+  "packageIdentifier": "ItTiger.TigerMarkView",
+  "manifestPath": "manifests/i/ItTiger/TigerMarkView"
+}

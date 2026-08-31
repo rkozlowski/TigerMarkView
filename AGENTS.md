@@ -421,6 +421,26 @@ credential fallbacks. Actions jobs use scoped `GITHUB_TOKEN` permissions, with t
 each job needs. GitHub's generic generated notes alone are insufficient: 0.8.1 produced only a Full
 Changelog link, so release preparation/workflow automation must supply useful version-specific notes.
 
+`eng/release-automation/ReleaseAutomation.ps1` is the shared vocabulary for release automation: the
+`PASS`/`WARN`/`BLOCKED`/`FAIL`/`READY FOR HUMAN ACTION` result objects with one text/Markdown/JSON
+renderer, the fixed repository/workflow/asset constants, an injectable `gh`-only CLI adapter that
+takes no token input, the `gh` session preflight, exact-SHA workflow-run selection, annotated-tag
+dereference, and published release-state inspection. New release scripts compose these rather than
+scraping `gh` output or adding a second query path. Version-specific notes live in
+`.github/release-notes/<version>.md`; `eng/release-automation/Assert-ReleaseNotes.ps1` gates them for
+a real summary with no placeholder text, bare changelog link, or leaked secret/path, and
+`Publish-GitHubDraftRelease.ps1` passes the file to `gh release create --notes-file`. Version
+preparation touches only `Version.props` and the release-workflow dispatch default
+(`eng/release-automation/Set-TigerMarkViewReleaseVersion.ps1`); no shipped `src/` or `installer/`
+source may hardcode the version.
+
+The dedicated-clone path, fork/upstream slugs, default branch, and submission branch prefix are
+configured in `eng/winget/winget-pkgs.clone.json` (an explicit value, not TigerAiCore discovery; only
+the path is overridable, with `-ClonePath`). `eng/winget/WinGetPkgsClone.ps1` holds the read-only
+safety layer - config validation, canonical GitHub-slug comparison, interrupted-operation detection,
+clone-identity checks, and the project-specific previous-PR gate - that must all pass before any
+fetch, synchronization, branch, copy, commit, or push.
+
 Inno Setup's preprocessor treats a line beginning with `#` as a directive, including in code blocks;
 use `Chr(13) + Chr(10)` rather than a line-leading `#13#10` expression.
 

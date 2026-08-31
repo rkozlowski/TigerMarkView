@@ -21,8 +21,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  prerequisites:
+    name: Verify release commit, CI success, and notes
+    runs-on: windows-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out the dispatched commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Prove the commit is on main and its CI push run succeeded
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          ./eng/release-automation/Assert-ReleaseCommitReady.ps1
+          -Version '${{ inputs.version }}'
+          -CommitSha '${{ github.sha }}'
+
   validate:
     name: Build and validate exact release artifacts
+    needs: prerequisites
     runs-on: windows-latest
     outputs:
       manifest_sha256: ${{ steps.transfer.outputs.manifest_sha256 }}
@@ -39,6 +62,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $requiredScripts = @(
+            'eng/release-automation/ReleaseAutomation.ps1'
+            'eng/release-automation/Assert-ReleaseCommitReady.ps1'
+            'eng/release-automation/Assert-ReleaseNotes.ps1'
             'eng/release-automation/Install-InnoSetup.ps1'
             'eng/release-automation/Assert-ProductMetadata.ps1'
             'eng/release-automation/Assert-Installer.ps1'
@@ -57,6 +83,12 @@ jobs:
             git ls-files --error-unmatch -- $path | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "Required release workflow script is not tracked: $path" }
           }
+
+      - name: Verify the version-specific release notes source is ready
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: ./eng/release-automation/Assert-ReleaseNotes.ps1 -Version $env:RELEASE_VERSION
 
       - name: Verify main, commit, version, cleanliness, and tag availability
         shell: pwsh
@@ -375,7 +407,51 @@ jobs:
           ./eng/release-automation/Publish-GitHubDraftRelease.ps1 `
             -ArtifactDirectory artifacts/release `
             -Version $env:RELEASE_VERSION `
-            -CommitSha $env:GITHUB_SHA
+            -CommitSha $env:GITHUB_SHA `
+            -NotesFile ".github/release-notes/$env:RELEASE_VERSION.md"
 
       - name: Verify publication did not mutate tracked inputs
         run: git diff --exit-code
+
+      - name: Summarize the draft and the publication checklist
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          MANIFEST_SHA256: ${{ needs.validate.outputs.manifest_sha256 }}
+          SUBMISSION_SHA256: ${{ needs.validate.outputs.submission_sha256 }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "v$env:RELEASE_VERSION"
+          $draftUrl = "${{ github.server_url }}/${{ github.repository }}/releases/tag/$tag"
+          $assets = @(
+            "TigerMarkView-$env:RELEASE_VERSION-win-x64-setup.exe"
+            'SHA256SUMS.txt'
+            'release-artifacts.json'
+          )
+          $lines = @(
+            '### READY FOR HUMAN ACTION'
+            ''
+            "A **draft** GitHub Release for TigerMarkView $env:RELEASE_VERSION has been created. It is not published."
+            ''
+            "- Draft: $draftUrl"
+            "- Tag / commit: ``$tag`` at ``${{ github.sha }}``"
+            "- release-artifacts.json SHA-256: ``$env:MANIFEST_SHA256``"
+            "- WinGet artifact: ``TigerMarkView-WinGet-$env:RELEASE_VERSION-${{ github.sha }}``"
+            "- WinGet submission digest: ``$env:SUBMISSION_SHA256``"
+            "- Workflow run: $env:RUN_URL"
+            ''
+            '#### Assets'
+            ''
+          ) + @($assets | ForEach-Object { "- $_" }) + @(
+            ''
+            '#### Required action'
+            ''
+            '1. Review the draft: tag, commit, the three assets, the recorded hashes, and the release notes.'
+            '2. Confirm the notes state the runtime prerequisites and the current unsigned status.'
+            '3. Publish the draft explicitly.'
+            "4. After publication, run ``eng/winget/Prepare-TigerMarkViewWinGetSubmission.ps1 -Version $env:RELEASE_VERSION`` (see docs/maintainers)."
+            ''
+            'Automation never publishes this release and never opens the microsoft/winget-pkgs pull request.'
+          )
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

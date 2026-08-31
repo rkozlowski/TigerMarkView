@@ -25,6 +25,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $requiredScripts = @(
+            'eng/release-automation/ReleaseAutomation.ps1'
+            'eng/release-automation/Assert-ReleaseCommitReady.ps1'
+            'eng/release-automation/Assert-ReleaseNotes.ps1'
             'eng/release-automation/Install-InnoSetup.ps1'
             'eng/release-automation/Assert-ProductMetadata.ps1'
             'eng/release-automation/Assert-Installer.ps1'
@@ -75,9 +78,21 @@ jobs:
         shell: pwsh
         run: ./eng/tests/TigerAiCore.Tests.ps1
 
+      - name: Test release automation foundation
+        shell: pwsh
+        run: ./eng/release-automation/tests/ReleaseAutomation.Tests.ps1
+
+      - name: Test release preparation helpers
+        shell: pwsh
+        run: ./eng/release-automation/tests/ReleasePreparation.Tests.ps1
+
       - name: Test WinGet manifest generation and submission sealing
         shell: pwsh
         run: ./eng/winget/tests/TigerMarkViewWinGet.Tests.ps1
+
+      - name: Test winget-pkgs clone safety checks
+        shell: pwsh
+        run: ./eng/winget/tests/WinGetPkgsClone.Tests.ps1
 
       - name: Verify tracked-file whitespace
         run: git diff --check

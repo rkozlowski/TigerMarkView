@@ -5,11 +5,13 @@ reference release model for future Tiger application projects. The human decides
 moves forward; automation performs repeatable preparation, verification, packaging, and submission
 work.
 
-> **Transition status:** the authoritative installer and sealed WinGet artifact already exist in the
-> release workflow. Automated repository preparation, the release workflow's CI-success check,
-> useful workflow-produced release notes, and the one-command `winget-pkgs` branch preparation are
-> still to be built. Until then, use the [current transition procedure](#current-transition-procedure)
-> and do not treat a proposed command as available. The implementation work is defined in
+> **Transition status:** the authoritative installer and sealed WinGet artifact, the release
+> workflow's exact-commit CI-success gate, the checked-in version-specific release notes, and the
+> deterministic preparation/readiness helpers now exist. Still to be built: the one-command
+> `winget-pkgs` fork/branch/commit/push orchestrator (`Prepare-TigerMarkViewWinGetSubmission.ps1`)
+> and the migration of `Test-TigerMarkViewWinGet.ps1` off its raw-token client. Until then, use the
+> [current transition procedure](#current-transition-procedure) for the post-release WinGet steps and
+> do not treat that proposed command as available. Remaining work is tracked in
 > [the release automation plan](release-automation-implementation-plan.md).
 
 TigerMarkView publishes one installer containing the GUI and CLI, plus `SHA256SUMS.txt` and
@@ -112,11 +114,27 @@ A normal request is intentionally short:
 Prepare release 0.9.0 of TigerMarkView
 ```
 
-Following this document, the agent must verify tools and source-repository identity, update
-`Version.props` and the release-workflow input default, prepare useful release-note content and any
-changed public documentation, run the appropriate build and test gates, prepare local release and
-WinGet inputs, and leave only intentional reviewable changes. It does not commit, push, dispatch a
+Following this document, the agent runs the deterministic helper, writes the judgment-based content,
+runs the gates, and leaves only intentional reviewable changes. It does not commit, push, dispatch a
 workflow, tag, or publish.
+
+```powershell
+# 1. Deterministic: Version.props + the release-workflow dispatch default only.
+pwsh eng/release-automation/Set-TigerMarkViewReleaseVersion.ps1 -Version <version>
+
+# 2. Judgment: write .github/release-notes/<version>.md from TEMPLATE.md, and update any
+#    changed public documentation (README.md, docs/HELP.md).
+
+# 3. Read-only readiness report, ending in the review/commit/push handoff.
+#    Add -Full (or -IncludeBuild/-IncludeInstaller/-IncludeLab) to run the expensive gates.
+pwsh eng/release-automation/Test-TigerMarkViewReleaseReadiness.ps1 -Version <version> -Full
+```
+
+`Set-TigerMarkViewReleaseVersion.ps1` refuses if a shipped `src/` or `installer/` file hardcodes the
+version, and supports `-WhatIf`. `Test-TigerMarkViewReleaseReadiness.ps1` verifies tools,
+source-repository identity and branch, the `Version.props` / workflow-default / no-hardcoded-version
+invariants, the release-notes source, and the diff shape; the expensive build, installer, and
+TigerWinLab gates are opt-in and reported `NOT RUN` when skipped. It never commits or pushes.
 
 The preparation stage ends with `READY FOR HUMAN ACTION`, a change summary, test results, and exact
 review/commit/push instructions.
@@ -190,33 +208,24 @@ artifact and clone rules.
 
 ## Current transition procedure
 
-Until the planned preparation and submission orchestrators exist, perform the following additional
-steps manually. These are current-state instructions, not the target human experience.
+Preparation, the CI-success gate, and the release notes are automated (see
+[step 1](#1-ask-an-agent-to-prepare-the-release)). Only the post-release WinGet submission still has
+manual steps, below. These are current-state instructions, not the target human experience.
 
-1. Update `<Version>` in `Version.props` and the `workflow_dispatch` default in
-   `.github/workflows/release.yml`. Update user documentation and release-note content as required.
-2. Run:
+1. Prepare with the helpers, write `.github/release-notes/<version>.md`, and run readiness:
 
    ```powershell
-   dotnet restore TigerMarkView.slnx
-   dotnet build TigerMarkView.slnx -c Release
-   dotnet test TigerMarkView.slnx -c Release --no-build
-   pwsh installer/Build-Installer.ps1 -Configuration Release
-   $version = ([xml](Get-Content Version.props -Raw)).Project.PropertyGroup.Version
-   pwsh eng/release-automation/Assert-ProductMetadata.ps1 `
-     -PublishDirectory artifacts/publish/win-x64 `
-     -ExpectedVersion $version
-   pwsh eng/release-automation/Assert-Installer.ps1 `
-     -InstallerPath "artifacts/installer/TigerMarkView-$version-win-x64-setup.exe" `
-     -ExpectedVersion $version
-   pwsh eng/lab/Test-TigerMarkViewRelease.ps1
+   pwsh eng/release-automation/Set-TigerMarkViewReleaseVersion.ps1 -Version <version>
+   # write .github/release-notes/<version>.md, update README.md / docs/HELP.md as needed
+   pwsh eng/release-automation/Test-TigerMarkViewReleaseReadiness.ps1 -Version <version> -Full
    ```
 
-3. Review, commit, and push. Verify the pushed commit and wait for its `CI` run to succeed. Then
-   manually dispatch **Release TigerMarkView** from `main`.
-4. Review the workflow result and draft. Replace weak generic notes with an accurate summary, then
-   publish manually.
-5. Run the existing post-release gate:
+2. Review, commit, and push. The release workflow's `prerequisites` job now proves the pushed commit
+   is on `origin/main` and that its exact `CI` push run concluded `success` before it builds or tags
+   anything, so wait for that `CI` run, then manually dispatch **Release TigerMarkView** from `main`.
+3. Review the workflow result and draft. The draft notes come from the checked-in
+   `.github/release-notes/<version>.md`; edit on GitHub if needed, then publish manually.
+4. Run the existing post-release gate:
 
    ```powershell
    .\eng\winget\Test-TigerMarkViewWinGet.ps1 -Version <version>
