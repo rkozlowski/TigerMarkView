@@ -1,6 +1,15 @@
-# TigerMarkView agent instructions
+---
+TigerAiCore.version: 1.2.0
+---
 
-## Bootstrap — do this first
+# AI Agent Instructions
+
+<!-- TigerAiCore:begin version="1.2.0" sha256="feb0e4792edd32f91082bca74bae466828246a5899fb0cb0fc6f1bed955d5723" -->
+## TigerAiCore inherited rules
+
+<!-- Managed content. Author these rules in AGENTS.core.md in the TigerAiCore repository, never in a project copy. -->
+
+### Bootstrap — do this first
 
 Before applying any project instruction or doing any repository work, read the
 `TigerAiCoreConfig` environment variable.
@@ -9,33 +18,112 @@ When `TigerAiCoreConfig` is set:
 
 1. Treat its value as the path to the TigerAiCore TOML configuration and load
    that exact file.
-2. Read the configured `coder` value and load those Coder instructions.
-3. Follow the shared Coder instructions first, then this file's
+2. Load the TigerAiCore repository from the configured `core` value.
+3. Read `Version.toml` in that repository. Its `version` is the canonical
+   instruction version.
+4. Compare the `TigerAiCore.version` declared by the configuration with the
+   canonical version. If it differs or is absent, refresh only the managed
+   configuration block with
+   `pwsh -File <TigerAiCore>/tools/Manage-TigerAiCoreConfig.ps1 -Update`,
+   then continue. This is routine local maintenance: it needs no separate
+   authorization, it preserves machine-specific `[labs.*]` and `[tools.*]`
+   entries, and it must be reported in the task result. If that tool reports
+   the configuration as malformed or ambiguous, stop and report it instead;
+   never repair the configuration by hand.
+5. Load the configured role instructions (`coder` or `consultant`) and verify
+   that the role file declares exactly the same `TigerAiCore.version` in its
+   front matter. If it does not, stop and report a TigerAiCore inconsistency.
+6. Compare the canonical version with the `TigerAiCore.version` declared by
+   this file and by `CLAUDE.md` when present. Comparison is exact; a patch
+   difference is a real difference.
+7. If the versions match, continue.
+8. If they differ, the inherited rules in this repository are stale.
+   Synchronize them (see *Inherited-rule synchronization*), then continue under
+   the refreshed rules.
+9. Follow the shared role instructions first, then this file's
    project-specific instructions.
-4. Discover Labs and shared tools only from the TOML configuration. Do not
-   assume sibling checkouts, fallback locations, or hardcoded ecosystem paths.
+10. Discover Labs and shared tools only from the TOML configuration. Do not
+    assume sibling checkouts, fallback locations, or hardcoded ecosystem paths.
 
 When `TigerAiCoreConfig` is not set:
 
 1. State that TigerAiCore and its configured Labs/tools are unavailable.
-2. Continue in standalone mode with this repository's instructions.
+2. Continue in standalone mode with this repository's instructions, including
+   the inherited rules already present in this file.
 3. Coding, builds, and repository-local validation may continue. Lab-backed
    E2E/VM verification and shared documentation artifact generation may be
    unavailable; report such checks as `NOT RUN` with the reason.
 4. Do not probe likely ecosystem locations or invent a replacement integration.
+5. Do not attempt to synchronize inherited rules. Without TigerAiCore the
+   canonical version is unknown, and the local copy is the best available
+   instruction set.
 
 Configuration contains locations and non-secret integration metadata only.
 Never put credentials, tokens, passwords, or private keys in the TOML file or
 in this repository.
 
-The rest of this file is TigerMarkView-specific. It records the durable
+### Inherited-rule synchronization
+
+Everything between the `TigerAiCore:begin` and `TigerAiCore:end` markers is
+machine-managed and is a synchronized cache of TigerAiCore rules, kept local
+for salience. TigerAiCore remains the authority.
+
+- Never hand-edit content inside the managed block, and never copy generic
+  TigerAiCore rules into project-specific sections.
+- Synchronize with the tool in the TigerAiCore repository:
+  `pwsh -File <TigerAiCore>/tools/Sync-AgentInstructions.ps1 -ProjectPath <project root>`,
+  where `<TigerAiCore>` is the `core` path from the TigerAiCore configuration.
+  Add `-Check` to report staleness without writing.
+- Synchronization only rewrites the managed block and the `TigerAiCore.version`
+  front matter. Project-specific content is never rewritten.
+- If synchronization stops because the managed block is missing, duplicated,
+  malformed, or locally modified, report the problem and stop. Do not repair it
+  by hand-copying rule text.
+- Do not write a machine-specific TigerAiCore path into a project repository.
+
+### Always-visible working rules
+
+These apply even when TigerAiCore cannot be loaded. The authoritative and
+complete form of each rule is in the role instructions (`AI-CODER.md`,
+`AI-CONSULTANT.md`); load them whenever TigerAiCore is available.
+
+- **Project identity** — every prompt and every final response starts with
+  `[Project: <ProjectFolderName>]`. On mismatch with the current project root
+  folder, stop immediately and report it.
+- **Repository state** — check for uncommitted changes before starting work.
+  If unacknowledged changes exist, stop and report them instead of building on
+  them.
+- **Instruction projections** — TigerAiCore states the same rules in several
+  places on purpose: conceptual model, role instructions, always-visible
+  fragments, and synchronized project replicas. That overlap is controlled
+  denormalization for LLM reliability, not redundancy. Never delete, merge, or
+  replace a projection with a pointer to satisfy DRY; report suspected
+  redundancy instead.
+- **Action mode** — Coding is the default. Non-default modes are declared with
+  an explicit `[Action: ...]` header. Never change action mode silently.
+- **Human gates** — do not commit, push, publish, or perform other externally
+  visible or irreversible actions without explicit authorization.
+- **Secrets and access** — use only explicitly granted resources; never store
+  credentials, tokens, or keys in plain text anywhere in the repository.
+- **Verification** — verify with the strongest practical automated checks;
+  aim for a clean build and green tests; distinguish a pre-existing dirty
+  baseline from new failures; state clearly what could not be verified and why.
+- **Open-loop work** — when verification is unavailable, become more
+  conservative, not more creative.
+- **Final response** — structured for fast Architect scanning, and ending with
+  a `Proposed commit message` section whenever repository contents changed.
+<!-- TigerAiCore:end -->
+
+## Project-specific instructions
+
+This section is TigerMarkView-specific. It records the durable
 architectural, implementation, and release constraints that this repository owns.
 Shared role, action-mode, verification, automation-gate, and reporting rules come
 from the TigerAiCore Coder instructions and are not repeated here. Public product
 behaviour belongs in `README.md`; shipped user instructions belong in
 `docs/HELP.md`.
 
-## Repository layout
+### Repository layout
 
 `TigerMarkView.slnx` groups production code under `src/` and xUnit projects under `tests/`. Keep tests
 in the matching project and feature folder, for example `tests/TigerMarkView.Core.Tests/Rendering/`.
@@ -43,7 +131,7 @@ User documentation is in `docs/`, maintainer documentation in `docs/maintainers/
 licence notices in `assets/`, packaging in `installer/`, and engineering automation in `eng/`.
 Generated output stays below ignored `artifacts/`.
 
-## Build and verification
+### Build and verification
 
 Run from the repository root:
 
@@ -70,7 +158,7 @@ Other routine commands:
 The desktop, PDF, and CLI projects require Windows; PDF workflows also require the Edge WebView2
 Runtime.
 
-## Lab-backed verification
+### Lab-backed verification
 
 Automated tests cover Core and CLI behaviour, not the complete Avalonia/WebView interaction.
 Automated pointer, keyboard, focus, installer, upgrade/uninstall, first-run, and WinGet work should run
@@ -89,7 +177,7 @@ unavailable and the check does not run. A maintainer may still pass an explicit 
 a decision rather than a guess. `docs/maintainers/tigerwinlab-testing.md` records the lab interface
 this repository uses and the current coverage gaps.
 
-## Coding style
+### Coding style
 
 Follow existing C# style: four-space indentation, file-scoped namespaces, nullable reference types,
 implicit usings, and braces on separate lines. Use PascalCase for types, methods, properties, and test
@@ -104,7 +192,7 @@ tests in the corresponding namespace.
 PowerShell under `eng/` and `installer/` targets PowerShell 7, uses `Set-StrictMode -Version Latest`
 and `$ErrorActionPreference = 'Stop'`, and reports structured results rather than scraped text.
 
-## Product boundary
+### Product boundary
 
 TigerMarkView is a Windows Markdown viewer and reviewer, not an editor. Editing stays in an external
 editor. The product remains focused on local-file rendering, external-change awareness, navigation,
@@ -119,7 +207,7 @@ separately designed and approved printing feature.
 Ctrl+P is still intercepted in the window and document scripts solely to prevent WebView2 from opening
 Edge's print preview. The intercepted command must remain a no-op.
 
-## Project boundaries
+### Project boundaries
 
 `TigerMarkView.Core` owns platform-neutral behaviour:
 
@@ -145,7 +233,7 @@ Command icons come from Microsoft Fluent UI System Icons, regular 24-pixel weigh
 in the adjacent comment and retain the licence in `assets/licenses/`. Use inherited foreground
 colours so one geometry works in both themes.
 
-## Rendering and PDF invariants
+### Rendering and PDF invariants
 
 The single rendering path is:
 
@@ -203,7 +291,7 @@ not widen cell wrapping to `overflow-wrap: anywhere` (it makes a cell's minimum 
 collapses every narrow column). Inline `code` wraps the same way for the same reason; `pre` keeps
 `anywhere`.
 
-## WebView and window integration
+### WebView and window integration
 
 The viewer shows one of three generated pages: the rendered document, an error page, or the themed
 empty page. `MainWindow.RefreshViewerAsync` is the shared refresh path. The empty page stays blank,
@@ -245,7 +333,7 @@ folder only when their creation options match.
 `NativeTitleBar` applies the Dark-mode DWM attribute and refreshes the non-client area. Treat this as
 best-effort: title-bar theming must never prevent a window from opening.
 
-## Commands, menus, and toolbar
+### Commands, menus, and toolbar
 
 Toolbar buttons reuse their menu item's handler. Navigation enabled state is written by
 `UpdateNavigationCommandState`; document-command enabled state is written by
@@ -273,7 +361,7 @@ Flyouts opened from icon buttons use `BottomEdgeAlignedLeft`. An icon-only `Drop
 own chevron, so the navigation-history and Open Recent toolbar dropdowns remain plain buttons that
 show a `MenuFlyout`.
 
-## Navigation, recent files, and status
+### Navigation, recent files, and status
 
 Open Recent and navigation history have different semantics:
 
@@ -303,7 +391,7 @@ only and must not mutate file state.
 Failed or cancelled exports do not replace a previous successful path, and actions must recheck that a
 remembered output still exists.
 
-## Help and bundled documentation
+### Help and bundled documentation
 
 Help is an application documentation context, not a reader-opened document. It uses a separate
 modeless `HelpWindow` and preview file. It must not affect the main document, watcher, scroll,
@@ -317,7 +405,7 @@ single root file rather than duplicated as Markdown.
 Help links may open another bundled document, send `http`/`https`/`mailto` to
 `ExternalLinkLauncher`, or be refused. They do not open arbitrary local files.
 
-## The command line
+### The command line
 
 `tiger-mark` converts one Markdown input to one PDF. It reuses
 `MarkdownDocumentLoader.RenderHtmlDocument`, `PdfPageSetup.For`, and `PdfExporter.ExportAsync`.
@@ -352,7 +440,7 @@ destination. A failed move keeps the timestamped PDF, leaves the destination unt
 `Created:` line naming the file that exists, and explains itself on stderr. It never retries, waits for a
 lock, or deletes anything, and the default direct-write path must stay unchanged.
 
-## Versioning and packaging
+### Versioning and packaging
 
 `Version.props` is the single source of `Version`, assembly/file/informational versions, `Product`,
 `Authors`, `Company`, `Copyright`, repository/documentation/issue links, and shared description.
@@ -479,7 +567,7 @@ git against that clone.
 Inno Setup's preprocessor treats a line beginning with `#` as a directive, including in code blocks;
 use `Chr(13) + Chr(10)` rather than a line-leading `#13#10` expression.
 
-## Pull requests
+### Pull requests
 
 Keep each commit cohesive and avoid bundling unrelated cleanup. Pull requests should explain the
 user-visible change, identify affected projects, link relevant issues, and report test
