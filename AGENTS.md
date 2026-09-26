@@ -685,18 +685,25 @@ keep holding on its own:
 - `DocumentHtmlSanitizer` sanitizes Markdig's whole output inside `MarkdownRenderer.ToHtmlFragment`
   against an explicit allowlist (HtmlSanitizer/AngleSharp). It keeps passive formatting HTML and removes
   script, event handlers, active URL schemes, frames, plugins, media, stylesheets, forms, `base`, and
-  `meta`. `data:` survives only as an `<img>` source. Do not replace it with text matching, weaken it
-  to the library defaults, or disable raw HTML wholesale.
+  `meta`. `data:` survives only as an `<img>` source. A URL that would fetch a file from another host
+  (`\\server\share`, `//server/share`, `file://server/share`, and their encoded or mixed spellings) is
+  dropped wherever the page would fetch it; a hyperlink keeps its target. Do not replace it with text
+  matching, weaken it to the library defaults, or disable raw HTML wholesale.
 - Every generated page (document, empty, error) carries `DocumentContentSecurityPolicy` as the first
   element after the charset: `default-src 'none'`, script and style elements admitted only by the SHA-256
   of the shell's own blocks, `style` attributes allowed, images from `file:`, `data:`, `http:`, and
   `https:`, `base-uri file:`, and `form-action 'none'`. Shell script and style text is emitted through
   `DocumentShell.Block` (LF-only) so the hash matches what the engine parses. Never add `'unsafe-inline'`
-  or `'unsafe-eval'` for scripts, and never add a second script element.
+  or `'unsafe-eval'` for scripts, and never add a second script element. CSP cannot tell a local
+  `file:` from a network one, so it is not a layer against network shares.
 - `WebResourcePolicy` is the one request policy for both WebView2 hosts, applied by
-  `WebViewResourceBoundary`: images may come from anywhere, the page itself only from a local file, and
-  every other request is answered `403`. Remote images are an intended Markdown feature, so the rule
-  is by resource kind, not by destination.
+  `WebViewResourceBoundary`: images may come from the web, `data:`, or a local file; the page itself
+  only from a local file; every other request is answered `403`. Remote web images are an intended
+  Markdown feature, so the rule is by resource kind, not by destination. A network file is not local:
+  fetching one opens SMB with the reader's Windows credentials. `WebResourcePolicy.IsLocalFile` is an
+  allowlist — no host, not UNC, and a decoded local path fully qualified on a drive letter — because
+  `System.Uri` and Windows disagree about several share spellings. It is the only layer that stops a
+  relative image in a document that itself lives on a share, so such images are not shown.
 
 PDF export additionally runs with document script, web messages, and host objects disabled, and cancels
 any navigation other than its own temporary file. `eng/lab/Test-TigerMarkViewActiveContent.ps1` is the
@@ -774,7 +781,11 @@ The viewer and Help navigate their WebView only through `DocumentWebView.Navigat
 `NativeWebView.Source`. Avalonia starts navigating a pre-set `Source` before it raises `AdapterCreated`,
 so `DocumentWebView` holds the first target until `WebViewResourceBoundary` is installed on the new
 `CoreWebView2`; otherwise the first document, often one named on the command line, would load without
-the request boundary.
+the request boundary. `ViewerNavigationGate` owns that decision and fails closed: if the boundary cannot
+be installed, no document is ever shown in that WebView, a generated notice names the reason, and the
+viewer's status bar reports it as an error. Do not reintroduce a fallback that shows documents
+unprotected; the boundary is the only layer against relative images on a network share. PDF export
+fails the export instead, because `WebViewResourceBoundary.Apply` failing aborts it.
 
 `Browser` must retain `ClipToBounds="True"`. The native WebView can otherwise intercept pointer
 events outside its visual bounds, including status-bar buttons. Icon-button tooltips must be anchored

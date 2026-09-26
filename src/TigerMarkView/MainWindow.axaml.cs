@@ -206,7 +206,11 @@ public partial class MainWindow : Window
 
         // Equally before the first navigation, which this constructor itself starts: the request
         // boundary has to be on the WebView before any document is. See DocumentWebView.
-        _documentWebView = DocumentWebView.Attach(Browser);
+        _documentWebView = DocumentWebView.Attach(Browser, () => _theme);
+
+        // Fails closed: the WebView then shows its own notice, and the status bar must not go on
+        // describing a document as if it were on screen.
+        _documentWebView.BoundaryUnavailable += (_, _) => RefreshStatusBar();
 
         Browser.NavigationCompleted += OnNavigationCompleted;
 
@@ -1912,6 +1916,15 @@ public partial class MainWindow : Window
 
     private void RefreshStatusBar()
     {
+        if (_documentWebView.UnavailableReason is { } unavailable)
+        {
+            StatusDot.Fill = ErrorDotBrush;
+            SetStatusText($"Error — Documents cannot be shown: {unavailable}");
+            ReloadButton.IsVisible = false;
+            ConfirmBanner.IsVisible = false;
+            return;
+        }
+
         if (_watcher is null)
         {
             StatusDot.Fill = NeutralDotBrush;

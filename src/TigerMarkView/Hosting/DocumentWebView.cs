@@ -2,13 +2,15 @@ using System.Runtime.InteropServices;
 using Avalonia.Controls;
 using Avalonia.Platform;
 using Microsoft.Web.WebView2.Core;
+using TigerMarkView.Core.Navigation;
+using TigerMarkView.Core.Rendering;
 using TigerMarkView.Pdf;
 
 namespace TigerMarkView.Hosting;
 
 /// <summary>
-/// Puts <see cref="WebViewResourceBoundary"/> on a window's <see cref="NativeWebView"/> and holds back
-/// navigation until it is in place.
+/// Puts <see cref="WebViewResourceBoundary"/> on a window's <see cref="NativeWebView"/> and lets
+/// nothing be shown in it without that boundary.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -16,22 +18,22 @@ namespace TigerMarkView.Hosting;
 /// <see cref="NativeWebView.AdapterCreated"/> only <em>after</em> it has already started navigating to
 /// whatever <see cref="NativeWebView.Source"/> was set before that. The viewer sets its first document in
 /// its constructor — often a file named on the command line, which is exactly the document least
-/// vetted by the reader — so installing the boundary from that event alone would leave the first
-/// document's requests unchecked. Navigation therefore goes through <see cref="Navigate"/>, which keeps
-/// the latest target until the boundary has been applied and only then hands it to the control.
+/// vetted by the reader — so navigation goes through <see cref="Navigate"/>, and
+/// <see cref="ViewerNavigationGate"/> holds it until the boundary is in.
 /// </para>
 /// <para>
-/// If the platform handle is not a WebView2 or the boundary cannot be installed, the document is still
-/// shown: it has already been sanitized and carries its own Content Security Policy, and refusing to
-/// display anything would make the reader unusable over the loss of one of three layers. On Windows
-/// the handle is always WebView2.
+/// It fails closed. If the platform handle is not a WebView2, or installing the boundary throws, no
+/// document is ever shown in this control: it shows a generated notice naming the reason instead, and
+/// <see cref="BoundaryUnavailable"/> tells the window so its status can say the same. On supported
+/// Windows the handle is always WebView2, so this is a diagnosable dead end rather than a path anyone
+/// is expected to reach.
 /// </para>
 /// </remarks>
 internal sealed class DocumentWebView
 {
     private readonly NativeWebView _webView;
-    private Uri? _pendingSource;
-    private bool _adapterReady;
+    private readonly Func<MarkdownTheme> _theme;
+    private readonly ViewerNavigationGate _gate = new();
 
     /// <summary>
     /// The managed wrapper the boundary's request handler is registered on, kept for the lifetime of
@@ -39,55 +41,90 @@ internal sealed class DocumentWebView
     /// </summary>
     private CoreWebView2? _core;
 
-    private DocumentWebView(NativeWebView webView)
+    private DocumentWebView(NativeWebView webView, Func<MarkdownTheme> theme)
     {
         _webView = webView;
+        _theme = theme;
         webView.AdapterCreated += OnAdapterCreated;
     }
 
+    /// <summary>Raised once, on the UI thread, when the boundary could not be installed.</summary>
+    public event EventHandler<string>? BoundaryUnavailable;
+
+    /// <summary>Why no document can be shown, or <c>null</c> while that is not the case.</summary>
+    public string? UnavailableReason => _gate.UnavailableReason;
+
     /// <summary>
     /// Takes over navigation of <paramref name="webView"/>. Call it before anything navigates the
-    /// control, and navigate through the returned object from then on.
+    /// control, and navigate through the returned object from then on. <paramref name="theme"/> styles
+    /// the notice shown if the boundary cannot be installed.
     /// </summary>
-    public static DocumentWebView Attach(NativeWebView webView)
+    public static DocumentWebView Attach(NativeWebView webView, Func<MarkdownTheme> theme)
     {
         ArgumentNullException.ThrowIfNull(webView);
-        return new DocumentWebView(webView);
+        ArgumentNullException.ThrowIfNull(theme);
+        return new DocumentWebView(webView, theme);
     }
 
-    /// <summary>Shows <paramref name="source"/> once the boundary is in place — immediately, after that.</summary>
+    /// <summary>
+    /// Shows <paramref name="source"/> once the boundary is in place — immediately, after that — and
+    /// never if it could not be installed.
+    /// </summary>
     public void Navigate(Uri source)
     {
-        ArgumentNullException.ThrowIfNull(source);
-
-        if (_adapterReady)
+        if (_gate.Request(source) is { } target)
         {
-            _webView.Source = source;
-        }
-        else
-        {
-            _pendingSource = source;
+            _webView.Source = target;
         }
     }
 
     private void OnAdapterCreated(object? sender, WebViewAdapterEventArgs e)
     {
         // A recreated adapter (the control re-parented) is a new CoreWebView2 and needs its own filter.
-        _core = TryApplyBoundary(e.TryGetPlatformHandle());
-        _adapterReady = true;
-
-        if (_pendingSource is { } source)
+        if (!TryApplyBoundary(e.TryGetPlatformHandle(), out var core, out var failure))
         {
-            _pendingSource = null;
-            _webView.Source = source;
+            var alreadyUnavailable = _gate.State == ViewerBoundaryState.Unavailable;
+            _gate.BoundaryUnavailable(failure);
+            ShowUnavailableNotice(failure);
+
+            if (!alreadyUnavailable)
+            {
+                BoundaryUnavailable?.Invoke(this, failure);
+            }
+
+            return;
+        }
+
+        _core = core;
+
+        if (_gate.BoundaryInstalled() is { } held)
+        {
+            _webView.Source = held;
         }
     }
 
-    private static CoreWebView2? TryApplyBoundary(IPlatformHandle? handle)
+    /// <summary>
+    /// A page of TigerMarkView's own, with nothing from any document in it, so it is safe to show in an
+    /// engine without the boundary.
+    /// </summary>
+    private void ShowUnavailableNotice(string reason)
     {
+        var html = MarkdownRenderer.ToErrorDocument(
+            "Documents are not shown because TigerMarkView could not install its network protection on the viewer.",
+            reason,
+            _theme());
+
+        _webView.NavigateToString(html, new Uri("about:blank"));
+    }
+
+    private static bool TryApplyBoundary(IPlatformHandle? handle, out CoreWebView2? core, out string failure)
+    {
+        core = null;
+
         if (handle is not IWindowsWebView2PlatformHandle webView2)
         {
-            return null;
+            failure = $"The viewer engine is not Microsoft Edge WebView2 ({handle?.HandleDescriptor ?? "no platform handle"}).";
+            return false;
         }
 
         // Avalonia hands out an AddRef'd interface pointer; the managed wrapper takes a reference of
@@ -95,19 +132,23 @@ internal sealed class DocumentWebView
         var pointer = webView2.CoreWebView2;
         if (pointer == IntPtr.Zero)
         {
-            return null;
+            failure = "The WebView2 engine was not available when the viewer was created.";
+            return false;
         }
 
         try
         {
-            var core = CoreWebView2.CreateFromComICoreWebView2(pointer);
+            core = CoreWebView2.CreateFromComICoreWebView2(pointer);
             WebViewResourceBoundary.Apply(core);
-            return core;
+            failure = string.Empty;
+            return true;
         }
         catch (Exception exception) when (exception is COMException or InvalidComObjectException
                                              or InvalidCastException or ArgumentException)
         {
-            return null;
+            core = null;
+            failure = $"Installing the request filter failed: {exception.GetType().Name}: {exception.Message}";
+            return false;
         }
         finally
         {

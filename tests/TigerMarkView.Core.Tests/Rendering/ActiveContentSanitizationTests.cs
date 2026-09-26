@@ -182,6 +182,86 @@ public class ActiveContentSanitizationTests
         Assert.NotNull(body.QuerySelector("pre > code span.syn-comment"));
     }
 
+    public static TheoryData<string> NetworkFileImages => new()
+    {
+        @"<img src=""\\server\share\image.png"">",
+        @"<img src=""//server/share/image.png"">",
+        @"<img src=""file://server/share/image.png"">",
+        @"<img src=""FILE://server/share/image.png"">",
+        @"<img src=""file:////server/share/image.png"">",
+        @"<img src=""\/server\share\image.png"">",
+        @"<img src=""/\server/share/image.png"">",
+        @"<img src="" &#9;//server/share/image.png"">",
+        @"<img src=""/&#10;/server/share/image.png"">",
+        @"<img src=""%5C%5Cserver%5Cshare%5Cimage.png"">",
+        @"<img src=""file:///%5C%5Cserver%5Cshare%5Cimage.png"">",
+        @"<img src=""\\127.0.0.1\c$\image.png"">",
+        @"<img src=""\\?\UNC\server\share\image.png"">",
+        @"![Share](//server/share/image.png)",
+        @"![Share](file://server/share/image.png)",
+        @"![Share](<\\\\server\\share\\image.png>)", // Markdown escapes: this is \\server\share
+    };
+
+    /// <summary>
+    /// A picture on another host is dropped from the markup: fetching it would open an SMB connection
+    /// that carries the reader's Windows credentials. The image element stays, without a source.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(NetworkFileImages))]
+    public void ANetworkFileImageLosesItsSource(string markdown)
+    {
+        var image = Assert.Single(Render(markdown).QuerySelectorAll("img"));
+
+        Assert.Null(image.GetAttribute("src"));
+    }
+
+    [Theory]
+    [InlineData(@"<div style=""background-image: url('//server/share/bg.png')"">x</div>")]
+    [InlineData(@"<div style=""background-image: url('\\\\server\\share\\bg.png')"">x</div>")] // CSS escapes: \\server\share
+    [InlineData(@"<div style=""background: url(file://server/share/bg.png)"">x</div>")]
+    public void ANetworkFileCannotBeFetchedThroughAStyle(string markdown)
+    {
+        var body = Render(markdown);
+
+        Assert.DoesNotContain("server", body.InnerHtml, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("x", body.TextContent.Trim());
+    }
+
+    public static TheoryData<string, string> LocalImages => new()
+    {
+        { "![Diagram](images/diagram.png)", "images/diagram.png" },
+        { "![Diagram](./images/diagram.png)", "./images/diagram.png" },
+        { "![Diagram](../shared/diagram.png)", "../shared/diagram.png" },
+        { "![Diagram](/images/diagram.png)", "/images/diagram.png" },
+        { "<img src=\"file:///C:/Docs/diagram.png\">", "file:///C:/Docs/diagram.png" },
+        { "<img src=\"file:///c:/Docs/diagram.png\">", "file:///c:/Docs/diagram.png" },
+        { "<img src=\"///C:/Docs/diagram.png\">", "///C:/Docs/diagram.png" },
+        { "<img src=\"images\\diagram.png\">", "images\\diagram.png" },
+        { "![Remote](https://example.com/diagram.png)", "https://example.com/diagram.png" },
+        { "![Remote](http://example.com/diagram.png)", "http://example.com/diagram.png" },
+    };
+
+    [Theory]
+    [MemberData(nameof(LocalImages))]
+    public void LocalAndWebImagesKeepTheirSource(string markdown, string expected)
+    {
+        var image = Assert.Single(Render(markdown).QuerySelectorAll("img"));
+
+        Assert.Equal(expected, image.GetAttribute("src"));
+    }
+
+    /// <summary>
+    /// A link to a share is left for the reader to follow: nothing is fetched until they do, and the
+    /// viewer's own navigation rules decide what following it means.
+    /// </summary>
+    [Fact]
+    public void ALinkToAShareKeepsItsTarget()
+    {
+        var link = Assert.Single(Render("[Team notes](file://server/share/notes.md)").QuerySelectorAll("a"));
+
+        Assert.Equal("file://server/share/notes.md", link.GetAttribute("href"));
+    }
+
     [Fact]
     public void AFormControlThatIsNotATaskCheckboxIsRemoved()
     {

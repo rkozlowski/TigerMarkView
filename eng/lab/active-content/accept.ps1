@@ -21,6 +21,16 @@ $DocRoot = Join-Path $Root 'documents'
 $RequestLog = Join-Path $Root 'requests.log'
 $Artifacts = $env:TIGERWINLAB_JOB_ARTIFACTS
 $PassiveImages = @('/img/passive-markdown.png', '/img/passive-html.png')
+$ShareRoot = Join-Path $Root 'share'
+# Every file shares.md names on \\127.0.0.1\tmvprobe; none of them may ever be asked for.
+$ShareImages = @(
+    'html-backslash.png', 'html-slash.png', 'html-file.png', 'html-file-four.png', 'html-encoded.png',
+    'markdown-slash.png', 'markdown-backslash.png', 'css-background.png'
+)
+# The print palette's keyword and comment colours, and the light screen theme's keyword colour.
+$PrintKeyword = @(11, 61, 145)
+$PrintComment = @(79, 91, 102)
+$ScreenKeyword = @(207, 34, 46)
 
 $phases = New-Object System.Collections.Generic.List[object]
 $listener = $null
@@ -85,6 +95,145 @@ function Format-Paths {
     $paths -join ', '
 }
 
+function Join-Names {
+    param([object[]] $Items)
+    $unique = @($Items | Sort-Object -Unique)
+    if ($unique.Count -eq 0) { return '(none)' }
+    $unique -join ', '
+}
+
+function Get-ShareAccess {
+    # Detailed File Share auditing (event 5145) records every file an SMB client asked the probe share
+    # for; the relative target name is the file. Returns the names requested since $Since.
+    param([DateTime] $Since)
+    $events = @()
+    try { $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 5145; StartTime = $Since } -ErrorAction Stop) } catch { $events = @() }
+    @($events | ForEach-Object {
+            $data = @{}
+            foreach ($node in ([xml] $_.ToXml()).Event.EventData.Data) { $data[$node.Name] = [string] $node.'#text' }
+            if ($data['ShareName'] -like '*tmvprobe') { $data['RelativeTargetName'] }
+        } | Where-Object { $_ })
+}
+
+function Wait-ShareAccess {
+    param([DateTime] $Since, [string] $Name, [int] $TimeoutSeconds)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        if (@(Get-ShareAccess -Since $Since) -contains $Name) { return $true }
+        Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $deadline)
+    $false
+}
+
+function Wait-Request {
+    param([int] $Mark, [string] $Path, [int] $TimeoutSeconds)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        if (@(Get-RequestsSince -Mark $Mark | Where-Object { $_.path -eq $Path }).Count -gt 0) { return $true }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    $false
+}
+
+function Wait-File {
+    param([string] $Path, [int] $TimeoutSeconds)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        if ((Test-Path -LiteralPath $Path) -and (Get-Item -LiteralPath $Path).Length -gt 0) {
+            Start-Sleep -Seconds 1
+            return $true
+        }
+        Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $deadline)
+    $false
+}
+
+function Get-ImageSize {
+    # A loaded 48x48 picture is laid out square and at least 48 px at 100% scale; a broken one shows
+    # its alternative text instead, which is not square.
+    param([int64] $Hwnd, [string] $Name)
+    $found = $null
+    try {
+        $found = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-wait -Parameters @{ selector = @{ hwnd = $Hwnd; scope = 'descendants'; name = "^$([regex]::Escape($Name))$"; index = 0 }; timeoutSeconds = 60 }
+    }
+    catch { $found = $null }
+    $bounds = $null
+    if ($null -ne $found -and $null -ne $found.element) { $bounds = $found.element.bounds }
+    $rendered = $null -ne $bounds -and $bounds.height -ge 40 -and [math]::Abs($bounds.width - $bounds.height) -le 4
+    $description = "no element named '$Name'"
+    if ($null -ne $bounds) { $description = "$($bounds.width)x$($bounds.height)" }
+    [pscustomobject]@{ rendered = $rendered; description = $description }
+}
+
+function Find-Text {
+    param([int64] $Hwnd, [string] $Pattern)
+    try {
+        $found = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-find -Parameters @{ selector = @{ hwnd = $Hwnd; scope = 'descendants'; name = $Pattern; index = 0 } }
+        return [bool] $found.found
+    }
+    catch { return $false }
+}
+
+function Get-ColourPixelCount {
+    # Pixels within a tolerance of one colour in a capture: how highlighting is seen on screen.
+    param([string] $PngPath, [int] $R, [int] $G, [int] $B, [int] $Tolerance)
+    Add-Type -AssemblyName System.Drawing
+    $bitmap = New-Object System.Drawing.Bitmap $PngPath
+    try {
+        $rectangle = New-Object System.Drawing.Rectangle 0, 0, $bitmap.Width, $bitmap.Height
+        $data = $bitmap.LockBits($rectangle, [System.Drawing.Imaging.ImageLockMode]::ReadOnly, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $bytes = New-Object byte[] ($data.Stride * $bitmap.Height)
+        [Runtime.InteropServices.Marshal]::Copy($data.Scan0, $bytes, 0, $bytes.Length)
+        $bitmap.UnlockBits($data)
+    }
+    finally { $bitmap.Dispose() }
+    $count = 0
+    for ($i = 0; $i -lt $bytes.Length; $i += 4) {
+        if ([math]::Abs($bytes[$i + 2] - $R) -le $Tolerance -and [math]::Abs($bytes[$i + 1] - $G) -le $Tolerance -and [math]::Abs($bytes[$i] - $B) -le $Tolerance) { $count++ }
+    }
+    $count
+}
+
+function Test-PdfHasColour {
+    # Whether any content stream of a PDF paints with the given fill colour: how highlighting is seen
+    # in a PDF, since the print palette is distinct from every other colour a document uses.
+    param([string] $PdfPath, [int] $R, [int] $G, [int] $B)
+    if (-not (Test-Path -LiteralPath $PdfPath)) { return $false }
+    $bytes = [IO.File]::ReadAllBytes($PdfPath)
+    $latin = [Text.Encoding]::GetEncoding(28591)
+    $text = $latin.GetString($bytes)
+    foreach ($match in [regex]::Matches($text, 'stream\r?\n')) {
+        $start = $match.Index + $match.Length
+        $end = $text.IndexOf('endstream', $start)
+        if ($end -le $start + 2) { continue }
+        $content = $null
+        try {
+            $stream = New-Object IO.MemoryStream (, $bytes[($start + 2)..($end - 1)])
+            $deflate = New-Object IO.Compression.DeflateStream ($stream, [IO.Compression.CompressionMode]::Decompress)
+            $content = (New-Object IO.StreamReader ($deflate, $latin)).ReadToEnd()
+        }
+        catch { $content = $null }
+        if (-not $content) { continue }
+        foreach ($m in [regex]::Matches($content, '(?<r>[0-9]*\.?[0-9]+)\s+(?<g>[0-9]*\.?[0-9]+)\s+(?<b>[0-9]*\.?[0-9]+)\s+(?:rg|sc|scn)\b')) {
+            if ([math]::Abs([double] $m.Groups['r'].Value - $R / 255) -le 0.006 -and
+                [math]::Abs([double] $m.Groups['g'].Value - $G / 255) -le 0.006 -and
+                [math]::Abs([double] $m.Groups['b'].Value - $B / 255) -le 0.006) { return $true }
+        }
+    }
+    $false
+}
+
+function Invoke-Cli {
+    param([string[]] $Arguments)
+    Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = $cliExe; arguments = $Arguments; workingDirectory = $DocRoot; timeoutSeconds = 180 }
+}
+
+function Test-CliCreated {
+    param([object] $Run, [string] $Pdf)
+    $created = @($Run.stdout | Where-Object { $_ -like 'Created: *' }).Count -eq 1
+    $Run.exitCode -eq 0 -and $created -and (Test-Path -LiteralPath $Pdf)
+}
+
 try {
     # --- staging ---------------------------------------------------------------------------------
     $checks = New-Object System.Collections.Generic.List[object]
@@ -96,7 +245,9 @@ try {
     $viewerExe = Join-Path $AppRoot 'TigerMarkView.exe'
     $cliExe = Join-Path $AppRoot 'tiger-mark.exe'
 
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'hostile.md') -Destination $DocRoot
+    foreach ($document in @('hostile.md', 'shares.md', 'code.md')) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $document) -Destination $DocRoot
+    }
     Set-Content -LiteralPath (Join-Path $DocRoot 'local-only.md') -Value "# Local image only`r`n`r`n![Local only](local.png)`r`n" -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $DocRoot 'no-image.md') -Value "# No images`r`n`r`nText only.`r`n" -Encoding UTF8
 
@@ -156,8 +307,54 @@ try {
         catch { Start-Sleep -Milliseconds 500 }
     }
     $checks.Add((New-Check 'Request logger' 'stage.logger' ($ready -and (@(Get-Requests | Where-Object { $_.path -eq '/probe/ready' }).Count -ge 1)) "A loopback logger on port $Port records every request line and answers with an image."))
+
+    # The network share: \\127.0.0.1\tmvprobe in this guest, holding a file for every name a document
+    # aims at it, with Detailed File Share auditing so each file an SMB client asks for is recorded.
+    $null = New-Item -ItemType Directory -Path $ShareRoot -Force
+    Set-Content -LiteralPath (Join-Path $ShareRoot 'control.txt') -Value 'control' -Encoding ASCII
+    foreach ($name in $ShareImages + @('on-share.png', 'edge-control.png')) {
+        Copy-Item -LiteralPath (Join-Path $DocRoot 'local.png') -Destination (Join-Path $ShareRoot $name)
+    }
+    Set-Content -LiteralPath (Join-Path $ShareRoot 'on-share.md') -Encoding UTF8 -Value (
+        "# On a share`r`n`r`n![Share web image](http://127.0.0.1:$Port/img/on-share-web.png)`r`n`r`n![Relative share image](on-share.png)`r`n")
+    $null = & icacls.exe $ShareRoot '/grant' 'Users:(OI)(CI)RX' '/T' '/Q' 2>&1
+    Start-Service -Name LanmanServer
+    $null = New-SmbShare -Name 'tmvprobe' -Path $ShareRoot -ReadAccess 'Everyone'
+    # Detailed File Share, by GUID so the subcategory name's language does not matter.
+    $null = & auditpol.exe /set '/subcategory:{0CCE9244-69AE-11D9-BED3-505054503030}' /success:enable /failure:enable 2>&1
+    $auditOn = $LASTEXITCODE -eq 0
+    $checks.Add((New-Check 'Audited probe share' 'stage.share' ($auditOn -and $null -ne (Get-SmbShare -Name 'tmvprobe' -ErrorAction SilentlyContinue)) "\\127.0.0.1\tmvprobe serves $ShareRoot with Detailed File Share auditing on."))
+
+    # The viewer runs with Syntax Highlighting on and the Export to PDF toolbar button shown, written
+    # as the interactive user into that user's own settings file.
+    $seed = '$d = Join-Path $env:LOCALAPPDATA ''TigerMarkView''; $null = New-Item -ItemType Directory -Force $d; ' +
+        '[IO.File]::WriteAllText((Join-Path $d ''settings.json''), ''{ "syntaxHighlighting": true, "toolbarExportPdfVisible": true }'')'
+    $seeded = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = 'powershell.exe'; arguments = @('-NoProfile', '-NonInteractive', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($seed))); timeoutSeconds = 60 }
+    $checks.Add((New-Check 'Viewer settings seeded' 'stage.settings' ($seeded.exitCode -eq 0) "Syntax Highlighting and the Export to PDF toolbar button are on for the interactive user (exit $($seeded.exitCode); $(@($seeded.stderr) -join ' '))."))
     Add-Phase -Name 'staging' -Checks $checks
     if (-not $ready) { throw 'The request logger did not start.' }
+
+    # --- share controls --------------------------------------------------------------------------
+    # Without these the share checks below could pass vacuously: the audit must see an SMB read, and an
+    # unprotected Chromium must be shown to fetch an image from the share at all.
+    $checks = New-Object System.Collections.Generic.List[object]
+
+    $since = Get-Date
+    $control = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = 'cmd.exe'; arguments = @('/c', 'type', '\\127.0.0.1\tmvprobe\control.txt'); timeoutSeconds = 60 }
+    $oracle = Wait-ShareAccess -Since $since -Name 'control.txt' -TimeoutSeconds 30
+    $checks.Add((New-Check 'The share audit sees an SMB read' 'control.share-audit' ($control.exitCode -eq 0 -and $oracle) "type over SMB exited $($control.exitCode); audited names: $(Join-Names (Get-ShareAccess -Since $since))."))
+
+    $edge = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'
+    $edgePage = Join-Path $DocRoot 'edge-control.html'
+    Set-Content -LiteralPath $edgePage -Encoding ASCII -Value '<!doctype html><html><body><img src="file://127.0.0.1/tmvprobe/edge-control.png"></body></html>'
+    $since = Get-Date
+    $edgeRun = $null
+    if (Test-Path -LiteralPath $edge) {
+        $edgeRun = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = $edge; arguments = @('--headless=new', '--disable-gpu', '--no-first-run', "--user-data-dir=$(Join-Path $DocRoot 'edge-profile')", '--virtual-time-budget=5000', '--dump-dom', ([Uri] $edgePage).AbsoluteUri); timeoutSeconds = 120 }
+    }
+    $vector = Wait-ShareAccess -Since $since -Name 'edge-control.png' -TimeoutSeconds 30
+    $checks.Add((New-Check 'Unprotected Chromium fetches a share image' 'control.chromium-unc' $vector "Headless Edge on a local page naming file://127.0.0.1/tmvprobe/edge-control.png: present $(Test-Path -LiteralPath $edge), audited names: $(Join-Names (Get-ShareAccess -Since $since))."))
+    Add-Phase -Name 'share-controls' -Checks $checks
 
     # --- viewer ----------------------------------------------------------------------------------
     $checks = New-Object System.Collections.Generic.List[object]
@@ -232,6 +429,81 @@ try {
     $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command stop-process -Parameters @{ processId = $app.processId }
     Add-Phase -Name 'viewer' -Checks $checks
 
+    # --- viewer: network shares ------------------------------------------------------------------
+    $checks = New-Object System.Collections.Generic.List[object]
+    $mark = @(Get-Requests).Count
+    $since = Get-Date
+    $shares = Join-Path $DocRoot 'shares.md'
+
+    $app = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command start-process -Parameters @{ filePath = $viewerExe; arguments = @($shares); workingDirectory = $DocRoot }
+    $window = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $app.processId; titlePattern = '^shares\.md'; timeoutSeconds = 120 }
+    $web = Wait-Request -Mark $mark -Path '/img/shares-web.png' -TimeoutSeconds 90
+    Start-Sleep -Seconds 5
+    $null = Save-DesktopCapture -Session $TigerWinLabDesktop -Name 'viewer-shares.png' -Destination $Artifacts -Hwnd ([int64] $window.hwnd)
+    $checks.Add((New-Check 'A web image still loads beside share references' 'viewer.shares-web-image' $web "Requests: $(Format-Paths (Get-RequestsSince -Mark $mark))."))
+
+    foreach ($name in @('Relative local image', 'Absolute local image', 'Absolute HTML local image')) {
+        $size = Get-ImageSize -Hwnd ([int64] $window.hwnd) -Name $name
+        $checks.Add((New-Check "$name still renders" ('viewer.' + ($name.ToLowerInvariant() -replace ' ', '-')) $size.rendered "'$name' is laid out at $($size.description)."))
+    }
+
+    $touched = @(Get-ShareAccess -Since $since)
+    $checks.Add((New-Check 'No share image is requested by the viewer' 'viewer.no-share-access' ($touched.Count -eq 0) "Share files asked for: $(Join-Names $touched). The document names $($ShareImages.Count) images on \\127.0.0.1\tmvprobe in every spelling it has."))
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command stop-process -Parameters @{ processId = $app.processId }
+
+    # A document that itself lives on the share: its relative image only becomes a network path once
+    # resolved against the document's base, so only the request boundary can refuse it.
+    $mark = @(Get-Requests).Count
+    $since = Get-Date
+    $app = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command start-process -Parameters @{ filePath = $viewerExe; arguments = @('\\127.0.0.1\tmvprobe\on-share.md'); workingDirectory = $DocRoot }
+    $window = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $app.processId; titlePattern = '^on-share\.md'; timeoutSeconds = 120 }
+    $web = Wait-Request -Mark $mark -Path '/img/on-share-web.png' -TimeoutSeconds 90
+    Start-Sleep -Seconds 5
+    $null = Save-DesktopCapture -Session $TigerWinLabDesktop -Name 'viewer-on-share.png' -Destination $Artifacts -Hwnd ([int64] $window.hwnd)
+    $touched = @(Get-ShareAccess -Since $since)
+    $checks.Add((New-Check 'A document on a share opens, but its share image is not fetched' 'viewer.on-share' ($web -and ($touched -contains 'on-share.md') -and ($touched -notcontains 'on-share.png')) "Rendered: $web. Share files asked for: $(Join-Names $touched) — the document itself, read by the reader's own choice, and not its relative image."))
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command stop-process -Parameters @{ processId = $app.processId }
+    Add-Phase -Name 'viewer-shares' -Checks $checks
+
+    # --- viewer: code, highlighted, and GUI export --------------------------------------------------
+    $checks = New-Object System.Collections.Generic.List[object]
+    $mark = @(Get-Requests).Count
+    $code = Join-Path $DocRoot 'code.md'
+    $guiPdf = Join-Path $DocRoot 'code-gui.pdf'
+
+    $app = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command start-process -Parameters @{ filePath = $viewerExe; arguments = @($code); workingDirectory = $DocRoot }
+    $window = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $app.processId; titlePattern = '^code\.md'; timeoutSeconds = 120 }
+    $null = Find-Text -Hwnd ([int64] $window.hwnd) -Pattern '^Code acceptance$'
+    Start-Sleep -Seconds 5
+    $null = Save-DesktopCapture -Session $TigerWinLabDesktop -Name 'viewer-code.png' -Destination $Artifacts -Hwnd ([int64] $window.hwnd)
+    $keywordPixels = Get-ColourPixelCount -PngPath (Join-Path $Artifacts 'viewer-code.png') -R $ScreenKeyword[0] -G $ScreenKeyword[1] -B $ScreenKeyword[2] -Tolerance 40
+    $checks.Add((New-Check 'Syntax highlighting renders in the viewer' 'viewer.highlighting' ($keywordPixels -ge 20) "$keywordPixels pixel(s) of the keyword colour #cf222e in the viewer capture."))
+
+    $literal = (Find-Text -Hwnd ([int64] $window.hwnd) -Pattern 'exfil/code-csharp-img') -and
+        (Find-Text -Hwnd ([int64] $window.hwnd) -Pattern "^<script>fetch\('http://127\.0\.0\.1:$Port/exfil/code-plain'\)</script>$")
+    $checks.Add((New-Check 'Hostile code is shown as literal text' 'viewer.code-literal' $literal "The C# string literal and the plain <script> line are found as page text."))
+
+    # GUI export of the same retained, highlighted page, through the Save dialog.
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-invoke -Parameters @{ selector = @{ hwnd = [int64] $window.hwnd; scope = 'descendants'; automationId = 'ExportPdfToolbarButton'; index = 0 }; pattern = 'invoke'; settleMilliseconds = 500 }
+    $dialog = $null
+    try { $dialog = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $app.processId; titlePattern = '^Export to PDF$'; timeoutSeconds = 30 } } catch { $dialog = $null }
+    if ($null -ne $dialog) {
+        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command window -Parameters @{ hwnd = [int64] $dialog.hwnd; action = 'activate'; settleMilliseconds = 500 }
+        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command keyboard -Parameters @{ action = 'sequence'; sequence = @(@{ action = 'down'; key = 'ControlKey' }, @{ action = 'down'; key = 'A' }, @{ action = 'up'; key = 'A' }, @{ action = 'up'; key = 'ControlKey' }) }
+        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command keyboard -Parameters @{ action = 'text'; text = $guiPdf; settleMilliseconds = 500 }
+        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command keyboard -Parameters @{ action = 'keys'; keys = @('Enter') }
+    }
+    $exported = Wait-File -Path $guiPdf -TimeoutSeconds 90
+    $guiKeyword = Test-PdfHasColour -PdfPath $guiPdf -R $PrintKeyword[0] -G $PrintKeyword[1] -B $PrintKeyword[2]
+    $guiComment = Test-PdfHasColour -PdfPath $guiPdf -R $PrintComment[0] -G $PrintComment[1] -B $PrintComment[2]
+    $checks.Add((New-Check 'Syntax highlighting reaches the exported PDF' 'pdf.gui-highlighting' ($exported -and $guiKeyword -and $guiComment) "Save dialog found: $($null -ne $dialog); code-gui.pdf written: $exported; print keyword colour: $guiKeyword; print comment colour: $guiComment."))
+
+    Start-Sleep -Seconds 2
+    $codeExfil = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -like '/exfil/*' })
+    $checks.Add((New-Check 'Hostile code stays inert in the viewer and GUI export' 'viewer.code-no-exfil' ($codeExfil.Count -eq 0) "Exfiltration requests: $(Format-Paths $codeExfil)."))
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command stop-process -Parameters @{ processId = $app.processId }
+    Add-Phase -Name 'viewer-code' -Checks $checks
+
     # --- PDF conversion --------------------------------------------------------------------------
     $checks = New-Object System.Collections.Generic.List[object]
     $mark = @(Get-Requests).Count
@@ -270,6 +542,40 @@ try {
         if (Test-Path -LiteralPath $file) { Copy-Item -LiteralPath $file -Destination $Artifacts }
     }
     Add-Phase -Name 'pdf' -Checks $checks
+
+    # --- PDF conversion: network shares and code -------------------------------------------------
+    $checks = New-Object System.Collections.Generic.List[object]
+    $mark = @(Get-Requests).Count
+    $since = Get-Date
+    $sharesPdf = Join-Path $DocRoot 'shares.pdf'
+    $run = Invoke-Cli -Arguments @((Join-Path $DocRoot 'shares.md'), '-o', $sharesPdf)
+    $web = Wait-Request -Mark $mark -Path '/img/shares-web.png' -TimeoutSeconds 10
+    $sharesImages = Get-ImageObjectCount -PdfPath $sharesPdf
+    $checks.Add((New-Check 'tiger-mark still embeds local and web images beside share references' 'pdf.shares-images' ((Test-CliCreated -Run $run -Pdf $sharesPdf) -and $web -and $sharesImages -ge 2) "Exit $($run.exitCode); web image requested: $web; shares.pdf holds $sharesImages image object(s)."))
+    $touched = @(Get-ShareAccess -Since $since)
+    $checks.Add((New-Check 'No share image is requested by PDF conversion' 'pdf.no-share-access' ($touched.Count -eq 0) "Share files asked for: $(Join-Names $touched)."))
+
+    $since = Get-Date
+    $onSharePdf = Join-Path $DocRoot 'on-share.pdf'
+    $run = Invoke-Cli -Arguments @('\\127.0.0.1\tmvprobe\on-share.md', '-o', $onSharePdf)
+    Start-Sleep -Seconds 3
+    $touched = @(Get-ShareAccess -Since $since)
+    $checks.Add((New-Check 'A document on a share converts, but its share image is not fetched' 'pdf.on-share' ((Test-CliCreated -Run $run -Pdf $onSharePdf) -and ($touched -contains 'on-share.md') -and ($touched -notcontains 'on-share.png')) "Exit $($run.exitCode); share files asked for: $(Join-Names $touched)."))
+
+    # tiger-mark renders with highlighting off, so its PDF of code.md is the control for the colour check.
+    $mark = @(Get-Requests).Count
+    $cliPdf = Join-Path $DocRoot 'code-cli.pdf'
+    $run = Invoke-Cli -Arguments @((Join-Path $DocRoot 'code.md'), '-o', $cliPdf)
+    $cliKeyword = Test-PdfHasColour -PdfPath $cliPdf -R $PrintKeyword[0] -G $PrintKeyword[1] -B $PrintKeyword[2]
+    $checks.Add((New-Check 'The colour check tells highlighted from plain' 'pdf.highlighting-control' ((Test-CliCreated -Run $run -Pdf $cliPdf) -and -not $cliKeyword) "code-cli.pdf (highlighting off) carries the print keyword colour: $cliKeyword."))
+    Start-Sleep -Seconds 2
+    $codeExfil = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -like '/exfil/*' })
+    $checks.Add((New-Check 'Hostile code stays inert in tiger-mark' 'pdf.code-no-exfil' ($codeExfil.Count -eq 0) "Exfiltration requests: $(Format-Paths $codeExfil)."))
+
+    foreach ($file in @($sharesPdf, $onSharePdf, $cliPdf, (Join-Path $DocRoot 'code-gui.pdf'))) {
+        if (Test-Path -LiteralPath $file) { Copy-Item -LiteralPath $file -Destination $Artifacts }
+    }
+    Add-Phase -Name 'pdf-shares-code' -Checks $checks
 }
 catch {
     Add-Phase -Name 'error' -Checks @(New-Check 'Payload completed' 'payload.error' $false $_.Exception.Message)

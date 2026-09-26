@@ -59,8 +59,9 @@ foreach ($project in @('src\TigerMarkView\TigerMarkView.csproj', 'src\TigerMarkV
 }
 
 Compress-Archive -Path (Join-Path $publishRoot '*') -DestinationPath (Join-Path $payloadRoot 'app.zip')
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'active-content\accept.ps1') -Destination $payloadRoot
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'active-content\hostile.md') -Destination $payloadRoot
+foreach ($file in @('accept.ps1', 'hostile.md', 'shares.md', 'code.md')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "active-content\$file") -Destination $payloadRoot
+}
 
 $resultPath = Join-Path $outputRoot 'result.json'
 if (Test-Path -LiteralPath $resultPath) { Remove-Item -LiteralPath $resultPath -Force }

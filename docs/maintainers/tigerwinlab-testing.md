@@ -97,6 +97,24 @@ opens the document in the viewer and converts it with `tiger-mark`, then asserts
 - F1, pressed with focus inside the page, still opens Help — the proof that the shell's hash-admitted
   script runs under the policy.
 
+Network shares are proven against `\\127.0.0.1\tmvprobe`, a share the payload creates in the guest with
+Detailed File Share auditing (event 5145) on, so every file an SMB client asks for is recorded. Two
+controls come first: a plain SMB read must appear in the audit, and headless Edge on a local page
+naming an image on the share must fetch it — so the vector is real and the oracle sees it. Then
+`eng/lab/active-content/shares.md`, which names that share in every spelling (`\\`, `//`, `file://`,
+four slashes, percent-encoded, a CSS background), is opened in the viewer and converted by
+`tiger-mark`: no share file may be requested, while its relative and absolute local images and its web
+image still load. A document opened from the share itself must be read, but its relative image must
+not be — the case only the request boundary can stop.
+
+`eng/lab/active-content/code.md` covers syntax highlighting and hostile code. The payload seeds the
+interactive user's settings with Syntax Highlighting and the Export to PDF toolbar button on, opens the
+document, counts keyword-coloured pixels in the viewer, drives GUI export through its Save dialog, and
+checks the exported PDF's content streams for the print palette's keyword and comment colours; the
+`tiger-mark` PDF of the same document, rendered without highlighting, is the control that must lack
+them. The hostile blocks name `/exfil/` images, so any source that escaped into markup would show up in
+the request log.
+
 Evidence (the request log, captures, and the PDFs) lands under `artifacts\lab\active-content\job\`.
 
 ## Current concrete lab gaps

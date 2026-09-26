@@ -73,8 +73,11 @@ sized images, tables, inline styles) is kept; scripts, event handlers, `javascri
 embedded objects, stylesheets, and forms are removed. Every generated page also carries a Content
 Security Policy that admits only TigerMarkView's own script, and the viewer and PDF export refuse every
 network request except images. Local and web images therefore keep working, while nothing in a
-document can run, and the only requests it can cause are for the image addresses its author wrote. The
-viewer, PDF export, and `tiger-mark` apply the same rules.
+document can run, and the only requests it can cause are for the image addresses its author wrote.
+Images on network shares (`\\server\share`) are not loaded, because fetching them would send the
+reader's Windows credentials to that server; this includes the images of a document that is itself on a
+share. If the viewer cannot install its request protection, it shows no documents and says why rather
+than showing them unprotected. The viewer, PDF export, and `tiger-mark` apply the same rules.
 
 ## PDF export
 

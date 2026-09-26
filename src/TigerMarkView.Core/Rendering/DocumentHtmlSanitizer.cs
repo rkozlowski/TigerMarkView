@@ -75,7 +75,8 @@ internal static class DocumentHtmlSanitizer
 
     /// <remarks>
     /// <c>file</c> keeps absolute local links and images working — the viewer resolves them through
-    /// its own navigation rules, and <see cref="WebResourcePolicy"/> decides what may be fetched.
+    /// its own navigation rules, and <see cref="WebResourcePolicy"/> decides what may be fetched;
+    /// <see cref="OnFilterUrl"/> drops the ones that name another host.
     /// <c>data</c> is admitted here only so that <see cref="OnFilterUrl"/> can keep it for inline
     /// images and nowhere else. Relative URLs are kept as written; the document's <c>&lt;base&gt;</c>
     /// resolves them.
@@ -118,12 +119,35 @@ internal static class DocumentHtmlSanitizer
     }
 
     /// <summary>
-    /// A <c>data:</c> URL survives only as the source of an image, which is the one place it is a
-    /// picture rather than a document the WebView could be sent to.
+    /// Drops a URL that would reach a file on another host, and keeps a <c>data:</c> URL only as the
+    /// source of an image.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A network file is dropped wherever the page would fetch it — an image source, a CSS
+    /// <c>url()</c> — because fetching it opens an SMB connection that carries the reader's Windows
+    /// credentials (see <see cref="WebResourcePolicy"/>). A hyperlink keeps its target: nothing is
+    /// fetched until the reader follows it, and following it is the reader's own action.
+    /// </para>
+    /// <para>
+    /// A <c>data:</c> URL is a picture only as an image source; anywhere else it is a document the
+    /// WebView could be sent to.
+    /// </para>
+    /// </remarks>
     private static void OnFilterUrl(object? sender, FilterUrlEventArgs e)
     {
-        if (e.SanitizedUrl is not { } url || !url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        if (e.SanitizedUrl is not { } url)
+        {
+            return;
+        }
+
+        if (WebResourcePolicy.IsNetworkFileReference(url) && !IsHyperlinkTarget(e.Tag, e.OriginalUrl))
+        {
+            e.SanitizedUrl = null;
+            return;
+        }
+
+        if (!url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
@@ -137,6 +161,15 @@ internal static class DocumentHtmlSanitizer
             e.SanitizedUrl = null;
         }
     }
+
+    /// <summary>
+    /// True when <paramref name="url"/> is the <c>href</c> of a link, as opposed to something the page
+    /// fetches by itself — the same element's style, for instance.
+    /// </summary>
+    private static bool IsHyperlinkTarget(IElement? element, string url) =>
+        element is not null
+        && element.LocalName is "a" or "area"
+        && string.Equals(element.GetAttribute("href"), url, StringComparison.Ordinal);
 
     /// <summary>
     /// Keeps <c>input</c> only as the inert checkbox a Markdown task list renders.

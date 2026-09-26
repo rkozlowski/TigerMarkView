@@ -75,7 +75,7 @@ public partial class HelpWindow : Window
         // The same request boundary as the viewer. Help shows only bundled documents, but it renders
         // them through the same pipeline into the same kind of WebView, and one rule for both is
         // simpler to reason about than an exception for the trusted one. See DocumentWebView.
-        _documentWebView = DocumentWebView.Attach(Browser);
+        _documentWebView = DocumentWebView.Attach(Browser, () => _theme);
 
         Browser.NavigationCompleted += OnNavigationCompleted;
 

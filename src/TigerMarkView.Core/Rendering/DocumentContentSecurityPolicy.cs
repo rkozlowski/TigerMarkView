@@ -23,6 +23,13 @@ namespace TigerMarkView.Core.Rendering;
 /// that do not fall back to it.
 /// </para>
 /// <para>
+/// This layer cannot tell a local file from one on a network share: CSP sources for <c>file:</c> are
+/// scheme-only, so <c>img-src file:</c> admits <c>file://server/share/x.png</c> too. Network files are
+/// kept out by the other two layers — the sanitizer drops them from the markup, and
+/// <see cref="WebResourcePolicy"/> refuses them at the engine, including references that only become
+/// network files once resolved against the document's base.
+/// </para>
+/// <para>
 /// Style elements are pinned by hash to the shell's own stylesheet, while <c>style</c> attributes stay
 /// permitted: raw HTML sizes and aligns things with them and Markdig writes them for table alignment.
 /// The split matters because a stylesheet can do what an attribute cannot — select on attribute values

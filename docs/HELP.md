@@ -283,6 +283,12 @@ Pictures work as usual. Local images load from beside the file, and web images l
 the badges on a project's README — which also means that the server hosting a web image can see that
 the document was opened. Nothing else in a document can reach the network.
 
+Images on network shares are the exception: a picture addressed as `\\server\share\...` is not shown.
+Windows would sign in to that server with your account to fetch it, so a document could otherwise
+collect your sign-in details from anyone who opened it. This also applies to a document that is itself
+on a share: it opens, but its images do not appear. Copy the document and its images to a local folder
+to see them.
+
 ## What TigerMarkView remembers
 
 Between sessions, TigerMarkView remembers:
@@ -319,7 +325,8 @@ document. If it has been moved or deleted, export it again.
 **An image in the document does not appear.**
 Images are resolved relative to the Markdown file itself, exactly as they are on GitHub. Check that
 the path in the document matches where the image really sits next to the file, and that the file name's
-capitalisation and extension match.
+capitalisation and extension match. Images on a network share are never shown — see
+[HTML inside Markdown](#html-inside-markdown).
 
 **Part of the document's HTML is missing.**
 Scripts, frames, embedded objects, forms, and similar active HTML are removed on purpose — see

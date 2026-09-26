@@ -50,6 +50,45 @@ public class WebResourcePolicyTests
         Assert.False(WebResourcePolicy.Allows(new Uri(uri), kind));
     }
 
+    /// <summary>
+    /// Every spelling of a file on another host — which Windows would fetch over SMB with the reader's
+    /// credentials — is refused, even as an image and even where System.Uri itself does not call it UNC.
+    /// </summary>
+    [Theory]
+    [InlineData("file://server/share/image.png")]
+    [InlineData("file:////server/share/image.png")]
+    [InlineData("file://///server/share/image.png")]
+    [InlineData("file:///server/share/image.png")]
+    [InlineData("file:///%5C%5Cserver%5Cshare%5Cimage.png")]
+    [InlineData("file:///%5C%5C%3F%5CUNC%5Cserver%5Cshare%5Cimage.png")]
+    [InlineData("file:///%5C%5C%3F%5CC:%5Cimage.png")]
+    [InlineData("file://127.0.0.1/c$/image.png")]
+    [InlineData("file://[::1]/c$/image.png")]
+    [InlineData("file://localhost/C:/Docs/image.png")]
+    [InlineData("file://server.example.com/share/image.png")]
+    public void ANetworkFileIsRefusedAsAnImageAndAsAPage(string uri)
+    {
+        var target = new Uri(uri);
+
+        Assert.False(WebResourcePolicy.IsLocalFile(target));
+        Assert.False(WebResourcePolicy.Allows(target, WebResourceKind.Image));
+        Assert.False(WebResourcePolicy.Allows(target, WebResourceKind.Document));
+    }
+
+    [Theory]
+    [InlineData("file:///C:/Docs/images/diagram.png")]
+    [InlineData("file:///c:/Docs/diagram.png")]
+    [InlineData("file:///D:/Shared%20Drive/diagram.png")]
+    [InlineData("file:///C|/Docs/diagram.png")]
+    [InlineData("file:///C:/Docs/../Other/diagram.png")]
+    public void ALocalDriveFileIsAllowedAsAnImage(string uri)
+    {
+        var target = new Uri(uri);
+
+        Assert.True(WebResourcePolicy.IsLocalFile(target));
+        Assert.True(WebResourcePolicy.Allows(target, WebResourceKind.Image));
+    }
+
     [Fact]
     public void ARelativeAddressIsRefusedBecauseTheEngineOnlyEverAsksAboutResolvedOnes()
     {
