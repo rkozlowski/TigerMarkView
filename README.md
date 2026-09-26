@@ -68,6 +68,14 @@ Two rendering options are available under **View > Rendering**:
 Both options are implemented in `TigerMarkView.Core`, so the displayed document and an exported PDF
 stay consistent. The CLI currently uses the default rendering with both options off.
 
+Documents are treated as untrusted content. Formatting HTML inside Markdown (`<details>`, `<kbd>`,
+sized images, tables, inline styles) is kept; scripts, event handlers, `javascript:` links, frames,
+embedded objects, stylesheets, and forms are removed. Every generated page also carries a Content
+Security Policy that admits only TigerMarkView's own script, and the viewer and PDF export refuse every
+network request except images. Local and web images therefore keep working, while nothing in a
+document can run, and the only requests it can cause are for the image addresses its author wrote. The
+viewer, PDF export, and `tiger-mark` apply the same rules.
+
 ## PDF export
 
 **File > Export to PDF...** exports the currently displayed document version. If a newer version is

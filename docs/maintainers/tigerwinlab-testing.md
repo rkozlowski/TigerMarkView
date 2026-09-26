@@ -71,6 +71,34 @@ physical menu input, modal handling, occlusion, screenshots, and F1 Help without
 Pass an older installer/version to enable the upgrade phases. Without a previous public build, those
 phases are intentionally absent rather than simulated.
 
+## Active-content acceptance
+
+Unit tests prove what the renderer emits: the sanitized HTML, the page's Content Security Policy, and
+the request policy's decisions. Whether the real WebView2 engine then refuses what it should, inside
+the real Avalonia viewer and the real `tiger-mark`, is proven in the lab:
+
+```powershell
+pwsh eng/lab/Test-TigerMarkViewActiveContent.ps1
+```
+
+The wrapper publishes the GUI and CLI self-contained into one tree and runs
+`eng/lab/active-content/accept.ps1` as an `Invoke-TigerWinLabJob.ps1 -Desktop` job on
+`TigerWinLab-Win11-Clean`, with the guest's network adapter disconnected. The guest starts a loopback
+request logger and uses `eng/lab/active-content/hostile.md`, which aims every active construct at
+`/exfil/<vector>` and its passive remote images at `/img/`, so the logger is the oracle. The payload
+opens the document in the viewer and converts it with `tiger-mark`, then asserts that:
+
+- both remote images are requested and no `/exfil/` request ever arrives, on either path, and that
+  both paths make the same set of requests;
+- the unsized relative local image is laid out at its real 48 px size in the viewer, and a PDF of a
+  local-image-only document embeds an image while an image-free control embeds none;
+- the document's own attempt to post `tigermarkview:help` opens nothing, and a real click on the former
+  `javascript:` link changes nothing; and
+- F1, pressed with focus inside the page, still opens Help — the proof that the shell's hash-admitted
+  script runs under the policy.
+
+Evidence (the request log, captures, and the PDFs) lands under `artifacts\lab\active-content\job\`.
+
 ## Current concrete lab gaps
 
 TigerWinLab's present generic installer scenario is machine-scope and administrative. It cannot yet

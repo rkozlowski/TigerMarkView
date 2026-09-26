@@ -269,6 +269,20 @@ have reviewed stays the version you reviewed, and that is still the version a PD
 
 This help is not affected by either option: it is part of the application and always looks the same.
 
+### HTML inside Markdown
+
+Markdown may contain HTML, and TigerMarkView shows the kind people use for layout: `<details>` and
+`<summary>`, `<kbd>`, `<sub>` and `<sup>`, aligned paragraphs, sized images, tables, and inline styles.
+
+A document is only something to read, so anything in it that could *act* is removed before it is shown
+or exported: scripts, event handlers such as `onclick`, `javascript:` links, frames, embedded objects
+and media, stylesheets, forms, and automatic redirects. Such parts simply do not appear. The same rules
+apply on screen, in an exported PDF, and in `tiger-mark`.
+
+Pictures work as usual. Local images load from beside the file, and web images load from the web, like
+the badges on a project's README — which also means that the server hosting a web image can see that
+the document was opened. Nothing else in a document can reach the network.
+
 ## What TigerMarkView remembers
 
 Between sessions, TigerMarkView remembers:
@@ -306,6 +320,10 @@ document. If it has been moved or deleted, export it again.
 Images are resolved relative to the Markdown file itself, exactly as they are on GitHub. Check that
 the path in the document matches where the image really sits next to the file, and that the file name's
 capitalisation and extension match.
+
+**Part of the document's HTML is missing.**
+Scripts, frames, embedded objects, forms, and similar active HTML are removed on purpose — see
+[HTML inside Markdown](#html-inside-markdown). Formatting HTML is kept.
 
 **A link does nothing.**
 Links to local files that are not Markdown are refused on purpose, with a note in the status bar. Web

@@ -10,6 +10,9 @@ publishers, and licence identifiers are taken from the package metadata used by 
 |---|---|---|
 | [Markdig](https://github.com/xoofx/markdig) | Alexandre Mutel | BSD 2-Clause |
 | [ColorCode.Core / ColorCode-Universal](https://github.com/CommunityToolkit/ColorCode-Universal) | .NET Foundation and Contributors | MIT |
+| [HtmlSanitizer](https://github.com/mganss/HtmlSanitizer) | Michael Ganss | MIT |
+| [AngleSharp](https://anglesharp.github.io/) | AngleSharp | MIT |
+| [AngleSharp.Css](https://anglesharp.github.io/) | AngleSharp.Css | MIT |
 | [Avalonia package family](https://avaloniaui.net/) | The AvaloniaUI Project / Avalonia Team | MIT |
 | [Avalonia.Controls.WebView](https://avaloniaui.net/) | AvaloniaUI OÜ | MIT |
 | Avalonia.Angle.Windows.Natives | The ANGLE Project Authors | BSD 3-Clause |
@@ -25,7 +28,8 @@ publishers, and licence identifiers are taken from the package metadata used by 
 | [Microsoft.Extensions.DependencyInjection.Abstractions](https://dot.net/) | Microsoft Corporation | MIT |
 
 Markdig converts Markdown to HTML. ColorCode.Core supplies language grammars for optional syntax
-highlighting; TigerMarkView supplies the colour palettes. Avalonia, SkiaSharp, HarfBuzzSharp,
+highlighting; TigerMarkView supplies the colour palettes. HtmlSanitizer, with the AngleSharp HTML and
+CSS parsers it is built on, removes scripts and other active content from the generated HTML. Avalonia, SkiaSharp, HarfBuzzSharp,
 MicroCom.Runtime, Tmds.DBus.Protocol, ANGLE, and Avalonia.Controls.WebView form the UI and WebView
 integration. The WebView2 SDK displays rendered documents and produces PDFs. TigerMarkView vendors a
 small subset of Fluent UI System Icons as vector geometry.
@@ -39,11 +43,13 @@ and Fluent UI System Icons.
 
 ## MIT License
 
-Applies to ColorCode.Core, the Avalonia package family, Avalonia.Controls.WebView, SkiaSharp,
-HarfBuzzSharp, MicroCom.Runtime, Tmds.DBus.Protocol, Fluent UI System Icons, ItTiger.TigerCli,
-ItTiger.Core, and the two
+Applies to ColorCode.Core, HtmlSanitizer, AngleSharp, AngleSharp.Css, the Avalonia package family,
+Avalonia.Controls.WebView, SkiaSharp, HarfBuzzSharp, MicroCom.Runtime, Tmds.DBus.Protocol, Fluent UI
+System Icons, ItTiger.TigerCli, ItTiger.Core, and the two
 Microsoft.Extensions abstractions packages. Copyright is held by the respective parties in the table
-above. ColorCode.Core is Copyright (c) .NET Foundation and Contributors. The Avalonia package
+above. ColorCode.Core is Copyright (c) .NET Foundation and Contributors. HtmlSanitizer is Copyright
+2013-2026 Michael Ganss, and AngleSharp is Copyright 2013-2026, AngleSharp; the AngleSharp.Css package
+metadata names AngleSharp.Css as its author and states no separate copyright line. The Avalonia package
 metadata is Copyright 2013-2026 © The AvaloniaUI Project, and Avalonia.Controls.WebView is Copyright
 2019-2026 © AvaloniaUI OÜ. The SkiaSharp and HarfBuzzSharp package licence names Xamarin, Inc.
 (2015-2016) and Microsoft Corporation (2017-2018). MicroCom.Runtime is Copyright 2021 © Nikita

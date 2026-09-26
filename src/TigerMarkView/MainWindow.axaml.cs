@@ -90,6 +90,10 @@ public partial class MainWindow : Window
 
     private readonly ApplicationSettings _settings;
     private readonly SettingsStore _settingsStore;
+
+    /// <summary>The only route by which the viewer's WebView is navigated.</summary>
+    private readonly DocumentWebView _documentWebView;
+
     private ReloadMode _currentReloadMode;
     private EditorConfiguration _editorConfiguration;
     private MarkdownTheme _theme;
@@ -199,6 +203,10 @@ public partial class MainWindow : Window
         // Before anything else touches the WebView: its browser profile must not default to the
         // application directory, which an all-users install makes read-only. See WebViewProfile.
         WebViewProfile.Attach(Browser);
+
+        // Equally before the first navigation, which this constructor itself starts: the request
+        // boundary has to be on the WebView before any document is. See DocumentWebView.
+        _documentWebView = DocumentWebView.Attach(Browser);
 
         Browser.NavigationCompleted += OnNavigationCompleted;
 
@@ -1410,7 +1418,7 @@ public partial class MainWindow : Window
     private void NavigateBrowser()
     {
         var builder = new UriBuilder(new Uri(PreviewHtmlPath)) { Query = $"t={DateTime.UtcNow.Ticks}" };
-        Browser.Source = builder.Uri;
+        _documentWebView.Navigate(builder.Uri);
     }
 
     private async Task<double?> TryCaptureScrollYAsync()

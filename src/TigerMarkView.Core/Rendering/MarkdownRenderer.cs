@@ -18,8 +18,13 @@ public static class MarkdownRenderer
     /// </remarks>
     private static readonly Lazy<MarkdownPipeline>[] Pipelines = CreatePipelines();
 
+    /// <summary>
+    /// The document's body HTML, with every active construct removed — see
+    /// <see cref="DocumentHtmlSanitizer"/>. Sanitized here, at the one place Markdown becomes HTML, so
+    /// the viewer, Help, PDF export, and <c>tiger-mark</c> cannot differ in what a document may do.
+    /// </summary>
     public static string ToHtmlFragment(string markdown, MarkdownRenderingOptions options = default) =>
-        Markdown.ToHtml(markdown, PipelineFor(options));
+        DocumentHtmlSanitizer.Sanitize(Markdown.ToHtml(markdown, PipelineFor(options)));
 
     private static Lazy<MarkdownPipeline>[] CreatePipelines()
     {
@@ -97,28 +102,30 @@ public static class MarkdownRenderer
         var fragment = ToHtmlFragment(markdown, renderingOptions);
         var safeTitle = System.Net.WebUtility.HtmlEncode(title);
         var baseTag = baseHref is null ? "" : $"""<base href="{System.Net.WebUtility.HtmlEncode(baseHref)}" />""";
+        var style = DocumentShell.Block(
+            DocumentShell.ThemeCss(theme),
+            DocumentShell.Css,
+            DocumentShell.PrintCss(pageSetup ?? PdfPageSetup.Default));
+        var script = DocumentShell.Block(
+            DocumentShell.AnchorScript,
+            DocumentShell.NavigationShortcutScript,
+            DocumentShell.HelpShortcutScript,
+            DocumentShell.PrintShortcutScript);
 
+        // The policy comes before <base>, so its base-uri rule governs it, and before any content.
         return $"""
             <!doctype html>
             <html lang="en">
             <head>
             <meta charset="utf-8" />
+            {DocumentContentSecurityPolicy.MetaElement(script, style)}
             {baseTag}
             <title>{safeTitle}</title>
-            <style>
-            {DocumentShell.ThemeCss(theme)}
-            {DocumentShell.Css}
-            {DocumentShell.PrintCss(pageSetup ?? PdfPageSetup.Default)}
-            </style>
+            <style>{style}</style>
             </head>
             <body>
             {fragment}
-            <script>
-            {DocumentShell.AnchorScript}
-            {DocumentShell.NavigationShortcutScript}
-            {DocumentShell.HelpShortcutScript}
-            {DocumentShell.PrintShortcutScript}
-            </script>
+            <script>{script}</script>
             </body>
             </html>
             """;
@@ -147,26 +154,26 @@ public static class MarkdownRenderer
     /// preview over the empty viewer; the script cancels the key, and the host ignores the message it
     /// posts because no document is open.
     /// </remarks>
-    public static string ToEmptyDocument(MarkdownTheme theme = MarkdownTheme.Light) =>
-        $"""
-        <!doctype html>
-        <html lang="en">
-        <head>
-        <meta charset="utf-8" />
-        <title>TigerMarkView</title>
-        <style>
-        {DocumentShell.ThemeCss(theme)}
-        {DocumentShell.Css}
-        </style>
-        </head>
-        <body>
-        <script>
-        {DocumentShell.HelpShortcutScript}
-        {DocumentShell.PrintShortcutScript}
-        </script>
-        </body>
-        </html>
-        """;
+    public static string ToEmptyDocument(MarkdownTheme theme = MarkdownTheme.Light)
+    {
+        var style = DocumentShell.Block(DocumentShell.ThemeCss(theme), DocumentShell.Css);
+        var script = DocumentShell.Block(DocumentShell.HelpShortcutScript, DocumentShell.PrintShortcutScript);
+
+        return $"""
+            <!doctype html>
+            <html lang="en">
+            <head>
+            <meta charset="utf-8" />
+            {DocumentContentSecurityPolicy.MetaElement(script, style)}
+            <title>TigerMarkView</title>
+            <style>{style}</style>
+            </head>
+            <body>
+            <script>{script}</script>
+            </body>
+            </html>
+            """;
+    }
 
     /// <remarks>
     /// Carries the help shortcut for the same reason <see cref="ToEmptyDocument"/> does — a reader
@@ -178,26 +185,23 @@ public static class MarkdownRenderer
     {
         var safeTitle = System.Net.WebUtility.HtmlEncode(title);
         var safeMessage = System.Net.WebUtility.HtmlEncode(message);
+        var style = DocumentShell.Block(DocumentShell.ThemeCss(theme), DocumentShell.Css);
+        var script = DocumentShell.Block(DocumentShell.HelpShortcutScript, DocumentShell.PrintShortcutScript);
 
         return $"""
             <!doctype html>
             <html lang="en">
             <head>
             <meta charset="utf-8" />
+            {DocumentContentSecurityPolicy.MetaElement(script, style)}
             <title>TigerMarkView</title>
-            <style>
-            {DocumentShell.ThemeCss(theme)}
-            {DocumentShell.Css}
-            </style>
+            <style>{style}</style>
             </head>
             <body>
             <h1>Could not open file</h1>
             <p>{safeTitle}</p>
             <pre>{safeMessage}</pre>
-            <script>
-            {DocumentShell.HelpShortcutScript}
-            {DocumentShell.PrintShortcutScript}
-            </script>
+            <script>{script}</script>
             </body>
             </html>
             """;

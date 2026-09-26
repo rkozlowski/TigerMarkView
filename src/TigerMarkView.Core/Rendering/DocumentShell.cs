@@ -136,6 +136,19 @@ internal static class DocumentShell
         """;
 
     /// <summary>
+    /// The text of a page's one <c>&lt;script&gt;</c> or one <c>&lt;style&gt;</c> element: the given shell
+    /// parts, joined, with LF line endings.
+    /// </summary>
+    /// <remarks>
+    /// The page's Content Security Policy admits exactly this text by hash (see
+    /// <see cref="DocumentContentSecurityPolicy"/>), so it must be emitted verbatim between the tags and
+    /// hashed in the same form. LF because HTML parsing normalises CR LF to LF before the engine hashes,
+    /// and these constants carry whatever line endings the source checkout has.
+    /// </remarks>
+    public static string Block(params string[] parts) =>
+        string.Join("\n", parts).ReplaceLineEndings("\n");
+
+    /// <summary>
     /// Keeps in-document <c>#anchor</c> links inside the document.
     /// </summary>
     /// <remarks>
