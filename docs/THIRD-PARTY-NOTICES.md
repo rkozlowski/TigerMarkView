@@ -38,6 +38,10 @@ TigerCli provides command parsing, generated help, error and exit-code handling 
 Its runtime dependencies include ItTiger.Core and the two Microsoft.Extensions abstractions packages.
 They ship with `tiger-mark` in the normal TigerMarkView installer.
 
+The installer is built with [TigerSetup](https://github.com/rkozlowski/TigerSetup) (IT Tiger, MIT). Its
+installer engine runs the installation and stays with it as the uninstaller; the notices for the
+material that engine carries are in TigerSetup's own `THIRD-PARTY-NOTICES.md`.
+
 The dedicated copies in `assets/licenses/` retain the exact upstream notices for ColorCode-Universal
 and Fluent UI System Icons.
 

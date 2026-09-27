@@ -25,9 +25,9 @@ someone using the TigerMarkView desktop app or the `tiger-mark` command.
 
 ## Prerequisites and known limitations
 
-- Windows 10 or later, x64.
-- .NET Desktop Runtime 10 and the Microsoft Edge WebView2 Runtime must be
-  installed. The installer checks for both and does not bundle them.
+- Windows 10 version 1809 or later, or Windows 11, x64.
+- .NET Desktop Runtime 10 and the Microsoft Edge WebView2 Runtime. They are not
+  bundled; the installer checks for both and installs a missing one from Microsoft.
 - Builds are currently unsigned. Windows SmartScreen may warn on first run.
 
 ## Install

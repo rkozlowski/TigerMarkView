@@ -4,22 +4,28 @@
     Generates a TigerMarkView WinGet submission set from a local installer.
 
     .DESCRIPTION
-    This is the only thing in the repository that writes a manifest, and it serves
+    This is the only thing in the repository that produces a manifest, and it serves
     two roles that must not be confused:
 
       - locally, before a release exists, to see and review what the manifests will
         say; and
       - inside the release workflow, over the installer that workflow just built,
-        producing the set the workflow then validates, seals, and uploads as
+        producing the set the workflow then seals and uploads as
         TigerMarkView-WinGet-<version>-<commit>.
 
     Only the second produces the authoritative post-release submission. A set
-    generated locally hashes a locally built installer, and an Inno rebuild is never
-    byte-identical to the one CI compiled, so its InstallerSha256 will not be the
-    published one. Copying a local set into winget-pkgs, or validating one as though
-    it were the release's, is precisely the mistake the post-release gate refuses to
-    make: Test-TigerMarkViewWinGet.ps1 reads the sealed workflow artifact and never
-    the output of this script.
+    generated locally hashes a locally built installer, and a rebuild is never
+    byte-identical to the one CI built (the installer embeds build times and the
+    dependency hints current when it was built), so its InstallerSha256 will not be
+    the published one. Test-TigerMarkViewWinGet.ps1 reads the sealed workflow
+    artifact and never the output of this script.
+
+    The manifests themselves are TigerSetup's: `tiger-setup winget prepare` writes
+    them from installer\TigerSetup.toml and the installer's bytes, and
+    `tiger-setup winget finalize` fills in the immutable release URL and the hash.
+    This script pins the inputs - the builder installer\tigersetup.json names, the
+    version, the file name, the URL - and proves the result is exactly the three
+    submission manifests.
 
     Output goes to artifacts\winget\manifests\i\ItTiger\TigerMarkView\<version>\ by
     default; the post-release submission lives elsewhere, under
@@ -34,14 +40,18 @@
     .PARAMETER ExpectedVersion
     When supplied, the version Version.props must already be at.
 
+    .PARAMETER Version
+    A local candidate's version, when the installer was built with
+    Build-Installer.ps1 -Version. Defaults to Version.props.
+
     .PARAMETER InstallerUrl
     The immutable release asset URL. Defaults to, and must equal, the v<version> URL.
 
     .PARAMETER ExpectedInstallerSha256
     When supplied, the digest the installer must hash to.
 
-    .PARAMETER InstalledDisplayVersion
-    An ARP display version that genuinely differs from PackageVersion. Omitted otherwise.
+    .PARAMETER TigerSetupPath
+    tiger-setup.exe; defaults to the one on PATH. Must be the pinned version.
 
     .PARAMETER Validate
     Runs winget validate over the generated set.
@@ -54,9 +64,10 @@ param(
     [string] $InstallerPath,
     [string] $OutputRoot,
     [string] $ExpectedVersion,
+    [string] $Version,
     [string] $InstallerUrl,
     [string] $ExpectedInstallerSha256,
-    [string] $InstalledDisplayVersion,
+    [string] $TigerSetupPath,
     [string] $WinGetPath,
     [switch] $Validate
 )
@@ -65,19 +76,18 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot 'TigerMarkViewWinGet.ps1')
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'installer' 'TigerSetupBuilder.ps1')
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $properties = Get-TigerMarkViewWinGetVersionProperty -RepositoryRoot $repoRoot
-$version = [string] $properties.Version
-if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion) -and $version -cne $ExpectedVersion) {
-    throw "Version.props '$version' does not match expected version '$ExpectedVersion'."
+$configuredVersion = [string] $properties.Version
+if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion) -and $configuredVersion -cne $ExpectedVersion) {
+    throw "Version.props '$configuredVersion' does not match expected version '$ExpectedVersion'."
 }
+if ([string]::IsNullOrWhiteSpace($Version)) { $Version = $configuredVersion }
 
-$repositoryUrl = ([string] $properties.RepositoryUrl).TrimEnd('/')
-$release = Get-TigerMarkViewWinGetRelease -Version $version -RepositoryUrl $repositoryUrl
+$release = Get-TigerMarkViewWinGetRelease -Version $Version -RepositoryUrl ([string] $properties.RepositoryUrl)
 $packageIdentifier = $release.packageIdentifier
-$issueTrackerUrl = ([string] $properties.IssueTrackerUrl).Replace('$(RepositoryUrl)', $repositoryUrl)
-$websiteUrl = [string] $properties.WebsiteUrl
 $installerFileName = $release.installerFileName
 if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
     $InstallerPath = Join-Path $repoRoot "artifacts\installer\$installerFileName"
@@ -100,22 +110,11 @@ if (-not [string]::IsNullOrWhiteSpace($ExpectedInstallerSha256) -and
     throw "Installer SHA-256 '$installerHash' does not match '$ExpectedInstallerSha256'."
 }
 
-if ([string]::IsNullOrWhiteSpace($InstalledDisplayVersion)) {
-    $InstalledDisplayVersion = $version
-}
-if ($InstalledDisplayVersion -match '[\r\n]') {
-    throw 'InstalledDisplayVersion must be a single-line value.'
-}
-$displayVersionEntry = if ($InstalledDisplayVersion -cne $version) {
-    "    DisplayVersion: $InstalledDisplayVersion`r`n"
-}
-else {
-    ''
-}
+$tigerSetup = Resolve-TigerMarkViewTigerSetup -RepositoryRoot $repoRoot -Path $TigerSetupPath
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) { $OutputRoot = Join-Path $repoRoot 'artifacts\winget' }
 $OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
-$manifestDirectory = Get-TigerMarkViewWinGetManifestDirectory -OutputRoot $OutputRoot -Version $version
+$manifestDirectory = Get-TigerMarkViewWinGetManifestDirectory -OutputRoot $OutputRoot -Version $Version
 if (Test-Path -LiteralPath $manifestDirectory) {
     $safeRoot = $OutputRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
     $resolved = [IO.Path]::GetFullPath($manifestDirectory)
@@ -126,117 +125,31 @@ if (Test-Path -LiteralPath $manifestDirectory) {
 }
 New-Item -ItemType Directory -Path $manifestDirectory -Force | Out-Null
 
-$productCode = '{E718860E-EDE4-4ACC-8235-BCF1DD40FC25}_is1'
-$installerManifest = @"
-# yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
-PackageIdentifier: $packageIdentifier
-PackageVersion: $version
-InstallerLocale: en-US
-Platform:
-- Windows.Desktop
-MinimumOSVersion: 10.0.14393.0
-InstallerType: inno
-InstallModes:
-- interactive
-- silent
-- silentWithProgress
-UpgradeBehavior: install
-Commands:
-- tiger-mark
-Dependencies:
-  PackageDependencies:
-  - PackageIdentifier: Microsoft.DotNet.DesktopRuntime.10
-  - PackageIdentifier: Microsoft.EdgeWebView2Runtime
-Installers:
-- Architecture: x64
-  Scope: machine
-  InstallerUrl: $InstallerUrl
-  InstallerSha256: $installerHash
-  InstallerSwitches:
-    Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /ALLUSERS /TASKS="addtopath"
-    SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART /SP- /ALLUSERS /TASKS="addtopath"
-  ProductCode: '$productCode'
-  AppsAndFeaturesEntries:
-  - DisplayName: $($properties.Product)
-    Publisher: $($properties.Company)
-$displayVersionEntry    ProductCode: '$productCode'
-    InstallerType: inno
-- Architecture: x64
-  Scope: user
-  InstallerUrl: $InstallerUrl
-  InstallerSha256: $installerHash
-  InstallerSwitches:
-    Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CURRENTUSER /TASKS="addtopath"
-    SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CURRENTUSER /TASKS="addtopath"
-  ProductCode: '$productCode'
-  AppsAndFeaturesEntries:
-  - DisplayName: $($properties.Product)
-    Publisher: $($properties.Company)
-$displayVersionEntry    ProductCode: '$productCode'
-    InstallerType: inno
-ManifestType: installer
-ManifestVersion: 1.12.0
-"@
-
-$localeManifest = @"
-# yaml-language-server: `$schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
-PackageIdentifier: $packageIdentifier
-PackageVersion: $version
-PackageLocale: en-US
-Publisher: $($properties.Company)
-PublisherUrl: $websiteUrl
-PublisherSupportUrl: $issueTrackerUrl
-Author: $($properties.Authors)
-PackageName: $($properties.Product)
-PackageUrl: $repositoryUrl
-License: $($properties.LicenseIdentity)
-LicenseUrl: $repositoryUrl/blob/v$version/LICENSE
-Copyright: $($properties.Copyright)
-ShortDescription: $($properties.Description)
-Description: |-
-  TigerMarkView is a Windows desktop application for reading and reviewing local Markdown files.
-  The installer includes the graphical viewer and the tiger-mark Markdown-to-PDF command.
-Moniker: tiger-markview
-Tags:
-- markdown
-- pdf
-- viewer
-Documentations:
-- DocumentLabel: Help
-  DocumentUrl: $repositoryUrl/blob/v$version/docs/HELP.md
-ReleaseNotesUrl: $repositoryUrl/releases/tag/v$version
-ManifestType: defaultLocale
-ManifestVersion: 1.12.0
-"@
-
-$versionManifest = @"
-# yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json
-PackageIdentifier: $packageIdentifier
-PackageVersion: $version
-DefaultLocale: en-US
-ManifestType: version
-ManifestVersion: 1.12.0
-"@
-
-Set-Content -LiteralPath (Join-Path $manifestDirectory "$packageIdentifier.installer.yaml") -Value $installerManifest -Encoding utf8NoBOM
-Set-Content -LiteralPath (Join-Path $manifestDirectory "$packageIdentifier.locale.en-US.yaml") -Value $localeManifest -Encoding utf8NoBOM
-Set-Content -LiteralPath (Join-Path $manifestDirectory "$packageIdentifier.yaml") -Value $versionManifest -Encoding utf8NoBOM
+$manifest = Join-Path $repoRoot 'installer\TigerSetup.toml'
+& $tigerSetup winget prepare $manifest --installer $InstallerPath --output $manifestDirectory | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "tiger-setup winget prepare failed with exit code $LASTEXITCODE." }
+& $tigerSetup winget finalize $manifestDirectory --url $InstallerUrl --installer $InstallerPath | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "tiger-setup winget finalize failed with exit code $LASTEXITCODE." }
 
 # Reading the set back is the shape gate: exactly the three submission manifests, no
 # extra file, and no byte-order mark. What is on disk from here on is the submission.
-$submission = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $manifestDirectory -Version $version
-if ($installerManifest -notmatch '(?ms)Scope: machine.*?/ALLUSERS.*?Scope: user.*?/CURRENTUSER' -or
-    $installerManifest -notmatch [regex]::Escape($installerHash) -or
-    $installerManifest -notmatch [regex]::Escape($productCode)) {
-    throw 'Generated installer scope, switch, hash, or product-code semantics are incomplete.'
+$submission = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $manifestDirectory -Version $Version
+foreach ($part in @($submission.installer, $submission.locale, $submission.version)) {
+    if ($part.packageIdentifier -cne $packageIdentifier -or $part.packageVersion -cne $Version) {
+        throw "The generated manifests do not all declare $packageIdentifier $Version."
+    }
+}
+if ($submission.installer.installerUrl -cne $InstallerUrl -or
+    $submission.installer.installerSha256 -cne $installerHash) {
+    throw 'The generated installer manifest does not declare the release URL and this installer''s hash.'
 }
 
 if ($Validate) {
     $null = Invoke-TigerMarkViewWinGetValidation -ManifestDirectory $manifestDirectory -WinGetPath $WinGetPath
 }
 
-Write-Host "PASS: prepared $packageIdentifier $version manifests at '$manifestDirectory'." -ForegroundColor Green
+Write-Host "PASS: prepared $packageIdentifier $Version manifests at '$manifestDirectory'." -ForegroundColor Green
 Write-Host "Submission digest: $($submission.digest)"
 Write-Host ('This is a locally generated set. The authoritative post-release submission is the ' +
-    "release workflow's TigerMarkView-WinGet-$version-<commit> artifact.") -ForegroundColor DarkGray
+    "release workflow's TigerMarkView-WinGet-$Version-<commit> artifact.") -ForegroundColor DarkGray
 Write-Output $manifestDirectory

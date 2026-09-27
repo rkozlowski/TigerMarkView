@@ -90,3 +90,49 @@ Both window navigation handlers use that same check; arbitrary data HTML remains
 injects an unsupported adapter and checks the visible notice, refused documents and closed retries.
 
 **Generalization candidate:** none; the exception belongs to the viewer's generated notice.
+
+## A default file association cannot be seeded through the registry
+
+**Area:** TigerWinLab installer acceptance (shell integration)
+**Status:** Active
+
+Setting `HKCU\Software\Classes\.md` to another ProgID looks like giving the user a default app, and a
+"no takeover" check built on it passed its registry comparison while measuring nothing: Windows 10/11
+resolved `.md` to the Open with prompt both before and after, so the seeded value was never an
+effective default. A real per-user default is the hash-protected `UserChoice` key, which only
+Windows writes.
+
+Creating one the way a person does was tried and does not work from the lab's desktop agent:
+`OpenWith.exe` started with `CreateProcess` shows only its interim window ("Open With Dummy Window
+Class For Interim Dialog") and the Pick an app flyout never renders there. `AssocQueryString` is not
+the double-click answer either: with no `UserChoice` it resolved `.md` to the newly registered handler
+while Windows' own resolution still asked. The acceptance therefore asserts what the installer
+controls - no extension default and no `UserChoice` written, and uninstall restoring the original
+resolution - and records what the user sees: a ShellExecute of a `.md` file (`cmd /c start`, a
+double-click's path). For a user who never chose a Markdown app, Windows opens the only recommended
+(`OpenWithProgids`) handler directly, so that is TigerMarkView once it is installed. A pre-existing
+`UserChoice` wins by Windows' design and is not exercised in the lab.
+
+**Generalization candidate:** TigerWinLab, if a generic "choose a default app" desktop operation is
+ever offered.
+
+## An Inno Setup key disappearing is not the end of its uninstall
+
+**Area:** Installer migration from Inno Setup (TigerSetup `[legacy]`)
+**Status:** Active
+
+After an upgrade over an Inno Setup installation, a later uninstall sometimes left an empty install
+directory. The per-user row passed once and then failed in five runs; the all-users row always failed.
+TigerSetup removes the legacy installation by running its quiet uninstaller and waiting for the
+Add/Remove Programs key to disappear. Inno writes that key last, so its uninstaller removes it first
+and goes on deleting files and folders afterwards from a copy of itself in `%TEMP%`. When the key went
+within about a second (`legacy_found` to `legacy_uninstalled` in the install log), the old install root
+still existed as TigerSetup planned, so TigerSetup did not own it (`directories_removed=9` instead of 10
+in the uninstall log) and correctly left it standing on removal.
+
+The acceptance keeps asserting that uninstall leaves no install directory; read a failure there
+together with the two log lines above before looking anywhere else. The fix belongs in TigerSetup's
+migration (wait for the legacy uninstaller's process tree or install root, not only the key), not in a
+TigerMarkView custom action.
+
+**Generalization candidate:** TigerSetup.

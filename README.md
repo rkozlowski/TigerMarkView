@@ -26,7 +26,8 @@ time under **Help > About TigerMarkView**.
 - PDF export using the exact document version currently displayed;
 - configurable menu bar, toolbar, status bar, and optional toolbar buttons;
 - bundled offline Help, About, licence, and third-party notices;
-- one per-user/all-users Inno Setup installer containing the GUI and CLI; and
+- one per-user/all-users installer containing the GUI and CLI, which offers TigerMarkView under
+  **Open with** for Markdown files without taking over your default app; and
 - the `tiger-mark` command-line Markdown-to-PDF converter.
 
 Printing is not included in the shipped application.
@@ -121,24 +122,46 @@ features.
 The initial public distribution is the Windows installer attached to a
 [GitHub Release](https://github.com/rkozlowski/TigerMarkView/releases). The same installer contains
 the desktop application, `tiger-mark`, bundled Help, the MIT licence, and third-party notices. It
-installs for the current user by default and offers an all-users mode.
+installs for the current user by default and offers an all-users mode, which asks for administrator
+approval. It is built with [TigerSetup](https://github.com/rkozlowski/TigerSetup) and also runs
+unattended:
 
-The **Add the TigerMarkView install directory to PATH** option is checked on a first install, so
-`tiger-mark` works from a new shell. A per-user install changes only the user's PATH; an all-users
-install changes the machine PATH. Upgrade and uninstall preserve unrelated PATH entries.
+```powershell
+TigerMarkView-<version>-win-x64-setup.exe install --quiet                  # for the current user
+TigerMarkView-<version>-win-x64-setup.exe install --quiet --scope machine  # for all users
+TigerMarkView-<version>-win-x64-setup.exe install --quiet --option path off
+```
+
+The **PATH** option is on by default, so `tiger-mark` works from a new shell. A per-user install
+changes only the user's PATH; an all-users install changes the machine PATH. Upgrade and uninstall
+preserve unrelated PATH entries.
+
+The installer registers TigerMarkView as an available app for `.md` and `.markdown` files, so it
+appears under **Open with** and in **Settings > Apps > Default apps**. It never writes a default app
+and never replaces one you have chosen. If you have not chosen an app for Markdown files, Windows may
+open them with TigerMarkView as the app offered for them. Uninstalling removes the registration and
+leaves your settings and your default-app choice alone.
+
+Installing this version over TigerMarkView 0.9.0 or earlier - which used an Inno Setup installer -
+removes the earlier installation first and keeps your settings. The earlier installation is found in
+the scope you install into, so an all-users installation of an earlier version is replaced by an
+all-users install (`--scope machine`, or the all-users choice in the wizard).
 
 TigerMarkView requires:
 
-- Windows 10 version 1607 or later on x64-compatible hardware;
+- Windows 10 version 1809 or later, or Windows 11, on x64-compatible hardware;
 - the .NET 10 Desktop Runtime (x64); and
 - the Microsoft Edge WebView2 Runtime.
 
-The installer checks for the two runtimes and identifies anything missing. They are not bundled.
+The runtimes are not bundled. The installer checks for both and, when one is missing, downloads it
+from Microsoft and installs it before TigerMarkView; installing a runtime asks for administrator
+approval.
 TigerMarkView is not yet published in the WinGet community repository. The prepared package identity
 is `ItTiger.TigerMarkView`; this README will advertise `winget install ItTiger.TigerMarkView` only
 after the first manifest has been accepted and the command is live.
 
-To build the installer locally, install Inno Setup 6 or 7 and run:
+To build the installer locally, install the TigerSetup release that `installer/tigersetup.json`
+pins (its `tiger-setup` must be on PATH) and run:
 
 ```powershell
 pwsh installer/Build-Installer.ps1
@@ -277,7 +300,7 @@ tests/
 
 docs/                       Bundled user documentation and notices
 assets/                     Artwork and licence texts
-installer/                  Inno Setup build files
+installer/                  TigerSetup package and build script
 ```
 
 `TigerMarkView.Core` must remain free of Avalonia and Windows-only dependencies. Both the GUI and CLI

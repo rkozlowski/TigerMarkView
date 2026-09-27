@@ -34,7 +34,7 @@ release workflow generated and validated. Nothing downstream regenerates or edit
 | Item | Authority and purpose |
 | --- | --- |
 | `Prepare-TigerMarkViewWinGet.ps1` and `artifacts\winget\` | Local/pre-release generation. It hashes a local installer and is never a release submission set. |
-| `TigerMarkView-WinGet-<version>-<commit>` | The authoritative submission artifact. The release workflow generates it from the exact installer it publishes, validates it, seals it, and records its digest. |
+| `TigerMarkView-WinGet-<version>-<commit>` | The authoritative submission artifact. The release workflow generates it from the exact installer it publishes, seals it, and records its digest. `winget validate` and TigerWinLab run on it after the draft exists. |
 | `WinGetReleaseValidation.ps1`, `Test-TigerMarkViewWinGet.ps1`, and `artifacts\winget-release\<version>\` | Post-release retrieval and verification. It must obtain the sealed artifact and never fall back to local generation. The library holds the gate; the script is the command around it. |
 | `Prepare-TigerMarkViewWinGetSubmission.ps1` and `WinGetPkgsSubmission.ps1` | End-to-end post-release verification and safe preparation of the pushed fork branch. |
 
@@ -44,8 +44,9 @@ set, encoding, identity, version, immutable asset URL, installer hash, and combi
 digest. The publication job downloads and rechecks that sealed set; it does not regenerate it.
 
 Post-release regeneration is verification-only. It writes to throwaway storage, compares all files
-byte-for-byte with the sealed set, and can never replace the sealed files. An Inno rebuild is not
-expected to be byte-identical to the CI installer.
+byte-for-byte with the sealed set, and can never replace the sealed files. It needs the pinned TigerSetup
+builder on PATH, because the manifests are TigerSetup's output. An installer rebuild is not expected
+to be byte-identical to the CI installer.
 
 ## The one-command contract
 
@@ -302,10 +303,12 @@ re-runs this gate rather than trusting an earlier result.
 ## Manifest shape and validation scope
 
 TigerMarkView uses the WinGet multi-file format at schema 1.12: version, default-locale, and installer
-manifests. The Inno installer has user- and machine-scope entries over the same verified x64 asset.
-They declare silent switches, install-style upgrade behavior, the stable Inno product code, ARP
-identity, the `tiger-mark` command, and dependencies on .NET Desktop Runtime 10 and Microsoft Edge
-WebView2 Runtime.
+manifests, written by `tiger-setup winget prepare` and `finalize` from `installer/TigerSetup.toml`. The
+TigerSetup installer has user- and machine-scope entries over the same verified x64 asset. They declare
+the TigerSetup silent switches (`install --quiet --scope user|machine`), its return codes,
+install-style upgrade behavior, the product code `ItTiger.TigerMarkView` (the Add/Remove Programs key),
+the machine entry's `elevatesSelf`, the `tiger-mark` command, and dependencies on .NET Desktop Runtime
+10 and Microsoft Edge WebView2 Runtime.
 
 TigerWinLab receives the sealed manifests and downloaded public installer. It validates dependency
 setup, local-manifest installation with hash enforcement, installed files, ARP registration, machine

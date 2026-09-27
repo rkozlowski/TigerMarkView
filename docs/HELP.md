@@ -51,10 +51,16 @@ default system browser; the bundled documents remain available without a network
 
 ## Opening documents
 
-There are four ways to open a document:
+There are five ways to open a document:
 
 - **File > Open...** — pick a file. The toolbar's folder button does the same thing.
-- **Drag and drop** — drag a `.md` file from Explorer onto the TigerMarkView window.
+- **Drag and drop** — drag a `.md` file from Explorer onto the TigerMarkView window, anywhere on it:
+  the document, the menu bar, the toolbar, or the status bar.
+- **Open with** — in Explorer, right-click a `.md` or `.markdown` file and choose
+  **Open with > TigerMarkView**. The installer offers TigerMarkView there and never replaces a default
+  app you have chosen for Markdown. To make TigerMarkView that default, choose it under **Open with >
+  Choose another app** with **Always**, or in **Settings > Apps > Default apps**; if you have never
+  chosen one, Windows may already open Markdown files with TigerMarkView.
 - **File > Open Recent** — the last 10 documents you opened explicitly, newest first. The toolbar can
   show the same list too; see [Toolbar buttons](#toolbar-buttons).
 - **From the command line** — `TigerMarkView.exe C:\notes\README.md` opens that file at startup.
@@ -65,7 +71,7 @@ These two lists answer different questions, and they are kept apart on purpose:
 
 | | What it holds |
 |---|---|
-| **File > Open Recent** | Documents you *chose* — File > Open, a drag and drop, a command-line file, or an Open Recent entry picked again. Remembered between sessions. |
+| **File > Open Recent** | Documents you *chose* — File > Open, a drag and drop, Open with, a command-line file, or an Open Recent entry picked again. Remembered between sessions. |
 | **Navigate > History** | Every document you visited in this session, including ones you only reached by clicking a link. Forgotten when you close the application. |
 
 So following a link from one document to another puts the second document in your browsing history,

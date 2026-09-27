@@ -4,12 +4,12 @@
   "package": {
     "identifier": "ItTiger.TigerMarkView",
     "version": "VERSION",
-    "productCode": "{E718860E-EDE4-4ACC-8235-BCF1DD40FC25}_is1"
+    "productCode": "ItTiger.TigerMarkView"
   },
   "manifestDirectory": "MANIFEST_DIRECTORY",
   "installer": {
     "path": "INSTALLER_PATH",
-    "type": "inno",
+    "type": "exe",
     "scope": "machine",
     "architecture": "x64",
     "expectedUrl": "INSTALLER_URL",
@@ -28,8 +28,7 @@
       "TigerMarkView.Pdf.dll",
       "Docs\\HELP.md",
       "Docs\\LICENSE.txt",
-      "Docs\\THIRD-PARTY-NOTICES.md",
-      "unins000.exe"
+      "Docs\\THIRD-PARTY-NOTICES.md"
     ],
     "minimumFileCount": 50,
     "versionFile": "TigerMarkView.exe",

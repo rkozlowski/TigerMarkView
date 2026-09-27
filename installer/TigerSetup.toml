@@ -1,0 +1,110 @@
+# TigerMarkView installer (TigerSetup)
+#
+# Build it with installer\Build-Installer.ps1 from the repository root: that publishes the GUI and
+# the CLI into artifacts\publish\win-x64, checks their metadata, and runs tiger-setup build on this
+# file. Paths below are relative to this file.
+#
+# Nothing here states the version, the description or the copyright. [metadata] evaluates them from
+# Version.props through the application project, and the builder refuses a published
+# TigerMarkView.exe that disagrees - the same chain the About dialog reads at run time. The links
+# repeated below are checked against Version.props by eng\tests\Installer.Tests.ps1.
+
+[package]
+id = "ItTiger.TigerMarkView"            # the Add/Remove Programs key and the WinGet identifier; never change it
+name = "TigerMarkView"
+publisher = "IT Tiger"
+license = "MIT"
+license_file = "../artifacts/publish/win-x64/Docs/LICENSE.txt"   # the licence that actually ships
+icon = "../src/TigerMarkView/Assets/TMV.ico"
+website = "https://www.ittiger.net/"
+support = "https://github.com/rkozlowski/TigerMarkView/issues"
+help = "https://github.com/rkozlowski/TigerMarkView/blob/main/docs/HELP.md"
+
+[metadata]
+source = "msbuild"
+project = "../src/TigerMarkView/TigerMarkView.csproj"
+executable = "../artifacts/publish/win-x64/TigerMarkView.exe"
+
+[install]
+# Per user by default (no elevation); all users on request, which elevates.
+#   user    -> %LOCALAPPDATA%\Programs\TigerMarkView
+#   machine -> %ProgramFiles%\TigerMarkView
+scopes = ["user", "machine"]
+architecture = "x64"
+
+# The whole publish output minus debug symbols and XML documentation. TigerMarkView.exe,
+# tiger-mark.exe and the offline Docs\ ship together as one product installation.
+[[files]]
+source = "../artifacts/publish/win-x64/**"
+exclude = ["*.pdb", "*.xml"]
+
+[[options]]
+name = "path"                            # the install directory holds tiger-mark.exe
+kind = "path"
+default = true
+
+[[options]]
+name = "desktop-shortcut"
+kind = "desktop-shortcut"
+
+[[shortcuts]]
+location = "start-menu"                  # directly in Programs, no product folder
+target = "TigerMarkView.exe"
+
+[[shortcuts]]
+location = "desktop"
+target = "TigerMarkView.exe"
+option = "desktop-shortcut"
+
+[[path]]
+entry = "."
+option = "path"
+
+# An available handler for Markdown, listed under Open with and in Settings > Default apps. It never
+# becomes the default over the user's choice: TigerSetup writes the ProgID, OpenWithProgids and a
+# capability registration, never the extension's own default value or UserChoice. The extensions are
+# the ones the viewer itself treats as Markdown (Core.Navigation.MarkdownLinkResolver).
+[[file_associations]]
+prog_id = "TigerMarkView.Markdown"
+extensions = [".md", ".markdown"]
+description = "Markdown document"
+executable = "TigerMarkView.exe"         # "<install root>\TigerMarkView.exe" "%1"
+
+[launch]
+executable = "TigerMarkView.exe"         # the completion page's Launch check box; never in a quiet run
+
+[registration]
+display_icon = "TigerMarkView.exe"
+
+# The Inno Setup installation of 0.9.0 and earlier. The first TigerSetup install on a machine that
+# holds it runs its own quiet uninstaller first; settings in %LOCALAPPDATA%\TigerMarkView survive.
+[legacy]
+installer_type = "inno"
+registration_key = "{E718860E-EDE4-4ACC-8235-BCF1DD40FC25}_is1"
+
+[[dependencies]]
+id = "Microsoft.DotNet.DesktopRuntime.10"
+name = ".NET Desktop Runtime 10"
+minimum = "10.0"
+detect = { kind = "directory-version", path = "%PROGRAMFILES%\\dotnet\\shared\\Microsoft.WindowsDesktop.App", pattern = "10.*" }
+
+[[dependencies]]
+id = "Microsoft.EdgeWebView2Runtime"
+name = "Microsoft Edge WebView2 Runtime"
+detect = { kind = "registry-version", keys = [
+    "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+    "HKLM\\SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+    "HKCU\\SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+], value = "pv" }
+
+[winget]
+moniker = "tiger-markview"
+commands = ["tiger-mark"]
+tags = ["markdown", "pdf", "viewer"]
+package_url = "https://github.com/rkozlowski/TigerMarkView"
+publisher_url = "https://www.ittiger.net/"
+publisher_support_url = "https://github.com/rkozlowski/TigerMarkView/issues"
+short_description = "A local Markdown viewer, reviewer and PDF exporter."
+description = """
+TigerMarkView is a Windows desktop application for reading and reviewing local Markdown files.
+The installer includes the graphical viewer and the tiger-mark Markdown-to-PDF command."""

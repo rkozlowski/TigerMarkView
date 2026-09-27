@@ -286,8 +286,8 @@ function Invoke-TigerMarkViewWinGetReleaseValidation {
         #
         # This deliberately looks under artifacts\winget-release, where the workflow-produced
         # installer is kept, and never under artifacts\installer. The latter holds the
-        # maintainer's own Release build, and an Inno rebuild is never byte-identical to the
-        # one CI compiled, so comparing against it would fail every release for no reason.
+        # maintainer's own Release build, and a rebuild is never byte-identical to the one CI
+        # built, so comparing against it would fail every release for no reason.
         $retainedInstaller = @(
             Join-Path $acquired.releaseRoot $release.installerFileName
             Join-Path $acquired.releaseRoot "installer\$($release.installerFileName)"

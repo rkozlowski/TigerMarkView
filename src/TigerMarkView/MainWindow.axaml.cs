@@ -518,9 +518,11 @@ public partial class MainWindow : Window
     /// <remarks>
     /// This is only half of drag/drop support. The WebView fills most of the window and is a native
     /// child window that takes OLE drops itself, so a file dropped on the document area never reaches
-    /// this routed event at all — that case is caught in <see cref="OnNavigationStarted"/>, where the
-    /// WebView's attempt to navigate to the dropped file is cancelled and rerouted. Both halves end up
-    /// in <see cref="OpenFile"/>, so a drop behaves exactly like File &gt; Open wherever it lands.
+    /// this routed event at all — WebView2 asks to open the dropped file instead, and that request is
+    /// cancelled and rerouted in <see cref="TryHandleNavigation"/>, which classifies it as an explicit
+    /// open with <see cref="ViewerRequestOrigin"/>. Both halves end up in <see cref="OpenFile"/> with
+    /// <see cref="DocumentOpenOrigin.ExplicitOpen"/>, so a drop behaves exactly like File &gt; Open —
+    /// Open Recent included — wherever it lands.
     /// </remarks>
     private void OnDrop(object? sender, DragEventArgs e)
     {
@@ -1526,13 +1528,15 @@ public partial class MainWindow : Window
 
         if (MarkdownLinkResolver.TryResolveLocalMarkdown(target, out var markdownPath))
         {
+            // A link the reader followed out of the page on screen is Navigation: it joins the
+            // session's trail but is not an entry point for Open Recent. A file dropped on the
+            // document area arrives through this same route, and is an ExplicitOpen exactly like a
+            // drop on the chrome. ViewerRequestOrigin tells them apart by what the page links to.
+            var origin = ViewerRequestOrigin.Classify(markdownPath, _renderedDocument?.FilePath, _renderedDocument?.Html);
+
             // Posted rather than called directly: this runs inside the WebView's own navigation
             // callback, and starting the replacement navigation from there re-enters it.
-            //
-            // Navigation, not ExplicitOpen: the reader followed a link out of the document they were
-            // already reading. It joins the session's trail and is reachable with Back, but it is not
-            // an entry point and must not appear in Open Recent.
-            Dispatcher.UIThread.Post(() => OpenFile(markdownPath, DocumentOpenOrigin.Navigation));
+            Dispatcher.UIThread.Post(() => OpenFile(markdownPath, origin));
             return true;
         }
 

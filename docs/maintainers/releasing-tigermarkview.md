@@ -22,7 +22,8 @@ The workflow requires:
 - `git`, PowerShell 7 (`pwsh`), the .NET 10 SDK, and `winget`;
 - GitHub CLI (`gh`), authenticated to an account allowed to operate on
   `rkozlowski/TigerMarkView` and the `rkozlowski/winget-pkgs` fork;
-- Inno Setup 6 or 7 and the Edge WebView2 Runtime for local release preparation; and
+- TigerSetup at the version `installer/tigersetup.json` pins, with `tiger-setup` on PATH, and the Edge
+  WebView2 Runtime for local release preparation; and
 - a provisioned TigerWinLab, registered as `[labs.TigerWinLab]` in the TigerAiCore configuration named
   by `TigerAiCoreConfig`, for installer, desktop, and WinGet scenarios.
 
@@ -162,12 +163,15 @@ nothing inline: every remaining step is one call into an `eng/` or `installer/` 
 
 The release workflow then builds once and uses those exact outputs throughout. It:
 
-1. restores, builds with warnings as errors, and tests;
-2. publishes GUI and CLI without rebuilding;
-3. builds and validates the authoritative installer;
-4. writes and verifies its hash, length, version, and commit records;
-5. generates WinGet manifests from that exact installer and immutable release URL;
-6. runs `winget validate` and seals the exact three-file submission set;
+1. restores and builds with warnings as errors (the tests ran on this commit in the required CI run);
+2. installs the pinned TigerSetup release, refused unless its SHA-256 matches;
+3. publishes GUI and CLI without rebuilding and builds the authoritative installer with TigerSetup;
+4. checks the installer statically (`tiger-setup verify` and its declared identity, files, handler
+   registration, legacy migration, and dependencies) and writes and verifies its hash, length,
+   version, and commit records;
+5. generates WinGet manifests from that exact installer and immutable release URL with
+   `tiger-setup winget prepare` and `finalize`;
+6. seals the exact three-file submission set (`winget validate` and the lab run on it after the draft);
 7. uploads `TigerMarkView-WinGet-<version>-<commit>` and records its digest;
 8. transfers and reverifies the release and WinGet artifacts without rebuilding or regenerating;
 9. creates annotated tag `v<version>` at the validated commit; and

@@ -11,8 +11,9 @@
     Two scopes, because they are verified in different places:
 
       Repository  Fast, self-contained suites covering the shared release
-                  vocabulary, release preparation, TigerAiCore discovery, and
-                  WinGet manifest generation and sealing. Normal CI runs these.
+                  vocabulary, release preparation, TigerAiCore discovery, the
+                  installer's declarations, and WinGet manifest generation and
+                  sealing. Normal CI runs these.
 
       Maintainer  The local winget-pkgs submission state machine: clone safety and
                   the guarded mutation. They build real Git repositories and the
@@ -45,6 +46,7 @@ $repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 $suites = @(
     [pscustomobject]@{ Scope = 'Repository'; Path = 'eng/tests/TigerAiCore.Tests.ps1' }
+    [pscustomobject]@{ Scope = 'Repository'; Path = 'eng/tests/Installer.Tests.ps1' }
     [pscustomobject]@{ Scope = 'Repository'; Path = 'eng/release-automation/tests/ReleaseAutomation.Tests.ps1' }
     [pscustomobject]@{ Scope = 'Repository'; Path = 'eng/release-automation/tests/ReleasePreparation.Tests.ps1' }
     [pscustomobject]@{ Scope = 'Repository'; Path = 'eng/winget/tests/TigerMarkViewWinGet.Tests.ps1' }

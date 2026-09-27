@@ -10,11 +10,11 @@ $repositoryRoot = Split-Path -Parent (Split-Path -Parent $wingetDirectory)
 $prepareScript = Join-Path $wingetDirectory 'Prepare-TigerMarkViewWinGet.ps1'
 [xml] $versionXml = Get-Content -LiteralPath (Join-Path $repositoryRoot 'Version.props') -Raw
 $version = [string] $versionXml.Project.PropertyGroup.Version
+$pinnedTigerSetup = [string] (Get-Content -LiteralPath (Join-Path $repositoryRoot 'installer\tigersetup.json') -Raw | ConvertFrom-Json).version
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ("TigerMarkViewWinGet-tests-" + [Guid]::NewGuid().ToString('N'))
 $installerDirectory = Join-Path $testRoot 'installer'
 $installerPath = Join-Path $installerDirectory "TigerMarkView-$version-win-x64-setup.exe"
 $installerUrl = "https://github.com/rkozlowski/TigerMarkView/releases/download/v$version/TigerMarkView-$version-win-x64-setup.exe"
-$productCode = [regex]::Escape("'{E718860E-EDE4-4ACC-8235-BCF1DD40FC25}_is1'")
 
 function Assert-True {
     param(
@@ -76,142 +76,91 @@ function Set-FakeWinGetResult {
     Set-Content -LiteralPath $LogPath -Value '' -Encoding ascii
 }
 
-function Invoke-WorkflowValidationStep {
-    param(
-        [Parameter(Mandatory)]
-        [string] $OutputRoot,
-
-        [Parameter(Mandatory)]
-        [string] $WinGetPath
-    )
-
-    # Reproduce how GitHub Actions runs a 'shell: pwsh' step: the runner writes the step body
-    # to a script that starts with the stop preference and ends with 'exit $LASTEXITCODE',
-    # then dot-sources that file from a fresh pwsh process. Running the real thing is the only
-    # way to prove that an accepted WinGet warning leaves no native exit state behind.
-    $stepScript = Join-Path $testRoot ('step-' + [Guid]::NewGuid().ToString('N') + '.ps1')
-    $stepBody = @"
-`$ErrorActionPreference = 'stop'
-./eng/winget/Prepare-TigerMarkViewWinGet.ps1 ``
-  -InstallerPath '$installerPath' ``
-  -OutputRoot '$OutputRoot' ``
-  -ExpectedVersion '$version' ``
-  -InstallerUrl '$installerUrl' ``
-  -WinGetPath '$WinGetPath' ``
-  -Validate | Out-Host
-if ((Test-Path -LiteralPath variable:\LASTEXITCODE)) { exit `$LASTEXITCODE }
-"@
-    Set-Content -LiteralPath $stepScript -Value $stepBody -Encoding utf8NoBOM
-
-    $pwsh = (Get-Process -Id $PID).Path
-    # The child process is expected to fail in the negative case; its exit code is the
-    # assertion, not an error for this runner to raise.
-    $PSNativeCommandUseErrorActionPreference = $false
-    Push-Location -LiteralPath $repositoryRoot
-    try {
-        & $pwsh -NoProfile -NoLogo -Command ". '$stepScript'" | Out-Host
-        $stepExitCode = $LASTEXITCODE
-    }
-    finally {
-        Pop-Location
-        $global:LASTEXITCODE = 0
-    }
-
-    return $stepExitCode
-}
-
-function Get-InstallerManifest {
-    param(
-        [Parameter(Mandatory)]
-        [string] $OutputRoot
-    )
-
-    Get-Content -LiteralPath (
-        Join-Path $OutputRoot "manifests\i\ItTiger\TigerMarkView\$version\ItTiger.TigerMarkView.installer.yaml") -Raw
-}
-
-function Assert-AppsAndFeaturesBlocks {
-    param(
-        [Parameter(Mandatory)]
-        [string] $Manifest,
-
-        [string] $ExpectedDisplayVersion
-    )
-
-    $displayVersionLine = if ([string]::IsNullOrEmpty($ExpectedDisplayVersion)) {
-        ''
-    }
-    else {
-        "    DisplayVersion: $([regex]::Escape($ExpectedDisplayVersion))\r?\n"
-    }
-    $pattern = "(?m)^  AppsAndFeaturesEntries:\r?\n" +
-        "  - DisplayName: TigerMarkView\r?\n" +
-        "    Publisher: IT Tiger\r?\n" +
-        $displayVersionLine +
-        "    ProductCode: $productCode\r?\n" +
-        '    InstallerType: inno\r?$'
-    $matches = [regex]::Matches($Manifest, $pattern)
-    Assert-True ($matches.Count -eq 2) `
-        "Expected two correctly indented AppsAndFeaturesEntries blocks; found $($matches.Count)."
-}
-
 try {
     New-Item -ItemType Directory -Path $installerDirectory -Force | Out-Null
     [IO.File]::WriteAllBytes($installerPath, [byte[]] (0..31))
 
+    # --- Generation: TigerSetup writes the manifests; Prepare pins its inputs and checks its output ---
+
+    # A stand-in for tiger-setup.exe with the command-line shape of the pinned release: --version,
+    # `winget prepare <manifest> --installer <file> --output <dir>` writing the three manifests with
+    # the URL unresolved, and `winget finalize <dir> --url <url> --installer <file>` filling in the
+    # URL and the installer's hash. Every invocation is logged. No network and no real builder, so
+    # the suite runs where TigerSetup is not installed: normal CI.
+    $fakeTigerSetup = Join-Path $testRoot 'tiger-setup.ps1'
+    $fakeTigerSetupLog = Join-Path $testRoot 'tiger-setup.log'
+    $fakeTigerSetupSource = @'
+$ErrorActionPreference = 'Stop'
+$arguments = @($args)
+Add-Content -LiteralPath $env:TIGERMARKVIEW_TEST_TIGERSETUP_LOG -Value ($arguments -join ' ')
+function Get-Option([string] $Name) { $arguments[[array]::IndexOf($arguments, $Name) + 1] }
+if ($arguments[0] -eq '--version') { "tiger-setup $env:TIGERMARKVIEW_TEST_TIGERSETUP_VERSION"; exit 0 }
+if ($arguments[0] -eq 'winget' -and $arguments[1] -eq 'prepare') {
+    $directory = Get-Option '--output'
+    $installerName = [IO.Path]::GetFileName((Get-Option '--installer'))
+    $packageVersion = $installerName -replace '^TigerMarkView-(.+)-win-x64-setup\.exe$', '$1'
+    $header = '# yaml-language-server: $schema=https://aka.ms/winget-manifest.{0}.1.12.0.schema.json'
+    $common = "PackageIdentifier: ItTiger.TigerMarkView`nPackageVersion: $packageVersion`n"
+    [IO.File]::WriteAllText((Join-Path $directory 'ItTiger.TigerMarkView.installer.yaml'),
+        ($header -f 'installer') + "`n" + $common + "InstallerType: exe`nInstallers:`n- Architecture: x64`n" +
+        "  Scope: user`n  InstallerUrl: <unresolved>`n  InstallerSha256: <unresolved>`n" +
+        "ManifestType: installer`nManifestVersion: 1.12.0`n")
+    [IO.File]::WriteAllText((Join-Path $directory 'ItTiger.TigerMarkView.locale.en-US.yaml'),
+        ($header -f 'defaultLocale') + "`n" + $common + "PackageLocale: en-US`nManifestType: defaultLocale`nManifestVersion: 1.12.0`n")
+    [IO.File]::WriteAllText((Join-Path $directory 'ItTiger.TigerMarkView.yaml'),
+        ($header -f 'version') + "`n" + $common + "DefaultLocale: en-US`nManifestType: version`nManifestVersion: 1.12.0`n")
+    exit 0
+}
+if ($arguments[0] -eq 'winget' -and $arguments[1] -eq 'finalize') {
+    $url = if ($env:TIGERMARKVIEW_TEST_TIGERSETUP_URL) { $env:TIGERMARKVIEW_TEST_TIGERSETUP_URL } else { Get-Option '--url' }
+    $hash = (Get-FileHash -LiteralPath (Get-Option '--installer') -Algorithm SHA256).Hash
+    $path = Join-Path $arguments[2] 'ItTiger.TigerMarkView.installer.yaml'
+    $text = [IO.File]::ReadAllText($path).Replace('InstallerUrl: <unresolved>', "InstallerUrl: $url")
+    [IO.File]::WriteAllText($path, $text.Replace('InstallerSha256: <unresolved>', "InstallerSha256: $hash"))
+    exit 0
+}
+exit 2
+'@
+    Set-Content -LiteralPath $fakeTigerSetup -Value $fakeTigerSetupSource -Encoding utf8NoBOM
+    $env:TIGERMARKVIEW_TEST_TIGERSETUP_LOG = $fakeTigerSetupLog
+    $env:TIGERMARKVIEW_TEST_TIGERSETUP_VERSION = $pinnedTigerSetup
+    $env:TIGERMARKVIEW_TEST_TIGERSETUP_URL = ''
+
     $defaultOutput = Join-Path $testRoot 'default'
     & $prepareScript `
+        -TigerSetupPath $fakeTigerSetup `
         -InstallerPath $installerPath `
         -OutputRoot $defaultOutput `
         -ExpectedVersion $version `
-        -InstallerUrl $installerUrl
-    $defaultManifest = Get-InstallerManifest -OutputRoot $defaultOutput
-    Assert-True ($defaultManifest -cnotmatch '(?m)^\s+DisplayVersion:') `
-        'DisplayVersion must be omitted when no installed display version is supplied.'
-    Assert-AppsAndFeaturesBlocks -Manifest $defaultManifest
-    Write-Host 'PASS: default DisplayVersion is omitted'
-
+        -InstallerUrl $installerUrl | Out-Host
+    $invocations = @(Get-Content -LiteralPath $fakeTigerSetupLog)
+    $manifestPath = Join-Path $repositoryRoot 'installer\TigerSetup.toml'
     $manifestDirectory = Join-Path $defaultOutput "manifests\i\ItTiger\TigerMarkView\$version"
-    $manifestFiles = @(Get-ChildItem -LiteralPath $manifestDirectory -File -Filter '*.yaml')
+    Assert-True ($invocations -ccontains "winget prepare $manifestPath --installer $installerPath --output $manifestDirectory") `
+        "Prepare must run tiger-setup winget prepare on installer\TigerSetup.toml; it ran: $($invocations -join ' | ')"
+    Assert-True ($invocations -ccontains "winget finalize $manifestDirectory --url $installerUrl --installer $installerPath") `
+        'Prepare must finalize the set with the immutable release URL and the same installer.'
+    Write-Host 'PASS: generation is tiger-setup winget prepare and finalize over the pinned inputs'
+
+    $manifestFiles = @(Get-ChildItem -LiteralPath $manifestDirectory -File)
     Assert-True ($manifestFiles.Count -eq 3) 'Expected exactly three generated WinGet manifests.'
-    foreach ($manifestFile in $manifestFiles) {
-        $manifestText = Get-Content -LiteralPath $manifestFile.FullName -Raw
-        Assert-True ($manifestText -match '(?m)^# yaml-language-server: \$schema=https://aka\.ms/winget-manifest\..*\.1\.12\.0\.schema\.json\r?$') `
-            "$($manifestFile.Name) does not target a schema 1.12.0 header URL."
-        Assert-True ($manifestText -match '(?m)^ManifestVersion: 1\.12\.0\r?$') `
-            "$($manifestFile.Name) does not declare ManifestVersion 1.12.0."
+    Write-Host 'PASS: generation leaves exactly the three submission manifests'
+
+    $env:TIGERMARKVIEW_TEST_TIGERSETUP_VERSION = '0.0.1'
+    Assert-Throws -MessagePattern 'pins' -Action {
+        & $prepareScript -TigerSetupPath $fakeTigerSetup -InstallerPath $installerPath `
+            -OutputRoot (Join-Path $testRoot 'unpinned') -ExpectedVersion $version | Out-Host
     }
-    Write-Host 'PASS: all generated manifests consistently target schema 1.12.0'
+    $env:TIGERMARKVIEW_TEST_TIGERSETUP_VERSION = $pinnedTigerSetup
+    Write-Host 'PASS: a builder other than the pinned TigerSetup release is refused'
 
-    $sameOutput = Join-Path $testRoot 'same'
-    & $prepareScript `
-        -InstallerPath $installerPath `
-        -OutputRoot $sameOutput `
-        -ExpectedVersion $version `
-        -InstallerUrl $installerUrl `
-        -InstalledDisplayVersion $version
-    $sameManifest = Get-InstallerManifest -OutputRoot $sameOutput
-    Assert-True ($sameManifest -cnotmatch '(?m)^\s+DisplayVersion:') `
-        'DisplayVersion must be omitted when the installed version equals PackageVersion.'
-    Assert-AppsAndFeaturesBlocks -Manifest $sameManifest
-    Write-Host 'PASS: equal DisplayVersion is omitted'
-
-    $differentOutput = Join-Path $testRoot 'different'
-    $differentVersion = "$version.0"
-    & $prepareScript `
-        -InstallerPath $installerPath `
-        -OutputRoot $differentOutput `
-        -ExpectedVersion $version `
-        -InstallerUrl $installerUrl `
-        -InstalledDisplayVersion $differentVersion
-    $differentManifest = Get-InstallerManifest -OutputRoot $differentOutput
-    $displayVersionMatches = [regex]::Matches(
-        $differentManifest,
-        "(?m)^    DisplayVersion: $([regex]::Escape($differentVersion))\r?$")
-    Assert-True ($displayVersionMatches.Count -eq 2) `
-        'A differing DisplayVersion must be emitted for both installer scopes.'
-    Assert-AppsAndFeaturesBlocks -Manifest $differentManifest -ExpectedDisplayVersion $differentVersion
-    Write-Host 'PASS: differing DisplayVersion is preserved with valid indentation'
+    $env:TIGERMARKVIEW_TEST_TIGERSETUP_URL = 'https://example.com/elsewhere.exe'
+    Assert-Throws -MessagePattern 'release URL' -Action {
+        & $prepareScript -TigerSetupPath $fakeTigerSetup -InstallerPath $installerPath `
+            -OutputRoot (Join-Path $testRoot 'wrong-url') -ExpectedVersion $version | Out-Host
+    }
+    $env:TIGERMARKVIEW_TEST_TIGERSETUP_URL = ''
+    Write-Host 'PASS: a generated set that does not declare the release URL is refused'
 
     $fakeWinGet = Join-Path $testRoot 'winget-test.cmd'
     $fakeWinGetContent = @'
@@ -232,6 +181,7 @@ exit /b 2
     $legacyClientLog = Join-Path $testRoot 'legacy-client-winget.log'
     Set-FakeWinGetResult -Version '1.11.510' -ValidateExitCode 0 -LogPath $legacyClientLog
     & $prepareScript `
+        -TigerSetupPath $fakeTigerSetup `
         -InstallerPath $installerPath `
         -OutputRoot (Join-Path $testRoot 'legacy-client') `
         -ExpectedVersion $version `
@@ -246,6 +196,7 @@ exit /b 2
     $successLog = Join-Path $testRoot 'success-winget.log'
     Set-FakeWinGetResult -Version '1.29.290' -ValidateExitCode 0 -LogPath $successLog
     & $prepareScript `
+        -TigerSetupPath $fakeTigerSetup `
         -InstallerPath $installerPath `
         -OutputRoot (Join-Path $testRoot 'validation-success') `
         -ExpectedVersion $version `
@@ -261,6 +212,7 @@ exit /b 2
     $warningLog = Join-Path $testRoot 'warning-winget.log'
     Set-FakeWinGetResult -Version '1.29.290' -ValidateExitCode -1978335192 -LogPath $warningLog
     & $prepareScript `
+        -TigerSetupPath $fakeTigerSetup `
         -InstallerPath $installerPath `
         -OutputRoot (Join-Path $testRoot 'validation-warning') `
         -ExpectedVersion $version `
@@ -269,20 +221,11 @@ exit /b 2
         -Validate | Out-Host
     Write-Host 'PASS: only WinGet warning-success HRESULT 0x8A150028 is accepted'
 
-    $warningStepLog = Join-Path $testRoot 'warning-step-winget.log'
-    Set-FakeWinGetResult -Version '1.29.290' -ValidateExitCode -1978335192 -LogPath $warningStepLog
-    $warningStepExitCode = Invoke-WorkflowValidationStep `
-        -OutputRoot (Join-Path $testRoot 'validation-warning-step') `
-        -WinGetPath $fakeWinGet
-    Assert-True ($warningStepExitCode -eq 0) `
-        ('An accepted WinGet warning must leave the workflow step at exit code 0; ' +
-            "received $warningStepExitCode.")
-    Write-Host 'PASS: warning-success validation exits the workflow pwsh process with 0'
-
     $failureLog = Join-Path $testRoot 'failure-winget.log'
     Set-FakeWinGetResult -Version '1.29.290' -ValidateExitCode -1978335191 -LogPath $failureLog
     Assert-Throws -MessagePattern '0x8A150029' -Action {
         & $prepareScript `
+            -TigerSetupPath $fakeTigerSetup `
             -InstallerPath $installerPath `
             -OutputRoot (Join-Path $testRoot 'validation-failure') `
             -ExpectedVersion $version `
@@ -291,15 +234,6 @@ exit /b 2
             -Validate | Out-Host
     }
     Write-Host 'PASS: genuine WinGet manifest-validation failure HRESULT remains fatal'
-
-    $failureStepLog = Join-Path $testRoot 'failure-step-winget.log'
-    Set-FakeWinGetResult -Version '1.29.290' -ValidateExitCode -1978335191 -LogPath $failureStepLog
-    $failureStepExitCode = Invoke-WorkflowValidationStep `
-        -OutputRoot (Join-Path $testRoot 'validation-failure-step') `
-        -WinGetPath $fakeWinGet
-    Assert-True ($failureStepExitCode -ne 0) `
-        'A genuine WinGet validation failure must fail the workflow pwsh process.'
-    Write-Host 'PASS: genuine validation failure exits the workflow pwsh process non-zero'
 
     # --- The submission set: exactly three files, and a digest that means something ---
 
@@ -430,7 +364,7 @@ exit /b 2
     $uploadPath = $uploadMatch.Groups['path'].Value.Replace('${{ inputs.version }}', $version)
     $sealMatch = [regex]::Match(
         $releaseWorkflow,
-        '(?ms)^      - name: Seal and record the validated WinGet submission set\r?\n' +
+        '(?ms)^      - name: Seal and record the WinGet submission set\r?\n' +
             '.*?-ManifestDirectory "(?<path>[^"]+)"')
     Assert-True $sealMatch.Success 'The release workflow must seal the generated submission set.'
     $sealPath = $sealMatch.Groups['path'].Value.Replace('$env:RELEASE_VERSION', $version)
@@ -444,6 +378,7 @@ exit /b 2
     $workspace = Join-Path $testRoot 'workspace'
     New-Item -ItemType Directory -Path $workspace -Force | Out-Null
     & $prepareScript `
+        -TigerSetupPath $fakeTigerSetup `
         -InstallerPath $installerPath `
         -OutputRoot (Join-Path $workspace 'artifacts\winget') `
         -ExpectedVersion $version `
@@ -630,6 +565,7 @@ exit /b 2
     $sealedInstallerHash = (Get-FileHash -LiteralPath $sealedInstallerPath -Algorithm SHA256).Hash
     $sealedOutput = Join-Path $testRoot 'sealed'
     & $prepareScript `
+        -TigerSetupPath $fakeTigerSetup `
         -InstallerPath $sealedInstallerPath `
         -OutputRoot $sealedOutput `
         -ExpectedVersion $version `
@@ -649,6 +585,7 @@ exit /b 2
     New-Item -ItemType Directory -Path $fakeRepoRoot -Force | Out-Null
     $staleRoot = Join-Path $fakeRepoRoot 'artifacts\winget'
     & $prepareScript `
+        -TigerSetupPath $fakeTigerSetup `
         -InstallerPath $installerPath `
         -OutputRoot $staleRoot `
         -ExpectedVersion $version `
@@ -903,5 +840,8 @@ finally {
     Remove-Item Env:TIGERMARKVIEW_TEST_WINGET_VERSION -ErrorAction SilentlyContinue
     Remove-Item Env:TIGERMARKVIEW_TEST_WINGET_EXIT -ErrorAction SilentlyContinue
     Remove-Item Env:TIGERMARKVIEW_TEST_WINGET_LOG -ErrorAction SilentlyContinue
+    Remove-Item Env:TIGERMARKVIEW_TEST_TIGERSETUP_LOG -ErrorAction SilentlyContinue
+    Remove-Item Env:TIGERMARKVIEW_TEST_TIGERSETUP_VERSION -ErrorAction SilentlyContinue
+    Remove-Item Env:TIGERMARKVIEW_TEST_TIGERSETUP_URL -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -32,44 +32,70 @@ where the old fallback used to look.
 
 TigerWinLab provides the supported lifecycle and workload boundary:
 
-- `New-TigerWinLab.ps1` provisions and captures the clean guest;
 - `Test-TigerWinLab.ps1` reports readiness;
-- `Reset-TigerWinLab.ps1` restores `BASE-CLEAN`;
-- `Invoke-TigerWinLabJob.ps1` copies a payload, runs PowerShell through PowerShell Direct, and collects
-  structured results/logs;
-- `Invoke-TigerWinLabInstallerScenario.ps1` validates machine-scope Inno install, reinstall, optional
-  upgrade, ARP, files, shortcuts, PATH, smoke commands, uninstall, and cleanup;
-- `Invoke-TigerWinLabDesktopScenario.ps1` runs semantic UI Automation, real pointer/keyboard input,
-  screenshots, modal/occlusion probes, and evidence collection on the guest's LabUser desktop; and
+- `Invoke-TigerWinLabJob.ps1` leases a clean baseline, copies a payload, runs PowerShell through
+  PowerShell Direct, gives a `-Desktop` payload the interactive standard user's desktop (UI
+  Automation, real pointer and keyboard input, window placement, captures), selects the run's
+  `-Theme` and `-NetworkState`, and collects structured results and evidence;
+- `Invoke-TigerWinLabDesktopScenario.ps1` runs the generic desktop composition: UI Automation
+  exposure, semantic and physical input, modal and occlusion probes, and captures; and
 - `Invoke-TigerWinLabWinGetScenario.ps1` validates manifests, dependencies, local-manifest install,
   hash refusal, PATH/command behavior, uninstall, and cleanup.
 
-Each state-changing operation restores or deliberately reuses a known checkpoint state, holds the
-exclusive lab lease, and writes a JSON result plus evidence. Normal TigerMarkView automation should
-not call Hyper-V cmdlets or TigerHyperLab directly.
+Each state-changing operation holds the lab's lease on one baseline VM, starts from and returns to
+`BASE-CLEAN`, and writes a JSON result plus evidence. TigerMarkView invokes these entry points as
+child processes with its own result path and never calls Hyper-V or TigerHyperLab directly.
 
 ## Repeatable release run
 
-Build the candidate installer, confirm the lab is ready, then run:
+Build the candidate installer, then run the acceptance against it:
 
 ```powershell
-pwsh installer/Build-Installer.ps1 -Configuration Release
-pwsh (Join-Path (Get-TigerAiCoreLab -Name TigerWinLab -Type WindowsLab).Path 'Test-TigerWinLab.ps1')
-pwsh eng/lab/Test-TigerMarkViewRelease.ps1
+pwsh installer/Build-Installer.ps1                       # or -Version <next> for an upgrade candidate
+pwsh eng/lab/Test-TigerMarkViewRelease.ps1               # add -Version <next> to match
 ```
 
-`Get-TigerAiCoreLab` comes from `eng/TigerAiCore.ps1`; dot-source it first. The wrapper resolves the
-lab the same way, so the readiness check and the release run always concern the same working copy.
+The wrapper checks the installer statically first (`eng/release-automation/Assert-Installer.ps1`),
+then runs two lab phases on `TigerWinLab-Win11-Clean`.
 
-The TigerMarkView wrapper first provisions the framework-dependent product prerequisites in a reset
-guest. Its installer specification then verifies the all-users path: GUI and CLI files, bundled docs,
-machine ARP publisher/version, one machine PATH entry, `tiger-mark` version
-and help, reinstall idempotence, optional upgrade replacement, uninstall, and removal of installer
-state. A second clean desktop scenario verifies rendering, UI Automation exposure, semantic commands,
-physical menu input, modal handling, occlusion, screenshots, and F1 Help without touching the host.
+**Installer acceptance** - `eng/lab/installer/accept.ps1` as one `-Desktop` job per Windows theme
+(`-Theme light|dark|both`, both by default), offline, with the viewer's own theme set to match. The
+host stages the candidate, the published installer it upgrades from, and the .NET 10 Desktop Runtime
+installer (Microsoft-signed; Windows 11 already carries WebView2). Every assertion is this
+repository's; `eng/lab/installer/shell.ps1` reads the interactive user's own hive and shell as that
+user. In order:
 
-Pass an older installer/version to enable the upgrade phases. Without a previous public build, those
-phases are intentionally absent rather than simulated.
+| Phase | Proves |
+|---|---|
+| `fresh-install` | a quiet per-user install: files, Add/Remove Programs, one user PATH entry, the Start Menu shortcut, the `TigerMarkView.Markdown` ProgID with the exact `"<exe>" "%1"` command, `OpenWithProgids` for `.md` and `.markdown`, the Default apps capability, TigerMarkView in the list `SHAssocEnumHandlers` gives Open with, no extension default or `UserChoice` written (what a ShellExecute of a `.md` file - a double-click's path - then opens is recorded), `tiger-mark` runs; then the registered quiet uninstall removes all of it |
+| `upgrade` | the published Inno Setup release installed per user with its PATH task; the candidate replaces it in place: Inno registration and `unins000.exe` gone, one PATH entry, settings byte-identical, and no default written |
+| `shell-open` | `IAssocHandler::Invoke` - Explorer's Open with - on a document whose folder and name carry spaces, Polish letters, an en dash and a diaeresis: the viewer shows it, the process command line is exactly the registered one, the file enters Open Recent, and the document area is dark or light as the theme asks |
+| `navigation` | a real click on a local link opens the target, which does not enter Open Recent |
+| `picker-open` | File > Open through the real dialog enters Open Recent |
+| `drag-drop` | Explorer beside the viewer; a real pointer drag of a file onto the rendered document, the hit test proving the drop point is the WebView; the file opens and enters Open Recent |
+| `uninstall` | the upgraded installation removed: files, registration, PATH, handler and capability gone; settings kept; `.md` resolving exactly as before the first install |
+| `machine-scope` | the published release installed for all users is replaced by `--scope machine` (HKLM registration, machine PATH, HKLM handler) and removed cleanly |
+
+The published installer comes from the latest GitHub release when GitHub still serves it, refused
+unless it matches the digest GitHub recorded. A release whose asset is no longer served is passed
+explicitly with `-UpgradeFromInstallerPath` - a retained copy of the published bytes, recorded by its
+SHA-256.
+
+**Desktop scenario** - the generic composition on a self-contained build: UI Automation exposure,
+semantic commands, physical menu input, modal handling, occlusion, captures, and F1 Help.
+`-SkipDesktopScenario` omits it.
+
+Evidence lands under `artifacts\lab\<version>\`: each job's `job.json`, `result.json`, the installer
+logs and `--json` outcomes, every probe's JSON, the drag hit test, the settings file after the opens,
+and the captures.
+## Release-workflow provisioning rehearsal
+
+The release workflow installs the pinned TigerSetup release on a hosted runner with
+`eng/release-automation/Install-TigerSetup.ps1`, under the runner's elevated administrator token - a
+state no developer shell reproduces. `pwsh eng/lab/Test-TigerSetupProvisioning.ps1` runs that exact
+script, with the same `installer/tigersetup.json`, as the elevated lab administrator in a clean
+online guest, then has the provisioned builder build and verify a small package. Run it when the pin
+or the script changes; it is not a release stage.
 
 ## Active-content acceptance
 
@@ -146,30 +172,20 @@ Evidence (the request log, captures, and the PDFs) lands under `artifacts\lab\ac
 
 ## Current concrete lab gaps
 
-TigerWinLab's present generic installer scenario is machine-scope and administrative. It cannot yet
-prove the per-user installer path under the non-admin LabUser identity, the absence of a UAC prompt for
-that path, or the real interactive UAC boundary for the all-users path. The release workflow performs
-a disposable per-user silent install/PATH/uninstall check on its clean Windows runner, but final
-interactive coverage should move into TigerWinLab when its installer scenario gains a per-user mode.
-
-The generic installer scenario also assumes a shortcut's parent directory is product-owned and must
-be absent before installation and after removal. TigerMarkView intentionally places its single link
-directly in Windows' shared `Programs` directory, so the wrapper omits that invalid assertion. Start
-Menu launch is a manual lab-console release check until TigerWinLab can validate a root-level link
-without treating the shared system directory as product-owned.
+The TigerSetup wizard's interactive pages are not driven here; its quiet mode is. The wizard, its
+light and dark themes, DPI scaling and the elevation hand-off are TigerSetup's own acceptance, proven
+by its lab rows on every TigerSetup release. A user's existing `UserChoice` for `.md` is not exercised:
+only Windows can write one, and its Pick an app flyout does not render for the lab's desktop agent;
+Windows gives `UserChoice` precedence over every offered handler by design. The upgrade rows cover an Inno Setup installation in the
+same scope as the new install; an all-users earlier installation next to a per-user new one is not
+merged, because TigerSetup migrates only the scope it installs.
 
 The desktop scenario requires a self-contained directory supplied by the host and does not attach to
-an application left installed by the installer scenario. Consequently the wrapper verifies the exact
-installer bytes and the live desktop in separate lab phases from the same source, not one continuous
-installed-GUI session. Its current fixed interaction sequence opens Help but cannot yet navigate the
-multi-step About links or complete the Save dialog used by GUI PDF export. CLI/PDF unit and application
-tests remain the automated PDF gate; installed GUI About and GUI PDF export require a short manual
-check in the lab console until TigerWinLab exposes a client-defined desktop action sequence.
-
-Settings are intentionally under `%LocalAppData%\TigerMarkView` and the Inno source has no
-`[UninstallDelete]`. The current generic scenario does not seed and compare a settings file across
-uninstall, so settings preservation is a documented product expectation plus source contract, not yet
-a lab assertion.
+an installed application, so installed-GUI behaviour is proven by the installer acceptance and the
+generic desktop checks by the desktop scenario. Its fixed interaction sequence opens Help but cannot
+navigate the multi-step About links or complete the Save dialog used by GUI PDF export; the
+active-content acceptance drives GUI PDF export, and CLI/PDF unit and application tests remain the
+automated PDF gate.
 
 These are explicit gaps, not permission to fall back to invasive host-desktop automation. Record the
 missing phase in release evidence and use a manual check inside the VM when it is release-critical.

@@ -576,8 +576,8 @@ Other routine commands:
 - `pwsh eng/tests/Invoke-EngineeringTests.ps1` runs every engineering PowerShell suite; `-Scope
   Repository` runs the fast ones normal CI also runs, `-Scope Maintainer` the winget-pkgs submission
   ones. Each suite is still an ordinary script that can be run on its own.
-- `pwsh installer/Build-Installer.ps1` publishes win-x64 output and builds the Inno Setup installer.
-- `pwsh eng/lab/Test-TigerMarkViewRelease.ps1` runs installer and desktop release scenarios in TigerWinLab.
+- `pwsh installer/Build-Installer.ps1` publishes win-x64 output and builds the TigerSetup installer.
+- `pwsh eng/lab/Test-TigerMarkViewRelease.ps1` runs the installer, shell-integration and desktop acceptance in TigerWinLab.
 - `git diff --check` before proposing a commit; CI runs it.
 
 The desktop, PDF, and CLI projects require Windows; PDF workflows also require the Edge WebView2
@@ -854,13 +854,20 @@ show a `MenuFlyout`.
 
 Open Recent and navigation history have different semantics:
 
-- Open Recent persists explicit entry points: picker, drag/drop, command-line path, and a reselected
-  recent item.
+- Open Recent persists explicit entry points: picker, drag/drop, command-line path (Open with and
+  shell launches), and a reselected recent item.
 - Navigation history is the current session's browsing trail and includes local Markdown links.
 
 `DocumentOpenOrigin` is required at every open call. Link navigation, Back/Forward, and history-list
 selection must not add to Open Recent. History-list selection moves the existing history cursor and
 preserves the Forward branch.
+
+WebView2 reports a file dropped on the document area the same way as a followed link: a request to
+show a local `file:` URL. `ViewerRequestOrigin` classifies every such request: it is `Navigation` only
+when the displayed page has an `href` to that file (a sanitized page runs no script, so it can navigate
+nowhere else), and `ExplicitOpen` otherwise, including every request on the empty and error pages.
+A dropped file the page also links to is indistinguishable from following the link and is treated as
+one, which keeps "links never enter Open Recent" exact.
 
 Build both Open Recent surfaces from `BuildRecentFileItems`, and both history surfaces from
 `BuildHistoryItems` at open time. A populated `MenuFlyout` does not reliably refresh from a later
@@ -943,20 +950,41 @@ that does not exactly match `Version.props`. Copyright metadata must match `LICE
 `ApplicationVersion` strips build metadata for display. Tests verify formatting rules and metadata
 consistency without asserting the current literal version.
 
-`installer/Build-Installer.ps1` stages framework-dependent win-x64 GUI and CLI output in one tree and
-invokes `TigerMarkView.iss`. The release workflow builds the solution once, then uses the script's
-`-NoBuild` path so validation, installer compilation, hashing, and upload all concern the same binary
-outputs. Generated files stay below ignored `artifacts/`.
+The installer is built with TigerSetup, the Tiger-owned installer tool, following its own proven
+TigerMarkView package. `installer/TigerSetup.toml` is the package; `installer/tigersetup.json` pins
+the one TigerSetup release (version, URL, SHA-256) every build uses, and `installer/TigerSetupBuilder.ps1`
+is the one place that resolves the builder (`-TigerSetupPath`, else `tiger-setup.exe` on PATH) and
+refuses any other version. `installer/Build-Installer.ps1` stages framework-dependent win-x64 GUI and
+CLI output in one tree, checks its metadata, and runs `tiger-setup build` and `verify`, keeping the
+artifact name `TigerMarkView-<version>-win-x64-setup.exe`. `-Version` builds a local upgrade candidate
+through an MSBuild global property without editing `Version.props`; release automation never passes
+it. The release workflow builds the solution once, then uses the script's `-NoBuild` path so
+validation, installer building, hashing, and upload all concern the same binary outputs. Generated
+files stay below ignored `artifacts/`.
 
-The Inno script derives identity and version from the published executable. Keep its `AppId` fixed so
-upgrades recognise previous installations. Per-user installation is the default; all-users
-installation may elevate. The PATH task is checked for a first install and owns at most one exact raw
-install-directory entry in the selected user/machine scope. It must not claim a pre-existing entry or
-remove more than the entry it recorded. Uninstall leaves Local AppData settings and WebView profiles
-intact.
+The manifest states no version: `[metadata] source = "msbuild"` reads it from `Version.props`, and the
+builder refuses a published executable that disagrees. The few values TigerSetup cannot read from the
+build (product links, WinGet descriptions) are repeated in the manifest and kept equal to
+`Version.props` by `eng/tests/Installer.Tests.ps1`. The package id `ItTiger.TigerMarkView` is the
+Add/Remove Programs key and the WinGet identifier; never change it. `[legacy]` names the Inno Setup
+registration of 0.9.0 and earlier (`{E718860E-EDE4-4ACC-8235-BCF1DD40FC25}_is1`), which the first
+TigerSetup install in the same scope removes with its own quiet uninstaller. Per-user installation is
+the default; all-users installation elevates. The PATH option is on by default and TigerSetup owns at
+most one install-directory entry per scope, never claiming a pre-existing one. Uninstall removes only
+what the installation owns, so Local AppData settings and WebView profiles stay intact.
 
-Neither .NET nor WebView2 is bundled. The installer checks for both, downloads nothing, creates no
-Markdown file association, and excludes debug symbols and XML documentation from the installed files.
+The installer registers TigerMarkView as an available Markdown handler for exactly the extensions
+`MarkdownLinkResolver.MarkdownExtensions` names: the ProgID `TigerMarkView.Markdown` (the installed
+`TigerMarkView.exe "%1"`), the extensions' `OpenWithProgids`, and a Default apps capability. It never
+writes an extension's default value or `UserChoice`, so it is offered under Open with and never replaces
+a default the user chose; uninstall removes exactly those values. For a user who never chose a Markdown
+app, Windows itself opens the only recommended handler, which is then TigerMarkView. Do not add a
+default association.
+
+Neither .NET nor WebView2 is bundled. Both are declared TigerSetup dependencies: detected first, and a
+missing one is acquired from its vendor and installed before the product (a quiet per-user install
+fails with `dependency_requires_elevation` rather than prompting). Debug symbols and XML documentation
+are excluded from the installed files.
 
 TigerMarkView is an application repository. It publishes one GUI+CLI installer, not NuGet packages,
 a separate CLI installer, or a portable ZIP. Public documentation remains `README.md` plus `docs/`;
@@ -970,9 +998,11 @@ Automation is verified where it runs. Normal CI stays lightweight: restore, buil
 `dotnet test`, the `Repository`-scope engineering suites, and `git diff --check`. GitHub workflows
 stay thin and declarative: a step is one call into an `eng/` or `installer/` script that a maintainer
 can read and run locally, never a block of logic that only ever executes on a runner. The release
-workflow carries only intrinsically CI-bound work - the authoritative build, WinGet generation,
-validation and sealing, the draft release, and the human publication handoff - and post-release
-WinGet submission stays one local maintainer command. Do not add CI behaviour that exists only to
+workflow carries only intrinsically CI-bound work - the authoritative build, the static installer
+check, WinGet generation and sealing, the draft release, and the human publication handoff - and
+post-release WinGet submission stays one local maintainer command. It reruns no test suite (the CI
+run it requires already tested that commit) and needs no WinGet client: TigerSetup generates the
+manifests, and `winget validate` and the TigerWinLab lab rows run on the sealed set after the draft. Do not add CI behaviour that exists only to
 simulate the local submission state machine, and do not give a runner a Git identity or otherwise
 patch a fixture so a maintainer-environment suite passes there; move the suite instead.
 
@@ -987,8 +1017,9 @@ repaired. Human checkpoints end with explicit `READY FOR HUMAN ACTION` instructi
 
 The authoritative WinGet submission set for a published release is the release workflow's sealed
 `TigerMarkView-WinGet-<version>-<commit>` artifact, and nothing else.
-`Prepare-TigerMarkViewWinGet.ps1` is local/pre-release generation into `artifacts\winget\`; its output
-hashes a local installer and must never be submitted or validated as a release's set.
+`Prepare-TigerMarkViewWinGet.ps1` wraps `tiger-setup winget prepare` and `finalize` with the pinned builder;
+run locally it generates into `artifacts\winget\`, and that output hashes a local installer and must
+never be submitted or validated as a release's set.
 `eng/winget/WinGetReleaseValidation.ps1` owns the post-release gate as a callable function: it
 resolves the release tag to a commit, downloads that commit's artifact, verifies it against the digest
 GitHub recorded, extracts it to `artifacts\winget-release\<version>\submission\`, checks the public
@@ -1052,9 +1083,6 @@ declares (`git config --get remote.<name>.url`), because `git remote get-url` re
 `url.<base>.insteadOf` rewriting; any difference between the two is reported separately rather than
 hidden behind whichever one was read. `Invoke-TigerCloneGit` is the one way this repository invokes
 git against that clone.
-
-Inno Setup's preprocessor treats a line beginning with `#` as a directive, including in code blocks;
-use `Chr(13) + Chr(10)` rather than a line-leading `#13#10` expression.
 
 ### Pull requests
 
