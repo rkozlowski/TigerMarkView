@@ -269,6 +269,36 @@ have reviewed stays the version you reviewed, and that is still the version a PD
 
 This help is not affected by either option: it is part of the application and always looks the same.
 
+### HTML inside Markdown
+
+Markdown may contain HTML, and TigerMarkView shows the kind people use for layout: `<details>` and
+`<summary>`, `<kbd>`, `<sub>` and `<sup>`, aligned paragraphs, sized images, tables, and inline styles.
+
+A document is only something to read, so anything in it that could *act* is removed before it is shown
+or exported: scripts, event handlers such as `onclick`, `javascript:` links, frames, embedded objects
+and media, stylesheets, forms, and automatic redirects. Such parts simply do not appear. The same rules
+apply on screen, in an exported PDF, and in `tiger-mark`.
+
+Pictures work as usual. Local images load from beside the file, and web images load from the web, like
+the badges on a project's README — which also means that the server hosting a web image can see that
+the document was opened. Nothing else in a document can reach the network.
+Web images do not receive browser cookies or Windows sign-in credentials. A picture that requires
+you to sign in will not load; open its website in your browser to view it there.
+
+Images on network shares are the exception: a picture addressed as `\\server\share\...`, or reached
+through a mapped network drive or a symbolic link to a share, is not shown. Windows would sign in to
+that server with your account to fetch it, so a document could otherwise collect your sign-in details
+from anyone who opened it. This also applies to a document that is itself on a share or a mapped
+drive: it opens, but its images do not appear. Copy the document and its images to a local folder to
+see them.
+
+Local drives keep working as usual, including `subst` drive letters and symbolic links that stay on
+this computer. A drive letter provided by an unfamiliar storage driver, such as a cloud-drive or
+virtual file system, is treated like a network share, so images on it are not shown.
+
+Inline SVG keeps basic shapes and solid colours, including alert icons. SVG fills that reference
+another resource are removed.
+
 ## What TigerMarkView remembers
 
 Between sessions, TigerMarkView remembers:
@@ -305,7 +335,18 @@ document. If it has been moved or deleted, export it again.
 **An image in the document does not appear.**
 Images are resolved relative to the Markdown file itself, exactly as they are on GitHub. Check that
 the path in the document matches where the image really sits next to the file, and that the file name's
-capitalisation and extension match.
+capitalisation and extension match. Images on a network share are never shown — see
+[HTML inside Markdown](#html-inside-markdown).
+
+**Part of the document's HTML is missing.**
+Scripts, frames, embedded objects, forms, and similar active HTML are removed on purpose — see
+[HTML inside Markdown](#html-inside-markdown). Formatting HTML is kept.
+
+**The viewer says documents are not shown because of its network protection.**
+TigerMarkView shows no document at all when it cannot install the protection that keeps documents from
+reaching network shares, rather than showing them unprotected. The page and the status bar name the
+reason. Restart TigerMarkView; if the notice returns, update or repair the Microsoft Edge WebView2
+Runtime.
 
 **A link does nothing.**
 Links to local files that are not Markdown are refused on purpose, with a note in the status bar. Web

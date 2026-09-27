@@ -116,8 +116,8 @@ public static class MarkdownLinkResolver
             return false;
         }
 
-        // A UNC path is still a local file path as far as opening it goes; a file: URI naming some
-        // other host is not something File.ReadAllText can do anything useful with.
+        // An explicitly followed Markdown link may name a UNC file too. Opening that document is a
+        // reader action; its automatically fetched images still pass through the resource boundary.
         string localPath;
         try
         {

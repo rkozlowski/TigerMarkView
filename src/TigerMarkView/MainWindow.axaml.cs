@@ -90,6 +90,10 @@ public partial class MainWindow : Window
 
     private readonly ApplicationSettings _settings;
     private readonly SettingsStore _settingsStore;
+
+    /// <summary>The only route by which the viewer's WebView is navigated.</summary>
+    private readonly DocumentWebView _documentWebView;
+
     private ReloadMode _currentReloadMode;
     private EditorConfiguration _editorConfiguration;
     private MarkdownTheme _theme;
@@ -200,6 +204,14 @@ public partial class MainWindow : Window
         // application directory, which an all-users install makes read-only. See WebViewProfile.
         WebViewProfile.Attach(Browser);
 
+        // Equally before the first navigation, which this constructor itself starts: the request
+        // boundary has to be on the WebView before any document is. See DocumentWebView.
+        _documentWebView = DocumentWebView.Attach(Browser, () => _theme);
+
+        // Fails closed: the WebView then shows its own notice, and the status bar must not go on
+        // describing a document as if it were on screen.
+        _documentWebView.BoundaryUnavailable += (_, _) => RefreshStatusBar();
+
         Browser.NavigationCompleted += OnNavigationCompleted;
 
         // The two events that keep the WebView from ever acting as a browser in its own right: every
@@ -207,7 +219,7 @@ public partial class MainWindow : Window
         // back through TigerMarkView's document pipeline instead. See OnNavigationStarted.
         Browser.NavigationStarted += OnNavigationStarted;
         Browser.NewWindowRequested += OnNewWindowRequested;
-        Browser.WebMessageReceived += OnWebMessageReceived;
+        _documentWebView.WebMessageReceived += OnWebMessageReceived;
 
         SetReloadModeChecked(_currentReloadMode);
         SetEditorTypeMenuChecked(_editorConfiguration.Type);
@@ -1410,7 +1422,7 @@ public partial class MainWindow : Window
     private void NavigateBrowser()
     {
         var builder = new UriBuilder(new Uri(PreviewHtmlPath)) { Query = $"t={DateTime.UtcNow.Ticks}" };
-        Browser.Source = builder.Uri;
+        _documentWebView.Navigate(builder.Uri);
     }
 
     private async Task<double?> TryCaptureScrollYAsync()
@@ -1467,6 +1479,11 @@ public partial class MainWindow : Window
     /// </remarks>
     private void OnNavigationStarted(object? sender, WebViewNavigationStartingEventArgs e)
     {
+        if (_documentWebView.IsUnavailableNoticeNavigation(e.Request))
+        {
+            return;
+        }
+
         if (e.Request is { } target && !IsOwnPreviewNavigation(target) && TryHandleNavigation(target))
         {
             e.Cancel = true;
@@ -1496,11 +1513,17 @@ public partial class MainWindow : Window
     /// Local Markdown opens in the viewer; <c>http</c>/<c>https</c>/<c>mailto</c> leaves for the
     /// system browser or mail client. Any <em>other</em> local file is refused rather than opened with
     /// its shell association: a Markdown document can come from anywhere, and "click a link, launch
-    /// whatever the file is" is not a power a document should have. Schemes the viewer has no opinion
-    /// about (<c>about:</c>, <c>data:</c>) are left to the WebView.
+    /// whatever the file is" is not a power a document should have. Unknown schemes are refused too.
     /// </remarks>
     private bool TryHandleNavigation(Uri target)
     {
+        // The host's own blank page, shown while the request boundary is being (re)installed. A
+        // document cannot name it: the sanitizer admits no about: scheme.
+        if (target.AbsoluteUri == "about:blank")
+        {
+            return false;
+        }
+
         if (MarkdownLinkResolver.TryResolveLocalMarkdown(target, out var markdownPath))
         {
             // Posted rather than called directly: this runs inside the WebView's own navigation
@@ -1530,7 +1553,7 @@ public partial class MainWindow : Window
             return true;
         }
 
-        return false;
+        return true;
     }
 
     /// <summary>
@@ -1572,11 +1595,11 @@ public partial class MainWindow : Window
     /// <see cref="OnPreviewKeyDown"/> (which covers focus on the chrome) this makes the shortcut work
     /// wherever focus happens to be.
     /// </remarks>
-    private async void OnWebMessageReceived(object? sender, WebMessageReceivedEventArgs e)
+    private async void OnWebMessageReceived(object? sender, string message)
     {
         // F1 arrives the same way and for the same reason as Alt+Left/Right: the reader is in the
         // document, so Avalonia never sees the key.
-        if (ViewerMessages.IsHelpCommand(e.Body))
+        if (ViewerMessages.IsHelpCommand(message))
         {
             ShowHelp(BundledDocuments.Help);
             return;
@@ -1587,12 +1610,12 @@ public partial class MainWindow : Window
         // to cancel the key and post it here, because without that WebView2 treats Ctrl+P as a browser
         // accelerator and opens Edge's own print preview over the document. Swallowing the message here
         // is what keeps that from happening; it is not a route to TigerMarkView printing.
-        if (ViewerMessages.IsPrintCommand(e.Body))
+        if (ViewerMessages.IsPrintCommand(message))
         {
             return;
         }
 
-        switch (ViewerMessages.ParseNavigationCommand(e.Body))
+        switch (ViewerMessages.ParseNavigationCommand(message))
         {
             case ViewerNavigationCommand.Back:
                 await NavigateHistoryAsync(forward: false);
@@ -1904,6 +1927,15 @@ public partial class MainWindow : Window
 
     private void RefreshStatusBar()
     {
+        if (_documentWebView.UnavailableReason is { } unavailable)
+        {
+            StatusDot.Fill = ErrorDotBrush;
+            SetStatusText($"Error — Documents cannot be shown: {unavailable}");
+            ReloadButton.IsVisible = false;
+            ConfirmBanner.IsVisible = false;
+            return;
+        }
+
         if (_watcher is null)
         {
             StatusDot.Fill = NeutralDotBrush;

@@ -21,6 +21,8 @@ time under **Help > About TigerMarkView**.
   custom executable and arguments template;
 - Light and Dark application themes;
 - optional emoji shortcode expansion and syntax highlighting, both off by default;
+- untrusted-content handling: formatting HTML is kept, scripts and other active content are removed,
+  and images on network shares are never fetched;
 - PDF export using the exact document version currently displayed;
 - configurable menu bar, toolbar, status bar, and optional toolbar buttons;
 - bundled offline Help, About, licence, and third-party notices;
@@ -67,6 +69,22 @@ Two rendering options are available under **View > Rendering**:
 
 Both options are implemented in `TigerMarkView.Core`, so the displayed document and an exported PDF
 stay consistent. The CLI currently uses the default rendering with both options off.
+
+Documents are treated as untrusted content. Formatting HTML inside Markdown (`<details>`, `<kbd>`,
+sized images, tables, inline styles) is kept; scripts, event handlers, `javascript:` links, frames,
+embedded objects, stylesheets, and forms are removed. Every generated page also carries a Content
+Security Policy that admits only TigerMarkView's own script, and the viewer and PDF export refuse every
+network request except images. Local and web images therefore keep working, while nothing in a
+document can run, and the only requests it can cause are for the image addresses its author wrote.
+Images on network shares are not loaded, whether addressed as `\\server\share`, through a mapped
+network drive, or through a symbolic link to a share, because fetching them would send the reader's
+Windows credentials to that server; this includes the images of a document that itself lives on a share
+or a mapped drive. If the viewer cannot install its request protection, it shows no documents and says
+why rather than showing them unprotected. The viewer, PDF export, and `tiger-mark` apply the same rules.
+Inline SVG supports basic shapes with solid fills; external SVG paint resources are removed.
+Web images are fetched without browser cookies or Windows sign-in credentials, so an image that
+requires signing in does not load; ordinary public web images remain enabled, and a system proxy that
+asks for Windows sign-in is still answered.
 
 ## PDF export
 

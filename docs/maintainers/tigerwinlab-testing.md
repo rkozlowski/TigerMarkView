@@ -71,6 +71,79 @@ physical menu input, modal handling, occlusion, screenshots, and F1 Help without
 Pass an older installer/version to enable the upgrade phases. Without a previous public build, those
 phases are intentionally absent rather than simulated.
 
+## Active-content acceptance
+
+The acceptance also publishes the consumer-owned `eng/lab/active-content/probe` executable. It runs
+only in the guest and loads sanitizer output without CSP, then deliberately unsanitized content with
+CSP, then raw pages with the request boundary alone. It checks Chromium reparsing, literal hostile
+fences, passive markup, data/SVG isolation, blocked script/style/fetch requests, allowed CSS images,
+HTTP redirects, redirects to shares, and a mapped network drive with a successful read control.
+The loopback request log and SMB audit are checked independently of the probe's DOM assertions.
+Local and network symbolic links and SUBST drives have separate controls: inspecting a link must not open its network
+target. Storage decisions and decoded image dimensions are both asserted. The `lifecycle` probe links the production `DocumentWebView` source and exercises actual
+Avalonia adapter destruction/recreation, held navigation, message-source checks, and an injected
+unsupported platform handle, including retry after failure. Both probes run only inside TigerWinLab.
+
+Two audited shares separate what a document can cause from what the guest does on its own.
+`\\127.0.0.1\tmvprobe` never gets a drive letter and is the strict oracle: any access to it inside a
+measured window fails the check. `\\127.0.0.1\tmvmapped` is what the mapped drive `Z:` and the SUBST
+alias `Y:` (built on a local symbolic link to that share) reach. The shell inspects a drive letter it
+has just been shown on its own, opening the root and its `AutoRun.inf`/`Desktop.ini`, and event 5145
+names the account but never the process, so those opens cannot be attributed; on that share only file
+opens count. An environment control after the mapping records this activity and requires the strict
+share to stay untouched, and every check message lists each access with its time and access mask. A
+raw SUBST-alias page that bypasses the sanitizer is measured the same way. An NTLM challenge logs only
+the presence of Authorization, never its value. That header must be absent for the independent probe,
+viewer and PDF paths; web images are fetched through the shared credentialless HTTP client.
+
+The host stages guest text as UTF-8 with BOM and checks the script with Windows PowerShell 5.1 before
+launching the VM. The probes reuse the application's Windows manifest and dependencies.
+
+Unit tests prove what the renderer emits: the sanitized HTML, the page's Content Security Policy, and
+the request policy's decisions. Whether the real WebView2 engine then refuses what it should, inside
+the real Avalonia viewer and the real `tiger-mark`, is proven in the lab:
+
+```powershell
+pwsh eng/lab/Test-TigerMarkViewActiveContent.ps1
+```
+
+The wrapper publishes the GUI and CLI self-contained into one tree and runs
+`eng/lab/active-content/accept.ps1` as an `Invoke-TigerWinLabJob.ps1 -Desktop` job on
+`TigerWinLab-Win11-Clean`, with the guest's network adapter disconnected. The guest starts a loopback
+request logger and uses `eng/lab/active-content/hostile.md`, which aims every active construct at
+`/exfil/<vector>` and its passive remote images at `/img/`, so the logger is the oracle. The payload
+opens the document in the viewer and converts it with `tiger-mark`, then asserts that:
+
+- both remote images are requested and no `/exfil/` request ever arrives, on either path, and that
+  both paths make the same set of requests;
+- the unsized relative local image is laid out at its real 48 px size in the viewer, and a PDF of a
+  local-image-only document embeds an image while an image-free control embeds none;
+- the document's own attempt to post `tigermarkview:help` opens nothing, and a real click on the former
+  `javascript:` link changes nothing; and
+- F1, pressed with focus inside the page, still opens Help — the proof that the shell's hash-admitted
+  script runs under the policy.
+
+Network shares are proven against `\\127.0.0.1\tmvprobe`, a share the payload creates in the guest with
+Detailed File Share auditing (event 5145) on, so every file an SMB client asks for is recorded. Two
+controls come first: a plain SMB read must appear in the audit, and headless Edge on a local page
+naming an image on the share must fetch it — so the vector is real and the oracle sees it. Then
+`eng/lab/active-content/shares.md`, which names the shares in every spelling (`\\`, `//`, `file://`,
+four slashes, percent-encoded, a CSS background, the mapped drive, the SUBST alias in its browser
+spellings, and a relative path through a symbolic link), is opened in the viewer and converted by
+`tiger-mark`: no share file may be requested, while its relative and absolute local images and its web
+image still load. A document opened from the share itself must be read, but its relative image must
+not be — the case only the request boundary can stop.
+
+`eng/lab/active-content/code.md` covers syntax highlighting and hostile code. The payload seeds the
+interactive user's settings with Syntax Highlighting and the Export to PDF toolbar button on, opens the
+document, counts keyword-coloured pixels in the viewer, drives GUI export through its Save dialog, and
+checks the exported PDF's content streams for the print palette's keyword and comment colours; the
+`tiger-mark` PDF of the same document, rendered without highlighting, is the control that must lack
+them. The hostile blocks name `/exfil/` images, so any source that escaped into markup would show up in
+the request log.
+
+Evidence (the request log, captures, and the PDFs) lands under `artifacts\lab\active-content\job\`.
+
 ## Current concrete lab gaps
 
 TigerWinLab's present generic installer scenario is machine-scope and administrative. It cannot yet

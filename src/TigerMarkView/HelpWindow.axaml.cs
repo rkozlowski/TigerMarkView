@@ -51,6 +51,9 @@ public partial class HelpWindow : Window
 
     private readonly ExternalLinkLauncher _linkLauncher = new();
 
+    /// <summary>The only route by which this window's WebView is navigated.</summary>
+    private readonly DocumentWebView _documentWebView;
+
     private BundledDocument _document = BundledDocuments.Help;
     private MarkdownTheme _theme;
     private double? _pendingScrollY;
@@ -68,6 +71,11 @@ public partial class HelpWindow : Window
         // Same reason as the viewer: the default WebView2 profile location is the application
         // directory, which an all-users install makes read-only. See WebViewProfile.
         WebViewProfile.Attach(Browser);
+
+        // The same request boundary as the viewer. Help shows only bundled documents, but it renders
+        // them through the same pipeline into the same kind of WebView, and one rule for both is
+        // simpler to reason about than an exception for the trusted one. See DocumentWebView.
+        _documentWebView = DocumentWebView.Attach(Browser, () => _theme);
 
         Browser.NavigationCompleted += OnNavigationCompleted;
 
@@ -204,7 +212,7 @@ public partial class HelpWindow : Window
     private void NavigateBrowser()
     {
         var builder = new UriBuilder(new Uri(PreviewHtmlPath)) { Query = $"t={DateTime.UtcNow.Ticks}" };
-        Browser.Source = builder.Uri;
+        _documentWebView.Navigate(builder.Uri);
     }
 
     private async void OnNavigationCompleted(object? sender, WebViewNavigationCompletedEventArgs e)
@@ -240,6 +248,11 @@ public partial class HelpWindow : Window
 
     private void OnNavigationStarted(object? sender, WebViewNavigationStartingEventArgs e)
     {
+        if (_documentWebView.IsUnavailableNoticeNavigation(e.Request))
+        {
+            return;
+        }
+
         if (e.Request is { } target && !IsOwnPreviewNavigation(target) && TryHandleNavigation(target))
         {
             e.Cancel = true;
@@ -269,6 +282,13 @@ public partial class HelpWindow : Window
     /// </remarks>
     private bool TryHandleNavigation(Uri target)
     {
+        // The host's own blank page, shown while the request boundary is being (re)installed. A
+        // document cannot name it: the sanitizer admits no about: scheme.
+        if (target.AbsoluteUri == "about:blank")
+        {
+            return false;
+        }
+
         if (MarkdownLinkResolver.TryResolveLocalMarkdown(target, out var markdownPath) &&
             BundledDocuments.Contains(markdownPath))
         {
@@ -294,7 +314,7 @@ public partial class HelpWindow : Window
             return true;
         }
 
-        return target.IsFile;
+        return true;
     }
 
     private static bool IsOwnPreviewNavigation(Uri target)

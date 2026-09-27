@@ -46,8 +46,11 @@ internal sealed class OffScreenPdfHost : OffScreenWebViewHost
             // its <base href> points at the source Markdown folder, and only a file:// document is
             // allowed to pull in the relative local images that base href resolves to.
             htmlPath = WriteTemporaryHtml(request.Html);
+            var htmlUri = new Uri(htmlPath);
 
-            if (await NavigateAsync(core, new Uri(htmlPath).AbsoluteUri, "for export", cancellationToken) is
+            ConfineToDocument(core, htmlUri);
+
+            if (await NavigateAsync(core, htmlUri.AbsoluteUri, "for export", cancellationToken) is
                 { } navigationError)
             {
                 return PdfExportResult.Failed(navigationError);
@@ -70,6 +73,39 @@ internal sealed class OffScreenPdfHost : OffScreenWebViewHost
         {
             TryDelete(htmlPath);
         }
+    }
+
+    /// <summary>
+    /// Makes the export engine a renderer and nothing else, before it sees the document.
+    /// </summary>
+    /// <remarks>
+    /// Export needs layout, not behaviour, so the document's own script is switched off outright — the
+    /// shell scripts only serve an interactive reader. <c>ExecuteScriptAsync</c>, which the readiness
+    /// wait uses, is host-injected and unaffected. The page has no channel to this process (no web
+    /// messages, no host objects), cannot navigate away from the file written for it or open a window,
+    /// and every request it makes is held to <see cref="WebViewResourceBoundary"/> — the same boundary
+    /// the viewer applies — so an exported PDF can embed a remote image exactly as the viewer shows it.
+    /// </remarks>
+    private static void ConfineToDocument(CoreWebView2 core, Uri documentUri)
+    {
+        core.Settings.IsScriptEnabled = false;
+        core.Settings.IsWebMessageEnabled = false;
+        core.Settings.AreHostObjectsAllowed = false;
+        core.Settings.AreDefaultScriptDialogsEnabled = false;
+
+        WebViewResourceBoundary.Apply(core);
+
+        core.NavigationStarting += (_, e) =>
+        {
+            if (!Uri.TryCreate(e.Uri, UriKind.Absolute, out var target)
+                || !target.IsFile
+                || !string.Equals(target.LocalPath, documentUri.LocalPath, StringComparison.OrdinalIgnoreCase))
+            {
+                e.Cancel = true;
+            }
+        };
+
+        core.NewWindowRequested += (_, e) => e.Handled = true;
     }
 
     private static CoreWebView2PrintSettings CreatePrintSettings(CoreWebView2 core, PdfPageSetup page)
