@@ -32,16 +32,15 @@
   -->
   <ItemGroup>
     <Content Include="..\..\docs\HELP.md" Link="Docs\HELP.md" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\..\docs\THIRD-PARTY-NOTICES.md" Link="Docs\THIRD-PARTY-NOTICES.md"
-             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\docs\THIRD-PARTY-NOTICES.md" Link="Docs\THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\LICENSE" Link="Docs\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Controls.WebView" Version="12.0.1" />
+    <PackageReference Include="Avalonia" Version="12.1.3" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.3" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.3" />
+    <PackageReference Include="Avalonia.Controls.WebView" Version="12.1.0" />
   </ItemGroup>
 
   <ItemGroup>
