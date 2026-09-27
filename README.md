@@ -21,6 +21,8 @@ time under **Help > About TigerMarkView**.
   custom executable and arguments template;
 - Light and Dark application themes;
 - optional emoji shortcode expansion and syntax highlighting, both off by default;
+- untrusted-content handling: formatting HTML is kept, scripts and other active content are removed,
+  and images on network shares are never fetched;
 - PDF export using the exact document version currently displayed;
 - configurable menu bar, toolbar, status bar, and optional toolbar buttons;
 - bundled offline Help, About, licence, and third-party notices;

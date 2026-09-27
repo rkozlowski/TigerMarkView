@@ -342,6 +342,12 @@ capitalisation and extension match. Images on a network share are never shown �
 Scripts, frames, embedded objects, forms, and similar active HTML are removed on purpose — see
 [HTML inside Markdown](#html-inside-markdown). Formatting HTML is kept.
 
+**The viewer says documents are not shown because of its network protection.**
+TigerMarkView shows no document at all when it cannot install the protection that keeps documents from
+reaching network shares, rather than showing them unprotected. The page and the status bar name the
+reason. Restart TigerMarkView; if the notice returns, update or repair the Microsoft Edge WebView2
+Runtime.
+
 **A link does nothing.**
 Links to local files that are not Markdown are refused on purpose, with a note in the status bar. Web
 links open in your default browser — if nothing happens, Windows may have no browser associated.
