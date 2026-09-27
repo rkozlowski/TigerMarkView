@@ -17,9 +17,14 @@
     after a full build. Everything the release workflow needs to know before it
     builds is checked here; the workflow itself asserts nothing inline.
 
-    GitHub is reached only through the authenticated `gh` session. In GitHub
-    Actions that session is the job's scoped GITHUB_TOKEN, delivered as GH_TOKEN;
-    the job needs `actions: read` and `contents: read` and nothing more.
+    GitHub is reached only through the authenticated `gh` session, and the
+    caller states which kind it is. Run by a maintainer (the default), the
+    session is their `gh auth login`, and it must also identify its user and read
+    this repository's Actions settings. The release workflow passes
+    `-GitHubSession Workflow`: the session is then the job's scoped GITHUB_TOKEN,
+    delivered as GH_TOKEN, which has no user identity and no administration
+    access, so it is asked only for what the gate needs - the CI run and the
+    tag - with `actions: read` and `contents: read` and nothing more.
 
     Exit codes: 0 = PASS, 2 = BLOCKED (a human/external step is incomplete),
     1 = FAIL (a check found invalid data).
@@ -36,8 +41,16 @@
     .PARAMETER StepSummaryPath
     A file to append a Markdown summary to. Defaults to $env:GITHUB_STEP_SUMMARY.
 
+    .PARAMETER GitHubSession
+    Maintainer (default) for a person's `gh auth login` session, or Workflow for
+    the release workflow's own job token.
+
     .PARAMETER Json
     Emit the machine-readable report instead of the rendered summary.
+
+    .PARAMETER GitHubCli
+    For tests only: a session from New-TigerMarkViewGitHubCli -Invoker, used
+    instead of the real `gh`.
 #>
 [CmdletBinding()]
 param(
@@ -50,9 +63,14 @@ param(
 
     [string] $Repository,
 
+    [ValidateSet('Maintainer', 'Workflow')]
+    [string] $GitHubSession = 'Maintainer',
+
     [string] $StepSummaryPath,
 
-    [switch] $Json
+    [switch] $Json,
+
+    [object] $GitHubCli
 )
 
 $ErrorActionPreference = 'Stop'
@@ -93,17 +111,20 @@ $checks.Add((Test-TigerMarkViewCommitOnMain -RepositoryRoot $repositoryRoot -Com
     -Branch $constant.defaultBranch -Fetch))
 
 # 4. The CI push run for that exact commit concluded success.
-$cli = $null
-try {
-    $cli = New-TigerMarkViewGitHubCli
-}
-catch {
-    $checks.Add((New-TigerMarkViewReleaseCheck -Id 'ci/run' -Status 'BLOCKED' `
-        -Observed "GitHub CLI is unavailable: $($_.Exception.Message)" `
-        -Remediation 'Install gh and authenticate, or provide GH_TOKEN in Actions.'))
+$cli = $GitHubCli
+if ($null -eq $cli) {
+    try {
+        $cli = New-TigerMarkViewGitHubCli
+    }
+    catch {
+        $checks.Add((New-TigerMarkViewReleaseCheck -Id 'ci/run' -Status 'BLOCKED' `
+            -Observed "GitHub CLI is unavailable: $($_.Exception.Message)" `
+            -Remediation 'Install gh and authenticate, or provide GH_TOKEN in Actions.'))
+    }
 }
 if ($null -ne $cli) {
-    foreach ($sessionCheck in (Test-TigerMarkViewGitHubCliSession -Cli $cli -Repository $Repository)) {
+    foreach ($sessionCheck in (Test-TigerMarkViewGitHubCliSession -Cli $cli -Repository $Repository `
+            -GitHubSession $GitHubSession)) {
         # Only surface a session problem; a healthy session needs no line here.
         if ($sessionCheck.status -cne 'PASS') { $checks.Add($sessionCheck) }
     }

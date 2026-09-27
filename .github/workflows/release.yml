@@ -52,6 +52,7 @@ jobs:
           ./eng/release-automation/Assert-ReleaseCommitReady.ps1
           -Version $env:RELEASE_VERSION
           -CommitSha ${{ github.sha }}
+          -GitHubSession Workflow
 
   validate:
     name: Build and validate exact release artifacts

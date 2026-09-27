@@ -158,8 +158,12 @@ version in `Version.props`. Its first job runs one script,
 - the required `CI` push run for that SHA succeeded; and
 - the release tag does not exist yet.
 
-That script is the gate, and it can be run locally against any commit. The workflow itself asserts
-nothing inline: every remaining step is one call into an `eng/` or `installer/` script.
+That script is the gate, and it can be run locally against any commit. The GitHub session it expects
+is stated, never guessed: run locally it defaults to `-GitHubSession Maintainer` and also requires the
+maintainer's `gh auth login` session to identify its user and read the repository's Actions settings;
+the workflow passes `-GitHubSession Workflow`, where the session is the job's own scoped token with
+`actions: read` and `contents: read`, which has no user identity and needs none. The workflow itself
+asserts nothing inline: every remaining step is one call into an `eng/` or `installer/` script.
 
 The release workflow then builds once and uses those exact outputs throughout. It:
 

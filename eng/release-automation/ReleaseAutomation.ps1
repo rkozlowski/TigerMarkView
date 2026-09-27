@@ -18,9 +18,10 @@
 
     GitHub is reached only through an authenticated GitHub CLI session. Nothing
     here accepts a token argument, reads a token from the environment, logs a
-    token, or inspects a credential store. Authentication repair is always
-    'gh auth login'. Tests inject a fake `gh` invoker, so no check here needs a
-    live credential or a network.
+    token, or inspects a credential store. A maintainer repairs authentication
+    with 'gh auth login'; a release workflow step uses the job's own scoped
+    token, and says so explicitly (-GitHubSession Workflow). Tests inject a
+    fake `gh` invoker, so no check here needs a live credential or a network.
 
         . (Join-Path $PSScriptRoot 'ReleaseAutomation.ps1')
 #>
@@ -621,24 +622,42 @@ function New-TigerMarkViewGitHubCli {
 function Test-TigerMarkViewGitHubCliSession {
     <#
         .SYNOPSIS
-        Proves an authenticated `gh` session that can read this repository's
-        Actions and identify its user.
+        Proves an authenticated `gh` session fit for the context it runs in.
 
         .DESCRIPTION
         Reports checks rather than throwing, so one run can show every reason a
         session is unusable. The token itself is never read: `gh auth status`
-        already knows whether one exists, and `gh api user` proves it works.
+        already knows whether one exists.
+
+        The caller states which kind of session it expects; nothing here guesses
+        it from the environment. A Maintainer session is a person's
+        `gh auth login`, so it must identify its user (`gh api user`) and read
+        this repository's Actions settings. A Workflow session is the job's own
+        scoped token, which has no user to identify and no administration access
+        to the Actions settings, so only its presence is checked here; the
+        queries the job actually makes report their own failures.
+
+        .PARAMETER GitHubSession
+        Maintainer (default) or Workflow.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
         [object] $Cli,
 
-        [string] $Repository = (Get-TigerMarkViewReleaseConstant).repository
+        [string] $Repository = (Get-TigerMarkViewReleaseConstant).repository,
+
+        [ValidateSet('Maintainer', 'Workflow')]
+        [string] $GitHubSession = 'Maintainer'
     )
 
     $checks = [Collections.Generic.List[object]]::new()
-    $repair = 'Run "gh auth login" and choose an account authorized for this repository.'
+    $repair = if ($GitHubSession -ceq 'Workflow') {
+        'Give the workflow step the job''s github.token for gh, with actions: read and contents: read.'
+    }
+    else {
+        'Run "gh auth login" and choose an account authorized for this repository.'
+    }
 
     if (-not $Cli.isFake -and [string]::IsNullOrWhiteSpace([string] $Cli.path)) {
         $checks.Add((New-TigerMarkViewReleaseCheck -Id 'gh/available' -Status 'BLOCKED' `
@@ -656,7 +675,7 @@ function Test-TigerMarkViewGitHubCliSession {
         -FailObserved ('gh auth status reports no usable session: ' +
             (($status.StdErr, $status.StdOut | Where-Object { $_ } | Select-Object -First 1) -replace '\s+', ' ')) `
         -FailStatus 'BLOCKED' -Remediation $repair))
-    if ($status.ExitCode -ne 0) { return $checks.ToArray() }
+    if ($status.ExitCode -ne 0 -or $GitHubSession -ceq 'Workflow') { return $checks.ToArray() }
 
     $viewer = & $Cli.tryApi 'user'
     $login = if ($viewer.ok -and $null -ne $viewer.data) { [string] $viewer.data.login } else { $null }

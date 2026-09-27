@@ -188,6 +188,34 @@ try {
     Assert-True (@($wrongChecks | Where-Object { $_.id -ceq 'gh/actions-read' }).status -ceq 'BLOCKED') `
         'An account that cannot read Actions is BLOCKED.'
 
+    # The release workflow's job token: gh sees a session, but it has no user and
+    # no administration access, exactly as the 0.10.0 release run observed.
+    $actionsTokenRoutes = @{
+        'auth status' = [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = 'Logged in to github.com account github-actions[bot] (GH_TOKEN)' }
+        'api user'    = (New-GhFail 'Resource not accessible by integration (HTTP 403)')
+        "api repos/$repository/actions/permissions" = (New-GhFail 'Resource not accessible by integration (HTTP 403)')
+    }
+    $workflowChecks = Test-TigerMarkViewGitHubCliSession -Cli (New-FakeGh -Routes $actionsTokenRoutes) `
+        -Repository $repository -GitHubSession Workflow
+    Assert-True (@($workflowChecks | Where-Object { $_.status -cne 'PASS' }).Count -eq 0) `
+        'A workflow job token passes the Workflow preflight without a user identity or administration access.'
+    Assert-True (@($workflowChecks | Where-Object { $_.id -in @('gh/viewer', 'gh/actions-read') }).Count -eq 0) `
+        'The Workflow preflight never asks a job token for a user or the Actions settings.'
+    $maintainerChecks = Test-TigerMarkViewGitHubCliSession -Cli (New-FakeGh -Routes $actionsTokenRoutes) `
+        -Repository $repository
+    Assert-True (@($maintainerChecks | Where-Object { $_.status -ceq 'BLOCKED' }).id -join ',' -ceq 'gh/viewer,gh/actions-read') `
+        'The default Maintainer preflight still demands a user identity and Actions read access.'
+
+    $workflowUnauthenticated = Test-TigerMarkViewGitHubCliSession -Cli $unauthenticated `
+        -Repository $repository -GitHubSession Workflow
+    $workflowAuth = @($workflowUnauthenticated | Where-Object { $_.id -ceq 'gh/auth-status' })[0]
+    Assert-True ($workflowAuth.status -ceq 'BLOCKED') 'A workflow step with no token for gh is BLOCKED.'
+    Assert-True ($workflowAuth.remediation -match 'github\.token' -and $workflowAuth.remediation -notmatch 'gh auth login') `
+        'Workflow repair points at the job token, never at an interactive login.'
+    Assert-Throws { Test-TigerMarkViewGitHubCliSession -Cli $goodSession -GitHubSession 'Auto' } `
+        -MessagePattern 'GitHubSession'
+    Write-Host 'PASS: the session kind is explicit, and a workflow job token needs no user identity'
+
     $sourceText = Get-Content -LiteralPath (Join-Path $automationRoot 'ReleaseAutomation.ps1') -Raw
     Assert-True (-not ($sourceText -match 'GH_TOKEN|GITHUB_TOKEN|auth token|-GitHubToken')) `
         'The module never reads, forwards, or logs a token.'
@@ -325,6 +353,132 @@ try {
     $t = Resolve-TigerMarkViewReleaseTagCommit -Cli $noTag -Version $version -Repository $repository
     Assert-True ($t.check.status -ceq 'BLOCKED' -and $null -eq $t.commit) 'An absent tag is BLOCKED.'
     Write-Host 'PASS: release-tag resolution dereferences annotated tags'
+
+    # --- The release prerequisite gate, end to end ---------------------------
+
+    # The gate script runs from a throwaway repository whose origin is a local bare
+    # clone, so version, notes, and commit-on-main are real checks against real git
+    # while GitHub is the fake job-token session above.
+    function Invoke-FixtureGit {
+        param([string] $Root, [string[]] $GitArgs)
+        $previous = $PSNativeCommandUseErrorActionPreference
+        try {
+            $PSNativeCommandUseErrorActionPreference = $false
+            $out = (& git -C $Root @GitArgs 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw "git $($GitArgs -join ' ') failed: $out" }
+            $out.Trim()
+        }
+        finally { $PSNativeCommandUseErrorActionPreference = $previous; $global:LASTEXITCODE = 0 }
+    }
+
+    $gateVersion = '9.9.9'
+    $gateOrigin = Join-Path $testRoot 'gate-origin.git'
+    $gateRoot = Join-Path $testRoot 'gate'
+    New-Item -ItemType Directory -Path $gateOrigin, (Join-Path $gateRoot 'eng/release-automation'), `
+        (Join-Path $gateRoot '.github/release-notes') -Force | Out-Null
+    Invoke-FixtureGit -Root $gateOrigin -GitArgs @('init', '--quiet', '--bare', '-b', 'main') | Out-Null
+    foreach ($name in @('Assert-ReleaseCommitReady.ps1', 'ReleaseAutomation.ps1')) {
+        Copy-Item -LiteralPath (Join-Path $automationRoot $name) -Destination (Join-Path $gateRoot 'eng/release-automation')
+    }
+    Set-Content -LiteralPath (Join-Path $gateRoot 'Version.props') -Encoding utf8NoBOM `
+        -Value "<Project>`n  <PropertyGroup>`n    <Version>$gateVersion</Version>`n  </PropertyGroup>`n</Project>"
+    Set-Content -LiteralPath (Join-Path $gateRoot ".github/release-notes/$gateVersion.md") -Encoding utf8NoBOM -Value @"
+## Highlights
+
+TigerMarkView $gateVersion improves how the viewer renders wide tables and adds a
+running-head option to the tiger-mark command line for exported PDFs.
+
+## Fixed
+
+- The reload indicator no longer sticks after a file is deleted and recreated.
+"@
+    Invoke-FixtureGit -Root $gateRoot -GitArgs @('init', '--quiet', '-b', 'main') | Out-Null
+    Invoke-FixtureGit -Root $gateRoot -GitArgs @('config', 'user.email', 'test@example.com') | Out-Null
+    Invoke-FixtureGit -Root $gateRoot -GitArgs @('config', 'user.name', 'Test') | Out-Null
+    Invoke-FixtureGit -Root $gateRoot -GitArgs @('add', '-A') | Out-Null
+    Invoke-FixtureGit -Root $gateRoot -GitArgs @('commit', '--quiet', '-m', 'release fixture') | Out-Null
+    Invoke-FixtureGit -Root $gateRoot -GitArgs @('remote', 'add', 'origin', $gateOrigin) | Out-Null
+    Invoke-FixtureGit -Root $gateRoot -GitArgs @('push', '--quiet', 'origin', 'main') | Out-Null
+    $gateCommit = Invoke-FixtureGit -Root $gateRoot -GitArgs @('rev-parse', 'HEAD')
+    $gateScript = Join-Path $gateRoot 'eng/release-automation/Assert-ReleaseCommitReady.ps1'
+    $gateSummary = Join-Path $testRoot 'gate-summary.md'
+
+    function Invoke-Gate {
+        param([object] $Cli, [string] $GitHubSession)
+        # Omitting the session exercises the script's own default.
+        $extra = @{}
+        if ($GitHubSession) { $extra.GitHubSession = $GitHubSession }
+        # The script ends with `exit`, which returns here and sets LASTEXITCODE.
+        # An explicit summary path keeps a CI run's own step summary untouched.
+        $json = & $gateScript -Version $gateVersion -CommitSha $gateCommit -Repository $repository `
+            -StepSummaryPath $gateSummary -Json -GitHubCli $Cli @extra | Out-String
+        $exitCode = $LASTEXITCODE
+        $global:LASTEXITCODE = 0
+        [pscustomobject]@{ exitCode = $exitCode; report = ($json | ConvertFrom-Json) }
+    }
+    function Get-GateStatus {
+        param([object] $Report, [string] $Id)
+        $found = @($Report.checks | Where-Object { $_.id -ceq $Id })
+        if ($found.Count -eq 0) { return '' }
+        [string] $found[0].status
+    }
+
+    $jobTokenRoutes = @{} + $actionsTokenRoutes
+    $jobTokenRoutes[$ciRoute] = (New-RunsResponse @((New-Run -Sha $gateCommit)))
+    $jobTokenRoutes["api repos/$repository/git/ref/tags/v$gateVersion"] = (New-GhFail 'Not Found (HTTP 404)')
+
+    $hosted = Invoke-Gate -Cli (New-FakeGh -Routes $jobTokenRoutes) -GitHubSession Workflow
+    Assert-True ($hosted.exitCode -eq 0 -and $hosted.report.status -ceq 'READY FOR HUMAN ACTION') `
+        "The hosted gate passes on a job token alone; got $($hosted.report.status): $(@($hosted.report.checks | ForEach-Object { "$($_.id)=$($_.status)" }) -join ', ')"
+    foreach ($id in @('version/matches-props', 'release-notes/source', 'commit/on-main', 'ci/run', 'tag/available')) {
+        Assert-True ((Get-GateStatus $hosted.report $id) -ceq 'PASS') "The hosted gate still proves '$id'."
+    }
+    Assert-True (@($hosted.report.checks | Where-Object { $_.id -like 'gh/*' }).Count -eq 0) `
+        'A healthy hosted session adds no gh lines to the report.'
+    Assert-True ((Get-Content -LiteralPath $gateSummary -Raw) -match 'ci/run') 'The hosted gate writes its step summary.'
+
+    # The same job token without the explicit Workflow session reproduces the 0.10.0 failure.
+    $asMaintainer = Invoke-Gate -Cli (New-FakeGh -Routes $jobTokenRoutes)
+    Assert-True ($asMaintainer.exitCode -eq 2) 'A job token judged as a maintainer session is BLOCKED.'
+    Assert-True ((Get-GateStatus $asMaintainer.report 'gh/viewer') -ceq 'BLOCKED' -and
+        (Get-GateStatus $asMaintainer.report 'gh/actions-read') -ceq 'BLOCKED') `
+        'Maintainer mode still requires a user identity and Actions read access.'
+    Assert-True ([string]::IsNullOrEmpty((Get-GateStatus $asMaintainer.report 'ci/run'))) `
+        'An unusable maintainer session stops before the GitHub queries.'
+
+    $maintainerRoutes = @{} + $jobTokenRoutes
+    $maintainerRoutes['api user'] = (New-GhOk ([pscustomobject]@{ login = 'octocat' }))
+    $maintainerRoutes["api repos/$repository/actions/permissions"] = (New-GhOk ([pscustomobject]@{ enabled = $true }))
+    $maintainerGate = Invoke-Gate -Cli (New-FakeGh -Routes $maintainerRoutes)
+    Assert-True ($maintainerGate.exitCode -eq 0 -and $maintainerGate.report.status -ceq 'READY FOR HUMAN ACTION') 'A maintainer login passes the local gate.'
+
+    $failedRoutes = @{} + $jobTokenRoutes
+    $failedRoutes[$ciRoute] = (New-RunsResponse @((New-Run -Sha $gateCommit -Conclusion 'failure')))
+    $failedCi = Invoke-Gate -Cli (New-FakeGh -Routes $failedRoutes) -GitHubSession Workflow
+    Assert-True ($failedCi.exitCode -eq 1 -and (Get-GateStatus $failedCi.report 'ci/run') -ceq 'FAIL') `
+        'The hosted gate still fails when the exact commit''s CI run failed.'
+
+    $unreadableRoutes = @{} + $jobTokenRoutes
+    $unreadableRoutes[$ciRoute] = (New-GhFail 'Resource not accessible by integration (HTTP 403)')
+    $unreadable = Invoke-Gate -Cli (New-FakeGh -Routes $unreadableRoutes) -GitHubSession Workflow
+    Assert-True ($unreadable.exitCode -eq 2 -and (Get-GateStatus $unreadable.report 'ci/run') -ceq 'BLOCKED') `
+        'A job token that cannot read Actions blocks on the CI query itself.'
+
+    $taggedRoutes = @{} + $jobTokenRoutes
+    $taggedRoutes["api repos/$repository/git/ref/tags/v$gateVersion"] =
+        (New-GhOk ([pscustomobject]@{ object = [pscustomobject]@{ sha = $gateCommit; type = 'commit' } }))
+    $tagged = Invoke-Gate -Cli (New-FakeGh -Routes $taggedRoutes) -GitHubSession Workflow
+    Assert-True ((Get-GateStatus $tagged.report 'tag/available') -ceq 'BLOCKED') `
+        'The hosted gate still refuses a version whose tag already exists.'
+
+    Invoke-FixtureGit -Root $gateRoot -GitArgs @('commit', '--quiet', '--allow-empty', '-m', 'not pushed') | Out-Null
+    $gateCommit = Invoke-FixtureGit -Root $gateRoot -GitArgs @('rev-parse', 'HEAD')
+    $offMainRoutes = @{} + $jobTokenRoutes
+    $offMainRoutes[$ciRoute] = (New-RunsResponse @((New-Run -Sha $gateCommit)))
+    $offMain = Invoke-Gate -Cli (New-FakeGh -Routes $offMainRoutes) -GitHubSession Workflow
+    Assert-True ($offMain.exitCode -eq 2 -and (Get-GateStatus $offMain.report 'commit/on-main') -ceq 'BLOCKED') `
+        'The hosted gate still refuses a commit that is not on origin/main.'
+    Write-Host 'PASS: the release gate runs on a workflow job token and still proves version, notes, commit, CI, and tag'
 
     # --- Published release state ---------------------------------------
 
