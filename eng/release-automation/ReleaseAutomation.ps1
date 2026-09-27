@@ -858,6 +858,18 @@ function Resolve-TigerMarkViewReleaseTagCommit {
     <#
         .SYNOPSIS
         Resolves v<version> to the commit it names, dereferencing an annotated tag.
+
+        .DESCRIPTION
+        Returns the check, the commit, the tag name, and a `state`:
+
+          - absent:  GitHub answered 404 for the tag in a repository this session
+                     can read. Only that is proof the tag does not exist; a 404
+                     alone is not, because GitHub also answers 404 for a
+                     repository the session cannot see.
+          - present: the tag exists. `commit` is null if it could not be
+                     resolved to one, and the check says why.
+          - unknown: anything else - 401, 403, another API or network failure, or
+                     a response that is not a reference. Never read as absent.
     #>
     [CmdletBinding()]
     param(
@@ -871,23 +883,65 @@ function Resolve-TigerMarkViewReleaseTagCommit {
     )
 
     $tag = (Get-TigerMarkViewReleaseConstant).tagPrefix + $Version
+    $readRepair = 'Confirm the gh session can read this repository''s contents, then rerun.'
     $reference = & $Cli.tryApi "repos/$Repository/git/ref/tags/$tag"
-    if (-not $reference.ok -or $null -eq $reference.data) {
+    $isNotFound = $reference.exitCode -ne 0 -and ([string] $reference.stderr) -match '\bHTTP 404\b'
+    if ($isNotFound) {
+        $repositoryRead = & $Cli.tryApi "repos/$Repository"
+        if ($repositoryRead.ok -and $null -ne $repositoryRead.data) {
+            return [pscustomobject]@{
+                check = (New-TigerMarkViewReleaseCheck -Id 'release/tag' -Status 'BLOCKED' `
+                    -Observed "No git tag '$tag' exists in $Repository." `
+                    -Expected "annotated tag '$tag' at the release commit" `
+                    -Remediation 'The tag is created by the release workflow; dispatch it first.')
+                commit = $null
+                tag = $tag
+                state = 'absent'
+            }
+        }
         return [pscustomobject]@{
             check = (New-TigerMarkViewReleaseCheck -Id 'release/tag' -Status 'BLOCKED' `
-                -Observed "No git tag '$tag' exists in $Repository." `
-                -Expected "annotated tag '$tag' at the release commit" `
-                -Remediation 'The tag is created by the release workflow; dispatch it first.')
+                -Observed "Tag '$tag' was not found, but $Repository itself is not readable, so its absence is unproven." `
+                -Evidence (([string] $repositoryRead.stderr) -replace '\s+', ' ').Trim() -Remediation $readRepair)
             commit = $null
             tag = $tag
+            state = 'unknown'
         }
     }
 
-    $sha = [string] $reference.data.object.sha
-    if ([string] $reference.data.object.type -ceq 'tag') {
+    $object = $null
+    if ($reference.ok -and $null -ne $reference.data -and $reference.data -isnot [array] -and
+        $null -ne $reference.data.PSObject.Properties['object']) {
+        $object = $reference.data.object
+    }
+    if ($null -eq $object -or $null -eq $object.PSObject.Properties['sha'] -or $null -eq $object.PSObject.Properties['type']) {
+        $evidence = if (-not $reference.ok) { [string] $reference.stderr } else { 'the response is not a git reference' }
+        return [pscustomobject]@{
+            check = (New-TigerMarkViewReleaseCheck -Id 'release/tag' -Status 'BLOCKED' `
+                -Observed "Could not determine whether tag '$tag' exists in $Repository." `
+                -Evidence ($evidence -replace '\s+', ' ').Trim() -Remediation $readRepair)
+            commit = $null
+            tag = $tag
+            state = 'unknown'
+        }
+    }
+
+    $sha = [string] $object.sha
+    if ([string] $object.type -ceq 'tag') {
         $annotated = & $Cli.tryApi "repos/$Repository/git/tags/$sha"
-        if ($annotated.ok -and $null -ne $annotated.data) {
+        $sha = $null
+        if ($annotated.ok -and $null -ne $annotated.data -and $null -ne $annotated.data.PSObject.Properties['object']) {
             $sha = [string] $annotated.data.object.sha
+        }
+        if ([string]::IsNullOrEmpty($sha)) {
+            return [pscustomobject]@{
+                check = (New-TigerMarkViewReleaseCheck -Id 'release/tag' -Status 'BLOCKED' `
+                    -Observed "Tag '$tag' exists, but its annotated tag object could not be read." `
+                    -Evidence (([string] $annotated.stderr) -replace '\s+', ' ').Trim() -Remediation $readRepair)
+                commit = $null
+                tag = $tag
+                state = 'present'
+            }
         }
     }
     if ($sha -notmatch '^[0-9a-fA-F]{40}$') {
@@ -896,6 +950,7 @@ function Resolve-TigerMarkViewReleaseTagCommit {
                 -Observed "Tag '$tag' did not resolve to a commit SHA." -Evidence $sha)
             commit = $null
             tag = $tag
+            state = 'present'
         }
     }
 
@@ -904,6 +959,7 @@ function Resolve-TigerMarkViewReleaseTagCommit {
             -Observed "Tag '$tag' resolves to $($sha.ToLowerInvariant())." -Evidence $sha.ToLowerInvariant())
         commit = $sha.ToLowerInvariant()
         tag = $tag
+        state = 'present'
     }
 }
 

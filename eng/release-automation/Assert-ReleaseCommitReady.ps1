@@ -135,19 +135,28 @@ if ($null -ne $cli) {
 
         # 5. The release tag is still free. This is a fresh-release gate: an existing
         #    tag is never moved and publication is never silently resumed, whether it
-        #    names this commit or another one.
+        #    names this commit or another one. Only a proven absence is available;
+        #    a tag whose state could not be read is never assumed free.
         $tagState = Resolve-TigerMarkViewReleaseTagCommit -Cli $cli -Version $Version -Repository $Repository
         $tag = $constant.tagPrefix + $Version
-        $checks.Add($(if ($null -eq $tagState.commit) {
-            New-TigerMarkViewReleaseCheck -Id 'tag/available' -Status 'PASS' `
-                -Observed "Tag '$tag' does not exist yet." -Expected "no tag '$tag'"
-        }
-        else {
-            New-TigerMarkViewReleaseCheck -Id 'tag/available' -Status 'BLOCKED' `
-                -Observed "Tag '$tag' already exists at $($tagState.commit)." `
-                -Expected "no tag '$tag'" -Evidence $tagState.commit `
-                -Remediation ('This workflow only creates a fresh release. Use the retained-artifact ' +
-                    'recovery path in docs/maintainers/releasing-tigermarkview.md, or prepare a new version.')
+        $checks.Add($(switch ($tagState.state) {
+            'absent' {
+                New-TigerMarkViewReleaseCheck -Id 'tag/available' -Status 'PASS' `
+                    -Observed "Tag '$tag' does not exist yet." -Expected "no tag '$tag'"
+            }
+            'present' {
+                $at = if ($null -ne $tagState.commit) { "at $($tagState.commit)" } else { '(its commit could not be resolved)' }
+                New-TigerMarkViewReleaseCheck -Id 'tag/available' -Status 'BLOCKED' `
+                    -Observed "Tag '$tag' already exists $at." `
+                    -Expected "no tag '$tag'" -Evidence $(if ($null -ne $tagState.commit) { $tagState.commit } else { $tagState.check.evidence }) `
+                    -Remediation ('This workflow only creates a fresh release. Use the retained-artifact ' +
+                        'recovery path in docs/maintainers/releasing-tigermarkview.md, or prepare a new version.')
+            }
+            default {
+                New-TigerMarkViewReleaseCheck -Id 'tag/available' -Status 'BLOCKED' `
+                    -Observed $tagState.check.observed -Expected "no tag '$tag'" `
+                    -Evidence $tagState.check.evidence -Remediation $tagState.check.remediation
+            }
         }))
     }
 }

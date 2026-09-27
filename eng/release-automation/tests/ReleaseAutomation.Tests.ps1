@@ -349,10 +349,50 @@ try {
     $t = Resolve-TigerMarkViewReleaseTagCommit -Cli $lightweightTag -Version $version -Repository $repository
     Assert-True ($t.commit -ceq $commit) 'A lightweight tag resolves directly.'
 
-    $noTag = New-FakeGh -Routes @{ "api repos/$repository/git/ref/tags/v$version" = (New-GhFail) }
+    Assert-True ($t.state -ceq 'present') 'A resolved tag is present.'
+
+    # gh reports a missing reference as exit 1 with 'gh: Not Found (HTTP 404)' on stderr.
+    $readableRepository = New-GhOk ([pscustomobject]@{ full_name = $repository })
+    $tagRoute = "api repos/$repository/git/ref/tags/v$version"
+    $noTag = New-FakeGh -Routes @{
+        $tagRoute = (New-GhFail 'gh: Not Found (HTTP 404)')
+        "api repos/$repository" = $readableRepository
+    }
     $t = Resolve-TigerMarkViewReleaseTagCommit -Cli $noTag -Version $version -Repository $repository
-    Assert-True ($t.check.status -ceq 'BLOCKED' -and $null -eq $t.commit) 'An absent tag is BLOCKED.'
-    Write-Host 'PASS: release-tag resolution dereferences annotated tags'
+    Assert-True ($t.state -ceq 'absent' -and $t.check.status -ceq 'BLOCKED' -and $null -eq $t.commit) `
+        'A 404 in a readable repository is a proven absence, which a caller needing the tag sees as BLOCKED.'
+
+    $hiddenRepository = New-FakeGh -Routes @{
+        $tagRoute = (New-GhFail 'gh: Not Found (HTTP 404)')
+        "api repos/$repository" = (New-GhFail 'gh: Not Found (HTTP 404)')
+    }
+    $t = Resolve-TigerMarkViewReleaseTagCommit -Cli $hiddenRepository -Version $version -Repository $repository
+    Assert-True ($t.state -ceq 'unknown' -and $t.check.status -ceq 'BLOCKED') `
+        'A 404 from a repository the session cannot read does not prove the tag is absent.'
+
+    $unreadableTagCases = [ordered]@{
+        'HTTP 401'          = (New-GhFail 'gh: Bad credentials (HTTP 401)')
+        'HTTP 403'          = (New-GhFail 'gh: Resource not accessible by integration (HTTP 403)')
+        'HTTP 500'          = (New-GhFail 'gh: Server Error (HTTP 500)')
+        'network failure'   = (New-GhFail 'error connecting to api.github.com')
+        'malformed JSON'    = [pscustomobject]@{ ExitCode = 0; StdOut = 'not json'; StdErr = '' }
+        'not a reference'   = (New-GhOk @([pscustomobject]@{ ref = "refs/tags/v$version-rc" }))
+    }
+    foreach ($case in $unreadableTagCases.Keys) {
+        $cli = New-FakeGh -Routes @{ $tagRoute = $unreadableTagCases[$case]; "api repos/$repository" = $readableRepository }
+        $t = Resolve-TigerMarkViewReleaseTagCommit -Cli $cli -Version $version -Repository $repository
+        Assert-True ($t.state -ceq 'unknown' -and $t.check.status -ceq 'BLOCKED' -and $null -eq $t.commit) `
+            "An unreadable tag state ($case) is unknown and BLOCKED, never absent."
+    }
+
+    $unreadableAnnotation = New-FakeGh -Routes @{
+        $tagRoute = (New-GhOk ([pscustomobject]@{ object = [pscustomobject]@{ sha = $annotatedSha; type = 'tag' } }))
+        "api repos/$repository/git/tags/$annotatedSha" = (New-GhFail 'gh: Server Error (HTTP 500)')
+    }
+    $t = Resolve-TigerMarkViewReleaseTagCommit -Cli $unreadableAnnotation -Version $version -Repository $repository
+    Assert-True ($t.state -ceq 'present' -and $t.check.status -ceq 'BLOCKED' -and $null -eq $t.commit) `
+        'An annotated tag that cannot be dereferenced exists but never resolves to the tag object''s own SHA.'
+    Write-Host 'PASS: release-tag resolution dereferences annotated tags and proves absence before claiming it'
 
     # --- The release prerequisite gate, end to end ---------------------------
 
@@ -425,7 +465,8 @@ running-head option to the tiger-mark command line for exported PDFs.
 
     $jobTokenRoutes = @{} + $actionsTokenRoutes
     $jobTokenRoutes[$ciRoute] = (New-RunsResponse @((New-Run -Sha $gateCommit)))
-    $jobTokenRoutes["api repos/$repository/git/ref/tags/v$gateVersion"] = (New-GhFail 'Not Found (HTTP 404)')
+    $jobTokenRoutes["api repos/$repository/git/ref/tags/v$gateVersion"] = (New-GhFail 'gh: Not Found (HTTP 404)')
+    $jobTokenRoutes["api repos/$repository"] = $readableRepository
 
     $hosted = Invoke-Gate -Cli (New-FakeGh -Routes $jobTokenRoutes) -GitHubSession Workflow
     Assert-True ($hosted.exitCode -eq 0 -and $hosted.report.status -ceq 'READY FOR HUMAN ACTION') `
@@ -470,6 +511,16 @@ running-head option to the tiger-mark command line for exported PDFs.
     $tagged = Invoke-Gate -Cli (New-FakeGh -Routes $taggedRoutes) -GitHubSession Workflow
     Assert-True ((Get-GateStatus $tagged.report 'tag/available') -ceq 'BLOCKED') `
         'The hosted gate still refuses a version whose tag already exists.'
+
+    foreach ($tagFailure in @('gh: Resource not accessible by integration (HTTP 403)', 'gh: Server Error (HTTP 502)')) {
+        $unknownTagRoutes = @{} + $jobTokenRoutes
+        $unknownTagRoutes["api repos/$repository/git/ref/tags/v$gateVersion"] = (New-GhFail $tagFailure)
+        $unknownTag = Invoke-Gate -Cli (New-FakeGh -Routes $unknownTagRoutes) -GitHubSession Workflow
+        $tagCheck = @($unknownTag.report.checks | Where-Object { $_.id -ceq 'tag/available' })[0]
+        Assert-True ($unknownTag.exitCode -eq 2 -and $tagCheck.status -ceq 'BLOCKED' -and
+            $tagCheck.observed -match 'Could not determine' -and $tagCheck.evidence -match [regex]::Escape($tagFailure)) `
+            "The gate never treats an unreadable tag ($tagFailure) as available."
+    }
 
     Invoke-FixtureGit -Root $gateRoot -GitArgs @('commit', '--quiet', '--allow-empty', '-m', 'not pushed') | Out-Null
     $gateCommit = Invoke-FixtureGit -Root $gateRoot -GitArgs @('rev-parse', 'HEAD')
