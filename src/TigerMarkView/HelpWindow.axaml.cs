@@ -248,6 +248,11 @@ public partial class HelpWindow : Window
 
     private void OnNavigationStarted(object? sender, WebViewNavigationStartingEventArgs e)
     {
+        if (_documentWebView.IsUnavailableNoticeNavigation(e.Request))
+        {
+            return;
+        }
+
         if (e.Request is { } target && !IsOwnPreviewNavigation(target) && TryHandleNavigation(target))
         {
             e.Cancel = true;
@@ -277,6 +282,13 @@ public partial class HelpWindow : Window
     /// </remarks>
     private bool TryHandleNavigation(Uri target)
     {
+        // The host's own blank page, shown while the request boundary is being (re)installed. A
+        // document cannot name it: the sanitizer admits no about: scheme.
+        if (target.AbsoluteUri == "about:blank")
+        {
+            return false;
+        }
+
         if (MarkdownLinkResolver.TryResolveLocalMarkdown(target, out var markdownPath) &&
             BundledDocuments.Contains(markdownPath))
         {
@@ -302,7 +314,7 @@ public partial class HelpWindow : Window
             return true;
         }
 
-        return target.IsFile;
+        return true;
     }
 
     private static bool IsOwnPreviewNavigation(Uri target)

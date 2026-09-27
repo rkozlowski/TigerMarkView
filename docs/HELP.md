@@ -282,12 +282,22 @@ apply on screen, in an exported PDF, and in `tiger-mark`.
 Pictures work as usual. Local images load from beside the file, and web images load from the web, like
 the badges on a project's README — which also means that the server hosting a web image can see that
 the document was opened. Nothing else in a document can reach the network.
+Web images do not receive browser cookies or Windows sign-in credentials. A picture that requires
+you to sign in will not load; open its website in your browser to view it there.
 
-Images on network shares are the exception: a picture addressed as `\\server\share\...` is not shown.
-Windows would sign in to that server with your account to fetch it, so a document could otherwise
-collect your sign-in details from anyone who opened it. This also applies to a document that is itself
-on a share: it opens, but its images do not appear. Copy the document and its images to a local folder
-to see them.
+Images on network shares are the exception: a picture addressed as `\\server\share\...`, or reached
+through a mapped network drive or a symbolic link to a share, is not shown. Windows would sign in to
+that server with your account to fetch it, so a document could otherwise collect your sign-in details
+from anyone who opened it. This also applies to a document that is itself on a share or a mapped
+drive: it opens, but its images do not appear. Copy the document and its images to a local folder to
+see them.
+
+Local drives keep working as usual, including `subst` drive letters and symbolic links that stay on
+this computer. A drive letter provided by an unfamiliar storage driver, such as a cloud-drive or
+virtual file system, is treated like a network share, so images on it are not shown.
+
+Inline SVG keeps basic shapes and solid colours, including alert icons. SVG fills that reference
+another resource are removed.
 
 ## What TigerMarkView remembers
 

@@ -1,7 +1,9 @@
 # Network share acceptance
 
-Every image under "Share" names `\\127.0.0.1\tmvprobe`, a share in this guest whose every file access
-is audited. None of them may be touched. The local and web images must still load.
+Every image under "Share" names a share in this guest whose every file access is audited:
+`\\127.0.0.1\tmvprobe` directly or through a local symbolic link, and `\\127.0.0.1\tmvmapped` through
+the mapped drive `Z:` and the aliased drive `Y:`. None of them may be touched. The local and web images
+must still load.
 
 ## Still loading
 
@@ -30,3 +32,21 @@ is audited. None of them may be touched. The local and web images must still loa
 ![Markdown escaped share image](<\\\\127.0.0.1\\tmvprobe\\markdown-backslash.png>)
 
 <div style="background-image: url('//127.0.0.1/tmvprobe/css-background.png'); width: 48px; height: 48px">CSS share background</div>
+
+<a href="file://127.0.0.1/tmvprobe/same-href.png" style="background-image:url(file://127.0.0.1/tmvprobe/same-href.png);display:block;width:48px;height:48px">Link with matching background</a>
+
+<img src="file:///Z:/mapped.png" alt="Mapped network drive image">
+
+<img src="file:///Y:/boundary.png" alt="Substituted network drive image">
+
+<img src="///Y:/boundary.png" alt="Scheme-less substituted drive">
+
+<img src="/Y|/boundary.png" alt="Legacy drive separator">
+
+<img src="file:/Y:/boundary.png" alt="Single-slash file URI">
+
+<img src="file:///Y%3a/boundary.png" alt="Encoded drive separator">
+
+<img src="remote-link/boundary.png" alt="Local symlink to network image">
+
+<svg><path fill="url(file://127.0.0.1/tmvprobe/paint.svg#x)" d="M0 0h20v20z"></path></svg>

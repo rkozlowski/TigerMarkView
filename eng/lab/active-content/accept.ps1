@@ -1,4 +1,4 @@
-﻿<#
+<#
     .SYNOPSIS
     TigerWinLab guest payload: proves the active-content boundary in the real viewer and in tiger-mark.
 
@@ -22,10 +22,14 @@ $RequestLog = Join-Path $Root 'requests.log'
 $Artifacts = $env:TIGERWINLAB_JOB_ARTIFACTS
 $PassiveImages = @('/img/passive-markdown.png', '/img/passive-html.png')
 $ShareRoot = Join-Path $Root 'share'
-# Every file shares.md names on \\127.0.0.1\tmvprobe; none of them may ever be asked for.
+$MappedShareRoot = Join-Path $Root 'mapped'
+# Every image file the documents name on either share; none of them may ever be asked for.
+# \\127.0.0.1\tmvprobe never gets a drive letter and is the strict oracle: nothing in the guest but a
+# document can lead a process to it. \\127.0.0.1\tmvmapped is what Z: and the Y: alias reach; the
+# shell inspects a drive letter it has just been shown on its own, so only file opens count there.
 $ShareImages = @(
     'html-backslash.png', 'html-slash.png', 'html-file.png', 'html-file-four.png', 'html-encoded.png',
-    'markdown-slash.png', 'markdown-backslash.png', 'css-background.png'
+    'markdown-slash.png', 'markdown-backslash.png', 'css-background.png', 'same-href.png', 'mapped.png', 'boundary.png', 'lifecycle.png'
 )
 # The print palette's keyword and comment colours, and the light screen theme's keyword colour.
 $PrintKeyword = @(11, 61, 145)
@@ -102,17 +106,58 @@ function Join-Names {
     $unique -join ', '
 }
 
-function Get-ShareAccess {
-    # Detailed File Share auditing (event 5145) records every file an SMB client asked the probe share
-    # for; the relative target name is the file. Returns the names requested since $Since.
+# What the shell opens by itself on a drive letter it has just been shown: the root, then the files
+# that customise a drive's icon and label. A document cannot cause these; an image request names its file.
+$ShellDriveNames = @('\', 'AutoRun.inf', 'Desktop.ini')
+
+function Get-ShareAccessRecords {
+    # Detailed File Share auditing (event 5145) records every file an SMB client asked a share for;
+    # the relative target name is the file, and the event names the account but never the process.
+    # Returns one record per access to either probe share since $Since, oldest first.
     param([DateTime] $Since)
     $events = @()
     try { $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 5145; StartTime = $Since } -ErrorAction Stop) } catch { $events = @() }
-    @($events | ForEach-Object {
+    @($events | Where-Object { $_.TimeCreated -ge $Since } | Sort-Object TimeCreated | ForEach-Object {
             $data = @{}
             foreach ($node in ([xml] $_.ToXml()).Event.EventData.Data) { $data[$node.Name] = [string] $node.'#text' }
-            if ($data['ShareName'] -like '*tmvprobe') { $data['RelativeTargetName'] }
-        } | Where-Object { $_ })
+            $share = [string] $data['ShareName']
+            if ($share -like '*\tmvprobe' -or $share -like '*\tmvmapped') {
+                [pscustomobject]@{
+                    share = $share.Substring($share.LastIndexOf('\') + 1)
+                    name = [string] $data['RelativeTargetName']
+                    at = $_.TimeCreated
+                    accessMask = [string] $data['AccessMask']
+                }
+            }
+        })
+}
+
+function Get-ShareAccess {
+    # The names asked for on the strict share (or on -Share) since $Since.
+    param([DateTime] $Since, [string] $Share = 'tmvprobe')
+    @(Get-ShareAccessRecords -Since $Since | Where-Object { $_.share -eq $Share } | ForEach-Object { $_.name } | Where-Object { $_ })
+}
+
+function Select-DocumentShareAccess {
+    # Keeps the accesses a document could have caused: anything on the strict share, and file opens on
+    # the mapped share. Root and shell-metadata opens on the mapped share are the shell's own reaction
+    # to a drive letter and cannot be attributed to any process.
+    param([object[]] $Records)
+    @($Records | Where-Object { $_.share -eq 'tmvprobe' -or ($ShellDriveNames -notcontains $_.name) })
+}
+
+function Get-DocumentShareAccess {
+    # The accesses a document could have caused, on either share, since $Since, as share:name.
+    param([DateTime] $Since)
+    @(Select-DocumentShareAccess -Records @(Get-ShareAccessRecords -Since $Since) | ForEach-Object { "$($_.share):$($_.name)" })
+}
+
+function Format-ShareAccess {
+    # Every access on both shares since $Since, with its time and access mask, for check messages.
+    param([DateTime] $Since)
+    $records = @(Get-ShareAccessRecords -Since $Since)
+    if ($records.Count -eq 0) { return '(none)' }
+    @($records | ForEach-Object { "$($_.share):$($_.name) at $($_.at.ToString('HH:mm:ss.fff')) mask $($_.accessMask)" }) -join '; '
 }
 
 function Wait-ShareAccess {
@@ -286,6 +331,24 @@ try {
                     if ($line) {
                         Add-Content -LiteralPath $RequestLog -Value ([DateTimeOffset]::Now.ToString('o') + "`t" + $line) -Encoding UTF8
                     }
+                    $target = ($line -split ' ')[1]
+                    if ($target -eq '/auth/ntlm') {
+                        # Record only whether credentials were sent, never their contents.
+                        if ([Text.Encoding]::ASCII.GetString($buffer, 0, $read) -match '(?im)^Authorization:') {
+                            Add-Content -LiteralPath $RequestLog -Value ([DateTimeOffset]::Now.ToString('o') + "`tGET /auth-response HTTP/1.1") -Encoding UTF8
+                        }
+                        $header = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 401 Unauthorized`r`nWWW-Authenticate: NTLM`r`nContent-Length: 0`r`nConnection: close`r`n`r`n")
+                        $stream.Write($header, 0, $header.Length)
+                        continue
+                    }
+                    $location = $null
+                    if ($target -eq '/redirect/web') { $location = "http://127.0.0.1:$Port/img/redirected.png" }
+                    if ($target -eq '/redirect/share') { $location = 'file://127.0.0.1/tmvprobe/boundary.png' }
+                    if ($null -ne $location) {
+                        $header = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 302 Found`r`nLocation: $location`r`nContent-Length: 0`r`nConnection: close`r`n`r`n")
+                        $stream.Write($header, 0, $header.Length)
+                        continue
+                    }
                     $header = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: image/png`r`nContent-Length: $($png.Length)`r`nConnection: close`r`n`r`n")
                     $stream.Write($header, 0, $header.Length)
                     $stream.Write($png, 0, $png.Length)
@@ -308,22 +371,35 @@ try {
     }
     $checks.Add((New-Check 'Request logger' 'stage.logger' ($ready -and (@(Get-Requests | Where-Object { $_.path -eq '/probe/ready' }).Count -ge 1)) "A loopback logger on port $Port records every request line and answers with an image."))
 
-    # The network share: \\127.0.0.1\tmvprobe in this guest, holding a file for every name a document
-    # aims at it, with Detailed File Share auditing so each file an SMB client asks for is recorded.
-    $null = New-Item -ItemType Directory -Path $ShareRoot -Force
-    Set-Content -LiteralPath (Join-Path $ShareRoot 'control.txt') -Value 'control' -Encoding ASCII
-    foreach ($name in $ShareImages + @('on-share.png', 'edge-control.png')) {
-        Copy-Item -LiteralPath (Join-Path $DocRoot 'local.png') -Destination (Join-Path $ShareRoot $name)
+    # The network shares in this guest, each holding a file for every name a document aims at them, with
+    # Detailed File Share auditing so each file an SMB client asks for is recorded against its share name.
+    # PowerShell variable names are case-insensitive: the loop variable must not be spelled $shareRoot.
+    foreach ($auditedRoot in @($ShareRoot, $MappedShareRoot)) {
+        $null = New-Item -ItemType Directory -Path $auditedRoot -Force
+        Set-Content -LiteralPath (Join-Path $auditedRoot 'control.txt') -Value 'control' -Encoding ASCII
+        foreach ($name in $ShareImages + @('on-share.png', 'edge-control.png')) {
+            Copy-Item -LiteralPath (Join-Path $DocRoot 'local.png') -Destination (Join-Path $auditedRoot $name)
+        }
+        $null = & icacls.exe $auditedRoot '/grant' 'Users:(OI)(CI)RX' '/T' '/Q' 2>&1
     }
     Set-Content -LiteralPath (Join-Path $ShareRoot 'on-share.md') -Encoding UTF8 -Value (
         "# On a share`r`n`r`n![Share web image](http://127.0.0.1:$Port/img/on-share-web.png)`r`n`r`n![Relative share image](on-share.png)`r`n")
-    $null = & icacls.exe $ShareRoot '/grant' 'Users:(OI)(CI)RX' '/T' '/Q' 2>&1
     Start-Service -Name LanmanServer
     $null = New-SmbShare -Name 'tmvprobe' -Path $ShareRoot -ReadAccess 'Everyone'
+    $null = New-SmbShare -Name 'tmvmapped' -Path $MappedShareRoot -ReadAccess 'Everyone'
+    # remote-link is the relative-image fixture and keeps to the strict share; mapped-link is what the
+    # Y: alias below is built on, so the shell's handling of that drive letter lands on the mapped share.
+    $null = & cmd.exe /c mklink /D (Join-Path $DocRoot 'remote-link') '\\127.0.0.1\tmvprobe' 2>&1
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create the network symbolic-link fixture.' }
+    $null = & cmd.exe /c mklink /D (Join-Path $DocRoot 'mapped-link') '\\127.0.0.1\tmvmapped' 2>&1
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create the mapped-share symbolic-link fixture.' }
+    $null = & cmd.exe /c mklink /D (Join-Path $DocRoot 'local-link') $DocRoot 2>&1
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create the local symbolic-link fixture.' }
     # Detailed File Share, by GUID so the subcategory name's language does not matter.
     $null = & auditpol.exe /set '/subcategory:{0CCE9244-69AE-11D9-BED3-505054503030}' /success:enable /failure:enable 2>&1
     $auditOn = $LASTEXITCODE -eq 0
-    $checks.Add((New-Check 'Audited probe share' 'stage.share' ($auditOn -and $null -ne (Get-SmbShare -Name 'tmvprobe' -ErrorAction SilentlyContinue)) "\\127.0.0.1\tmvprobe serves $ShareRoot with Detailed File Share auditing on."))
+    $sharesUp = $null -ne (Get-SmbShare -Name 'tmvprobe' -ErrorAction SilentlyContinue) -and $null -ne (Get-SmbShare -Name 'tmvmapped' -ErrorAction SilentlyContinue)
+    $checks.Add((New-Check 'Audited probe shares' 'stage.share' ($auditOn -and $sharesUp) "\\127.0.0.1\tmvprobe serves $ShareRoot and \\127.0.0.1\tmvmapped serves $MappedShareRoot, with Detailed File Share auditing on."))
 
     # The viewer runs with Syntax Highlighting on and the Export to PDF toolbar button shown, written
     # as the interactive user into that user's own settings file.
@@ -355,6 +431,73 @@ try {
     $vector = Wait-ShareAccess -Since $since -Name 'edge-control.png' -TimeoutSeconds 30
     $checks.Add((New-Check 'Unprotected Chromium fetches a share image' 'control.chromium-unc' $vector "Headless Edge on a local page naming file://127.0.0.1/tmvprobe/edge-control.png: present $(Test-Path -LiteralPath $edge), audited names: $(Join-Names (Get-ShareAccess -Since $since))."))
     Add-Phase -Name 'share-controls' -Checks $checks
+
+    # Independent layer checks in real WebView2. The probe deliberately omits CSP/the sanitizer for
+    # selected pages, so the other layers cannot conceal a failed assertion.
+    $checks = New-Object System.Collections.Generic.List[object]
+    $mapped = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = 'net.exe'; arguments = @('use', 'Z:', '\\127.0.0.1\tmvmapped', '/persistent:no'); timeoutSeconds = 60 }
+    $mappedControl = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = 'cmd.exe'; arguments = @('/c', 'type', 'Z:\control.txt'); timeoutSeconds = 60 }
+    $checks.Add((New-Check 'Mapped drive control' 'probe.mapped-control' ($mapped.exitCode -eq 0 -and $mappedControl.exitCode -eq 0) "Mapping exit $($mapped.exitCode), read exit $($mappedControl.exitCode)."))
+    $linkControl = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = 'cmd.exe'; arguments = @('/c', 'type', (Join-Path $DocRoot 'remote-link\control.txt')); timeoutSeconds = 60 }
+    $checks.Add((New-Check 'Network symbolic-link control' 'probe.link-control' ($linkControl.exitCode -eq 0) "Read through the local link exited $($linkControl.exitCode)."))
+    $alias = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = 'subst.exe'; arguments = @('Y:', (Join-Path $DocRoot 'mapped-link')); timeoutSeconds = 60 }
+    $aliasControl = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = 'cmd.exe'; arguments = @('/c', 'type', 'Y:\control.txt'); timeoutSeconds = 60 }
+    $checks.Add((New-Check 'Drive alias fixture' 'probe.alias-control' ($alias.exitCode -eq 0 -and $aliasControl.exitCode -eq 0) "Alias through the network symbolic link: exit $($alias.exitCode); read through it exit $($aliasControl.exitCode)."))
+    $localAlias = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = 'subst.exe'; arguments = @('X:', $DocRoot); timeoutSeconds = 60 }
+    $checks.Add((New-Check 'Local drive alias fixture' 'probe.local-alias-control' ($localAlias.exitCode -eq 0) "Local alias: exit $($localAlias.exitCode)."))
+    # Environment control: a process that calls neither browser nor policy, then a quiet pause. The
+    # shell reacts to the drive letters it was just shown by opening their root, which lands on the
+    # mapped share; nothing may reach the strict share, to which no drive letter leads.
+    $since = Get-Date
+    $startupControl = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = (Join-Path $AppRoot 'ActiveContentProbe.exe'); arguments = @($DocRoot, '--noop'); workingDirectory = $DocRoot; timeoutSeconds = 60 }
+    Start-Sleep -Seconds 8
+    $strictAccess = @(Get-ShareAccess -Since $since)
+    $checks.Add((New-Check 'Environment control after drive mapping' 'control.environment' ($startupControl.exitCode -eq 0 -and $strictAccess.Count -eq 0) "No browser or policy called; the strict share must stay untouched. Accesses after share setup: $(Format-ShareAccess -Since $since)."))
+    foreach ($mode in @('--storage', '--request')) {
+        foreach ($target in @('file:///X:/local.png', 'file://127.0.0.1/tmvprobe/boundary.png', 'file:///Z:/mapped.png', 'file:///Y:/boundary.png', ([Uri] (Join-Path $DocRoot 'remote-link\boundary.png')).AbsoluteUri, ([Uri] (Join-Path $DocRoot 'local-link\local.png')).AbsoluteUri)) {
+            $since = Get-Date
+            $isolated = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = (Join-Path $AppRoot 'ActiveContentProbe.exe'); arguments = @($DocRoot, $mode, $target); workingDirectory = $DocRoot; timeoutSeconds = 60 }
+            Start-Sleep -Milliseconds 500
+            $touched = @(Get-DocumentShareAccess -Since $since)
+            $checks.Add((New-Check 'Isolated storage boundary' 'probe.storage-isolation' ($isolated.exitCode -eq 0 -and $touched.Count -eq 0) "$mode $target; exit $($isolated.exitCode); share access: $(Format-ShareAccess -Since $since); output: $(@($isolated.stdout) -join ' ')."))
+        }
+    }
+    $since = Get-Date
+    $aliasRun = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = (Join-Path $AppRoot 'ActiveContentProbe.exe'); arguments = @($DocRoot, '--rendered-request', 'file:///Y:/boundary.png'); workingDirectory = $DocRoot; timeoutSeconds = 60 }
+    $touched = @(Get-DocumentShareAccess -Since $since)
+    $checks.Add((New-Check 'Rendered alias never reaches SMB' 'probe.alias-no-smb' ($aliasRun.exitCode -eq 0 -and $touched.Count -eq 0) "Exit $($aliasRun.exitCode); share access: $(Format-ShareAccess -Since $since)."))
+    $since = Get-Date
+    $mark = @(Get-Requests).Count
+    $probeRun = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = (Join-Path $AppRoot 'ActiveContentProbe.exe'); arguments = @($DocRoot); workingDirectory = $DocRoot; timeoutSeconds = 180 }
+    $probeResult = Join-Path $DocRoot 'probe-result.json'
+    $checks.Add((New-Check 'WebView2 probe completed' 'probe.completed' ($probeRun.exitCode -eq 0 -and (Test-Path -LiteralPath $probeResult)) "Exit $($probeRun.exitCode); $(@($probeRun.stderr) -join ' ')."))
+    if (Test-Path -LiteralPath $probeResult) {
+        $probeChecks = Get-Content -LiteralPath $probeResult -Raw | ConvertFrom-Json
+        foreach ($check in $probeChecks) { $checks.Add($check) }
+        Copy-Item -LiteralPath $probeResult -Destination $Artifacts
+    }
+    $exfil = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -like '/exfil/*' })
+    $checks.Add((New-Check 'Independent layers stop external requests' 'probe.no-exfil' ($exfil.Count -eq 0) (Format-Paths $exfil)))
+    $auth = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -eq '/auth-response' })
+    $challenged = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -eq '/auth/ntlm' }).Count -gt 0
+    $checks.Add((New-Check 'Image challenges do not receive ambient credentials' 'probe.no-http-auth' ($challenged -and $auth.Count -eq 0) "Challenge reached: $challenged; Authorization requests: $($auth.Count)."))
+    $touched = @(Get-DocumentShareAccess -Since $since)
+    $checks.Add((New-Check 'Mapped and redirected resources never reach SMB' 'probe.no-smb' ($touched.Count -eq 0) (Format-ShareAccess -Since $since)))
+    Add-Phase -Name 'independent-layers' -Checks $checks
+
+    $checks = New-Object System.Collections.Generic.List[object]
+    $since = Get-Date
+    $lifecycleRun = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = (Join-Path $AppRoot 'LifecycleProbe.exe'); arguments = @($DocRoot); workingDirectory = $DocRoot; timeoutSeconds = 180 }
+    $lifecycleResult = Join-Path $DocRoot 'lifecycle-result.json'
+    $checks.Add((New-Check 'Lifecycle probe completed' 'lifecycle.completed' ($lifecycleRun.exitCode -eq 0 -and (Test-Path -LiteralPath $lifecycleResult)) "Exit $($lifecycleRun.exitCode); $(@($lifecycleRun.stderr) -join ' ')."))
+    if (Test-Path -LiteralPath $lifecycleResult) {
+        $lifecycleChecks = Get-Content -LiteralPath $lifecycleResult -Raw | ConvertFrom-Json
+        foreach ($check in $lifecycleChecks) { $checks.Add($check) }
+        Copy-Item -LiteralPath $lifecycleResult -Destination $Artifacts
+    }
+    $touched = @(Get-DocumentShareAccess -Since $since)
+    $checks.Add((New-Check 'Adapter lifecycle never leaks SMB requests' 'lifecycle.no-smb' ($touched.Count -eq 0) (Format-ShareAccess -Since $since)))
+    Add-Phase -Name 'adapter-lifecycle' -Checks $checks
 
     # --- viewer ----------------------------------------------------------------------------------
     $checks = New-Object System.Collections.Generic.List[object]
@@ -423,7 +566,7 @@ try {
 
     Start-Sleep -Seconds 2
     $viewerRequests = Get-RequestsSince -Mark $mark
-    $viewerExfil = @($viewerRequests | Where-Object { $_.path -like '/exfil/*' })
+    $viewerExfil = @($viewerRequests | Where-Object { $_.path -like '/exfil/*' -or $_.path -eq '/auth-response' })
     $checks.Add((New-Check 'No data-bearing request leaves the viewer' 'viewer.no-exfil' ($viewerExfil.Count -eq 0) "Exfiltration requests: $(Format-Paths $viewerExfil)."))
 
     $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command stop-process -Parameters @{ processId = $app.processId }
@@ -447,8 +590,8 @@ try {
         $checks.Add((New-Check "$name still renders" ('viewer.' + ($name.ToLowerInvariant() -replace ' ', '-')) $size.rendered "'$name' is laid out at $($size.description)."))
     }
 
-    $touched = @(Get-ShareAccess -Since $since)
-    $checks.Add((New-Check 'No share image is requested by the viewer' 'viewer.no-share-access' ($touched.Count -eq 0) "Share files asked for: $(Join-Names $touched). The document names $($ShareImages.Count) images on \\127.0.0.1\tmvprobe in every spelling it has."))
+    $touched = @(Get-DocumentShareAccess -Since $since)
+    $checks.Add((New-Check 'No share image is requested by the viewer' 'viewer.no-share-access' ($touched.Count -eq 0) "Share accesses: $(Format-ShareAccess -Since $since). The document names $($ShareImages.Count) images on the shares in every spelling it has."))
     $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command stop-process -Parameters @{ processId = $app.processId }
 
     # A document that itself lives on the share: its relative image only becomes a network path once
@@ -519,7 +662,7 @@ try {
     $pdfImages = @($PassiveImages | Where-Object { $pdfPaths -contains $_ }).Count -eq $PassiveImages.Count
     $checks.Add((New-Check 'Remote images load in PDF conversion' 'pdf.remote-images' $pdfImages "Requests during conversion: $(Format-Paths $pdfRequests)."))
 
-    $pdfExfil = @($pdfRequests | Where-Object { $_.path -like '/exfil/*' })
+    $pdfExfil = @($pdfRequests | Where-Object { $_.path -like '/exfil/*' -or $_.path -eq '/auth-response' })
     $checks.Add((New-Check 'No data-bearing request leaves PDF conversion' 'pdf.no-exfil' ($pdfExfil.Count -eq 0) "Exfiltration requests: $(Format-Paths $pdfExfil)."))
 
     $hostileImages = Get-ImageObjectCount -PdfPath $pdf
@@ -552,8 +695,8 @@ try {
     $web = Wait-Request -Mark $mark -Path '/img/shares-web.png' -TimeoutSeconds 10
     $sharesImages = Get-ImageObjectCount -PdfPath $sharesPdf
     $checks.Add((New-Check 'tiger-mark still embeds local and web images beside share references' 'pdf.shares-images' ((Test-CliCreated -Run $run -Pdf $sharesPdf) -and $web -and $sharesImages -ge 2) "Exit $($run.exitCode); web image requested: $web; shares.pdf holds $sharesImages image object(s)."))
-    $touched = @(Get-ShareAccess -Since $since)
-    $checks.Add((New-Check 'No share image is requested by PDF conversion' 'pdf.no-share-access' ($touched.Count -eq 0) "Share files asked for: $(Join-Names $touched)."))
+    $touched = @(Get-DocumentShareAccess -Since $since)
+    $checks.Add((New-Check 'No share image is requested by PDF conversion' 'pdf.no-share-access' ($touched.Count -eq 0) "Share accesses: $(Format-ShareAccess -Since $since)."))
 
     $since = Get-Date
     $onSharePdf = Join-Path $DocRoot 'on-share.pdf'

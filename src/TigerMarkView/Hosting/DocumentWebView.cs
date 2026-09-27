@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Avalonia.Controls;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using Microsoft.Web.WebView2.Core;
 using TigerMarkView.Core.Navigation;
 using TigerMarkView.Core.Rendering;
@@ -40,19 +41,81 @@ internal sealed class DocumentWebView
     /// the control so the handler is never orphaned by garbage collection.
     /// </summary>
     private CoreWebView2? _core;
+    private IntPtr _coreIdentity;
+    private Uri? _source;
+    private string? _unavailableHtml;
 
     private DocumentWebView(NativeWebView webView, Func<MarkdownTheme> theme)
     {
         _webView = webView;
         _theme = theme;
         webView.AdapterCreated += OnAdapterCreated;
+        webView.AdapterDestroyed += (_, _) =>
+        {
+            _core = null;
+            _coreIdentity = IntPtr.Zero;
+            HoldNavigation();
+        };
+        // Some Avalonia native hosts detach without raising AdapterDestroyed. Do not leave the
+        // gate open while a replacement adapter can be created, regardless of that notification.
+        webView.DetachedFromVisualTree += (_, _) => HoldNavigation();
+        webView.AttachedToVisualTree += (_, _) => Dispatcher.UIThread.Post(() =>
+        {
+            // After child controls have attached: a retained adapter needs no new Created event;
+            // an asynchronously created one is still absent and will raise Created when ready.
+            if (_gate.State == ViewerBoundaryState.Pending && webView.TryGetPlatformHandle() is { } handle)
+            {
+                OnAdapterReady(handle);
+            }
+        });
+        webView.NavigationStarted += (_, e) =>
+        {
+            if (_gate.State != ViewerBoundaryState.Protected && e.Request?.AbsoluteUri != "about:blank"
+                && !IsUnavailableNoticeNavigation(e.Request))
+            {
+                e.Cancel = true;
+            }
+        };
+    }
+
+    private void HoldNavigation()
+    {
+        _gate.BoundaryDestroyed();
+        var blank = new Uri("about:blank");
+        _webView.Source = blank;
+        // Navigate also clears a queued URL if Source was already blank.
+        _webView.Navigate(blank);
     }
 
     /// <summary>Raised once, on the UI thread, when the boundary could not be installed.</summary>
     public event EventHandler<string>? BoundaryUnavailable;
 
+    /// <summary>Messages from the protected, current top-level preview only.</summary>
+    public event EventHandler<string>? WebMessageReceived;
+
     /// <summary>Why no document can be shown, or <c>null</c> while that is not the case.</summary>
     public string? UnavailableReason => _gate.UnavailableReason;
+
+    /// <summary>Only the host-generated failure page may navigate after protection failed.</summary>
+    public bool IsUnavailableNoticeNavigation(Uri? request)
+    {
+        if (_gate.State != ViewerBoundaryState.Unavailable || request is null) { return false; }
+        if (request.AbsoluteUri == "about:blank") { return true; }
+        // NavigateToString can report its input as a base64 data URI at NavigationStarting even
+        // though its committed origin is about:blank. Do not grant arbitrary data-page navigation.
+        var text = request.AbsoluteUri;
+        var comma = text.IndexOf(',');
+        if (comma < 0 || _unavailableHtml is null) { return false; }
+        var type = text[..comma];
+        if (!type.Equals("data:text/html;base64", StringComparison.OrdinalIgnoreCase)
+            && !type.Equals("data:text/html;charset=utf-8;base64", StringComparison.OrdinalIgnoreCase)) { return false; }
+        try
+        {
+            return Convert.FromBase64String(Uri.UnescapeDataString(text[(comma + 1)..])).AsSpan()
+                .SequenceEqual(System.Text.Encoding.UTF8.GetBytes(_unavailableHtml));
+        }
+        catch (FormatException) { return false; }
+    }
 
     /// <summary>
     /// Takes over navigation of <paramref name="webView"/>. Call it before anything navigates the
@@ -72,16 +135,19 @@ internal sealed class DocumentWebView
     /// </summary>
     public void Navigate(Uri source)
     {
+        _source = source;
         if (_gate.Request(source) is { } target)
         {
-            _webView.Source = target;
+            _webView.Navigate(target);
         }
     }
 
-    private void OnAdapterCreated(object? sender, WebViewAdapterEventArgs e)
+    private void OnAdapterCreated(object? sender, WebViewAdapterEventArgs e) => OnAdapterReady(e.TryGetPlatformHandle());
+
+    private void OnAdapterReady(IPlatformHandle? handle)
     {
         // A recreated adapter (the control re-parented) is a new CoreWebView2 and needs its own filter.
-        if (!TryApplyBoundary(e.TryGetPlatformHandle(), out var core, out var failure))
+        if (!TryApplyBoundary(handle, out var core, out var failure))
         {
             var alreadyUnavailable = _gate.State == ViewerBoundaryState.Unavailable;
             _gate.BoundaryUnavailable(failure);
@@ -95,11 +161,35 @@ internal sealed class DocumentWebView
             return;
         }
 
-        _core = core;
+        // Replay the last page only when this engine has not shown it yet: a new engine, or one whose
+        // gate closed while it was detached. A repeated Created notification for the same protected
+        // engine must not reload the document.
+        var replay = _gate.State == ViewerBoundaryState.Pending || !ReferenceEquals(_core, core);
 
-        if (_gate.BoundaryInstalled() is { } held)
+        if (!ReferenceEquals(_core, core))
         {
-            _webView.Source = held;
+            _core = core;
+            core!.WebMessageReceived += (_, message) =>
+            {
+                if (ReferenceEquals(_core, core) && _gate.State == ViewerBoundaryState.Protected
+                    && Uri.TryCreate(message.Source, UriKind.Absolute, out var source)
+                    && source == _source)
+                {
+                    try
+                    {
+                        WebMessageReceived?.Invoke(this, message.TryGetWebMessageAsString());
+                    }
+                    catch (ArgumentException)
+                    {
+                        // Only the shell's string commands are part of the bridge contract.
+                    }
+                }
+            };
+        }
+
+        if (_gate.BoundaryInstalled() is { } held && replay)
+        {
+            _webView.Navigate(held);
         }
     }
 
@@ -114,10 +204,11 @@ internal sealed class DocumentWebView
             reason,
             _theme());
 
+        _unavailableHtml = html;
         _webView.NavigateToString(html, new Uri("about:blank"));
     }
 
-    private static bool TryApplyBoundary(IPlatformHandle? handle, out CoreWebView2? core, out string failure)
+    private bool TryApplyBoundary(IPlatformHandle? handle, out CoreWebView2? core, out string failure)
     {
         core = null;
 
@@ -138,8 +229,19 @@ internal sealed class DocumentWebView
 
         try
         {
+            // The engine already protected: _core keeps a COM reference to it, so no other object can
+            // occupy that address while it is retained.
+            if (_core is not null && pointer == _coreIdentity)
+            {
+                core = _core;
+                failure = string.Empty;
+                return true;
+            }
+
             core = CoreWebView2.CreateFromComICoreWebView2(pointer);
+            core.Settings.AreHostObjectsAllowed = false;
             WebViewResourceBoundary.Apply(core);
+            _coreIdentity = pointer;
             failure = string.Empty;
             return true;
         }

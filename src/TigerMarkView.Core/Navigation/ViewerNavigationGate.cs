@@ -48,13 +48,17 @@ public sealed class ViewerNavigationGate
     {
         ArgumentNullException.ThrowIfNull(target);
 
+        if (State != ViewerBoundaryState.Unavailable)
+        {
+            _held = target;
+        }
+
         switch (State)
         {
             case ViewerBoundaryState.Protected:
                 return target;
 
             case ViewerBoundaryState.Pending:
-                _held = target;
                 return null;
 
             default:
@@ -75,9 +79,16 @@ public sealed class ViewerNavigationGate
 
         State = ViewerBoundaryState.Protected;
 
-        var held = _held;
-        _held = null;
-        return held;
+        return _held;
+    }
+
+    /// <summary>A replacement engine must install its own boundary before replaying the last page.</summary>
+    public void BoundaryDestroyed()
+    {
+        if (State != ViewerBoundaryState.Unavailable)
+        {
+            State = ViewerBoundaryState.Pending;
+        }
     }
 
     /// <summary>

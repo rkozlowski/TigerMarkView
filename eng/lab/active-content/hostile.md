@@ -12,6 +12,8 @@ under `/img/` must arrive, and the local images must render.
 
 ![Passive remote image](http://127.0.0.1:47631/img/passive-markdown.png)
 
+![Authentication challenge must not sign in](http://localhost:47631/auth/ntlm)
+
 <img src="http://127.0.0.1:47631/img/passive-html.png" width="64" height="32" alt="Passive remote HTML image">
 
 ![Local image](local.png)

@@ -21,7 +21,7 @@ public sealed class ExternalLinkLauncher
     {
         ArgumentNullException.ThrowIfNull(target);
 
-        // Whitelisted by the caller (MainWindow.IsExternalWebLink); re-checked here because this class
+        // Whitelisted by the viewer/Help caller; re-checked here because this class
         // shells out, and "open whatever URI you are given with the system handler" is not something
         // that should be reachable from a document TigerMarkView did not write.
         if (!IsLaunchableScheme(target))

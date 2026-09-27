@@ -55,6 +55,19 @@ public class HostileCodeBlockTests
 
     [Theory]
     [MemberData(nameof(HighlightedCases))]
+    public void HighlightedSourceIsEncodedBeforeTheSanitizerRuns(string language, string payload)
+    {
+        var source = $"var value = 1; // {payload}\n{payload}\n";
+        var raw = Markdig.Markdown.ToHtml($"```{language}\n{source}```", MarkdownRenderer.PipelineFor(Highlighted));
+        var body = new HtmlParser().ParseDocument(raw).Body!;
+        var code = Assert.Single(body.QuerySelectorAll("pre > code"));
+        Assert.Equal(source, code.TextContent);
+        AssertOnlyHighlighterMarkup(code);
+        Assert.Empty(body.QuerySelectorAll("script, img, svg, a"));
+    }
+
+    [Theory]
+    [MemberData(nameof(HighlightedCases))]
     public void AHighlightedPayloadStaysLiteralCode(string language, string payload)
     {
         var source = $"var value = 1; // {payload}\n{payload}\n";
@@ -105,6 +118,11 @@ public class HostileCodeBlockTests
     [MemberData(nameof(HostileInfoStrings))]
     public void AHostileInfoStringCanOnlyBecomeAClassName(string info)
     {
+        var unsanitized = Markdig.Markdown.ToHtml($"```{info}\nvar x = 1;\n```", MarkdownRenderer.PipelineFor(Highlighted));
+        var raw = new HtmlParser().ParseDocument(unsanitized).Body!;
+        Assert.Empty(raw.QuerySelectorAll("script, img, svg, [onmouseover]"));
+        Assert.Equal("var x = 1;\n", Assert.Single(raw.QuerySelectorAll("pre > code")).TextContent);
+
         var body = Render($"```{info}\nvar x = 1;\n```", Highlighted);
 
         var code = Assert.Single(body.QuerySelectorAll("pre > code"));

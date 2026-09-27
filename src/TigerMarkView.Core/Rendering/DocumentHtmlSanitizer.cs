@@ -11,10 +11,11 @@ namespace TigerMarkView.Core.Rendering;
 /// A Markdown document can come from anywhere, and Markdown passes raw HTML straight through — so a
 /// document could otherwise carry <c>&lt;script&gt;</c>, inline event handlers, <c>javascript:</c> links,
 /// frames, plugins, or a <c>&lt;meta&gt;</c> refresh into a WebView that has local-file access and a
-/// channel to the host. This is the first of three independent layers against that: the generated
+/// channel to the host. This is the first of three layers against that: the generated
 /// page also carries a hash-pinned Content Security Policy (<see cref="DocumentContentSecurityPolicy"/>),
-/// and both WebView2 hosts enforce <see cref="WebResourcePolicy"/> on every request. Each layer is meant
-/// to hold on its own.
+/// and both WebView2 hosts enforce <see cref="WebResourcePolicy"/> on every request. These are
+/// complementary contracts: the image allowlist alone cannot stop executable code from putting
+/// computed data in an image URL, so script prevention must also hold.
 /// </para>
 /// <para>
 /// It runs over Markdig's <em>whole</em> output, not just the raw-HTML nodes, because Markdown itself
@@ -77,8 +78,8 @@ internal static class DocumentHtmlSanitizer
     /// <c>file</c> keeps absolute local links and images working — the viewer resolves them through
     /// its own navigation rules, and <see cref="WebResourcePolicy"/> decides what may be fetched;
     /// <see cref="OnFilterUrl"/> drops the ones that name another host.
-    /// <c>data</c> is admitted here only so that <see cref="OnFilterUrl"/> can keep it for inline
-    /// images and nowhere else. Relative URLs are kept as written; the document's <c>&lt;base&gt;</c>
+    /// <c>data</c> is rejected by <see cref="OnFilterUrl"/> and restored by
+    /// <see cref="OnRemovingAttribute"/> only for inline image sources. Relative URLs are kept as written; the document's <c>&lt;base&gt;</c>
     /// resolves them.
     /// </remarks>
     private static readonly string[] AllowedSchemes = ["http", "https", "mailto", "file", "data"];
@@ -113,6 +114,7 @@ internal static class DocumentHtmlSanitizer
 
         var sanitizer = new HtmlSanitizer(options);
         sanitizer.FilterUrl += OnFilterUrl;
+        sanitizer.RemovingAttribute += OnRemovingAttribute;
         sanitizer.PostProcessNode += OnPostProcessNode;
 
         return sanitizer;
@@ -141,43 +143,51 @@ internal static class DocumentHtmlSanitizer
             return;
         }
 
-        if (WebResourcePolicy.IsNetworkFileReference(url) && !IsHyperlinkTarget(e.Tag, e.OriginalUrl))
-        {
-            e.SanitizedUrl = null;
-            return;
-        }
-
-        if (!url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        var isImageSource = e.Tag is { } tag
-            && string.Equals(tag.LocalName, "img", StringComparison.OrdinalIgnoreCase)
-            && url.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase);
-
-        if (!isImageSource)
+        if (WebResourcePolicy.IsNetworkFileReference(url)
+            || url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
         {
             e.SanitizedUrl = null;
         }
     }
 
-    /// <summary>
-    /// True when <paramref name="url"/> is the <c>href</c> of a link, as opposed to something the page
-    /// fetches by itself — the same element's style, for instance.
-    /// </summary>
-    private static bool IsHyperlinkTarget(IElement? element, string url) =>
-        element is not null
-        && element.LocalName is "a" or "area"
-        && string.Equals(element.GetAttribute("href"), url, StringComparison.Ordinal);
+    private static void OnRemovingAttribute(object? sender, RemovingAttributeEventArgs e)
+    {
+        if (e.Reason != RemoveReason.NotAllowedUrlValue)
+        {
+            return;
+        }
+
+        // FilterUrl supplies the element, not the attribute/CSS property being checked. Comparing
+        // its URL to href also authorizes background:url(the-same-href). Grant these two exceptions
+        // only here, where the library identifies the actual attribute it would remove.
+        e.Cancel = (e.Tag.LocalName is "a" or "area"
+                    && e.Attribute.Name == "href"
+                    && WebResourcePolicy.IsNetworkFileReference(e.Attribute.Value))
+            || (e.Tag.LocalName == "img"
+                && e.Attribute.Name == "src"
+                && e.Attribute.Value.Trim().StartsWith("data:image/", StringComparison.OrdinalIgnoreCase));
+    }
 
     /// <summary>
     /// Keeps <c>input</c> only as the inert checkbox a Markdown task list renders.
     /// </summary>
     private static void OnPostProcessNode(object? sender, PostProcessNodeEventArgs e)
     {
-        if (e.Node is not IElement element
-            || !string.Equals(element.LocalName, "input", StringComparison.OrdinalIgnoreCase))
+        if (e.Node is not IElement element)
+        {
+            return;
+        }
+
+        // SVG presentation attributes are not CSS declarations to HtmlSanitizer. Keep solid paint
+        // only, including the currentColor used by alert icons; never external paint-server URLs.
+        if (element.GetAttribute("fill") is { } fill
+            && !System.Text.RegularExpressions.Regex.IsMatch(fill.Trim(),
+                @"\A(?:[a-zA-Z]+|#[0-9a-fA-F]{3,8}|(?:rgb|rgba|hsl|hsla)\([0-9.,%+\- /]+\))\z"))
+        {
+            element.RemoveAttribute("fill");
+        }
+
+        if (element.LocalName != "input")
         {
             return;
         }

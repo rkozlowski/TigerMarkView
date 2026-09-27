@@ -74,10 +74,15 @@ embedded objects, stylesheets, and forms are removed. Every generated page also 
 Security Policy that admits only TigerMarkView's own script, and the viewer and PDF export refuse every
 network request except images. Local and web images therefore keep working, while nothing in a
 document can run, and the only requests it can cause are for the image addresses its author wrote.
-Images on network shares (`\\server\share`) are not loaded, because fetching them would send the
-reader's Windows credentials to that server; this includes the images of a document that is itself on a
-share. If the viewer cannot install its request protection, it shows no documents and says why rather
-than showing them unprotected. The viewer, PDF export, and `tiger-mark` apply the same rules.
+Images on network shares are not loaded, whether addressed as `\\server\share`, through a mapped
+network drive, or through a symbolic link to a share, because fetching them would send the reader's
+Windows credentials to that server; this includes the images of a document that itself lives on a share
+or a mapped drive. If the viewer cannot install its request protection, it shows no documents and says
+why rather than showing them unprotected. The viewer, PDF export, and `tiger-mark` apply the same rules.
+Inline SVG supports basic shapes with solid fills; external SVG paint resources are removed.
+Web images are fetched without browser cookies or Windows sign-in credentials, so an image that
+requires signing in does not load; ordinary public web images remain enabled, and a system proxy that
+asks for Windows sign-in is still answered.
 
 ## PDF export
 

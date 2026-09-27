@@ -679,8 +679,9 @@ dependency. Unknown or absent language identifiers fall back to the ordinary fen
 `MarkdownRenderer` caches one immutable pipeline for each rendering-option combination. The viewer,
 Help, PDF export, and CLI must not assemble their own Markdig pipelines.
 
-Markdown documents are untrusted. Active content is stopped by three independent layers, and each must
-keep holding on its own:
+Markdown documents are untrusted. Three layers enforce complementary contracts, each tested directly.
+The image allowlist cannot stop executable code from sending data in an image URL; the sanitizer and
+CSP must also prevent document code from running:
 
 - `DocumentHtmlSanitizer` sanitizes Markdig's whole output inside `MarkdownRenderer.ToHtmlFragment`
   against an explicit allowlist (HtmlSanitizer/AngleSharp). It keeps passive formatting HTML and removes
@@ -704,6 +705,26 @@ keep holding on its own:
   allowlist — no host, not UNC, and a decoded local path fully qualified on a drive letter — because
   `System.Uri` and Windows disagree about several share spellings. It is the only layer that stops a
   relative image in a document that itself lives on a share, so such images are not shown.
+  `LocalImageStorage` checks DOS-device mappings with `QueryDosDevice` and each immediate reparse
+  target, both while sanitizing absolute file URLs and at the Windows request boundary. Do not use
+  `DriveInfo.DriveType` to classify a path: inspecting a SUBST alias can itself open its remote root.
+  Local volume, optical, floppy and RAM devices are admitted; unknown device providers fail closed.
+  The sanitizer also drops absolute network-backed drive image URLs on Windows, so an absolute
+  reference never depends on the request callback running before the browser touches the path; the
+  boundary repeats the check at request time because mappings and links can change after rendering.
+  The two checks are complementary, not independent guarantees against every filesystem alias.
+  It inspects each path component's immediate link target before opening the next component, refusing
+  network targets and link cycles. Never resolve the final link target by opening it first: that can
+  itself authenticate to a share. Local symbolic links remain usable.
+  SVG presentation attributes need their own screening; only solid `fill` values survive. URL
+  exceptions for hyperlink `href` and image `src` must use actual attribute identity, never matching
+  the URL to another attribute on the same element (a CSS URL can have the same value).
+
+  Allowed HTTP(S) images are downloaded by the shared boundary through a credentialless `HttpClient`
+  and supplied as response bytes. Only image negotiation headers are copied; browser cookies,
+  authorization and referrers are not. Redirects stay HTTP(S). A browser authentication-event veto is
+  too late to prevent automatic NTLM negotiation, so never restore direct browser image networking
+  without the loopback authentication regression. Images requiring authentication do not load.
 
 PDF export additionally runs with document script, web messages, and host objects disabled, and cancels
 any navigation other than its own temporary file. `eng/lab/Test-TigerMarkViewActiveContent.ps1` is the
@@ -786,6 +807,9 @@ be installed, no document is ever shown in that WebView, a generated notice name
 viewer's status bar reports it as an error. Do not reintroduce a fallback that shows documents
 unprotected; the boundary is the only layer against relative images on a network share. PDF export
 fails the export instead, because `WebViewResourceBoundary.Apply` failing aborts it.
+Adapter destruction resets the navigation gate and clears Avalonia's remembered source before a new
+adapter can replay it. Host messages are accepted only from the current protected preview URL; host
+objects and frame navigation are disabled. Viewer and Help refuse unknown navigation schemes.
 
 `Browser` must retain `ClipToBounds="True"`. The native WebView can otherwise intercept pointer
 events outside its visual bounds, including status-bar buttons. Icon-button tooltips must be anchored

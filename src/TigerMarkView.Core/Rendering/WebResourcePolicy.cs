@@ -23,7 +23,8 @@ public enum WebResourceKind
 /// every other network request is refused, whatever its destination. That is what stops content that
 /// somehow runs from reading the document and sending it out through <c>fetch</c>, a beacon, a
 /// WebSocket, a frame, or a stylesheet — the channels that carry data a page computed rather than a URL
-/// the author wrote down. Deciding by destination instead would mean either blocking every remote image
+/// the author wrote down. Executable code could also put data in an allowed image URL: the sanitizer
+/// and CSP must prevent that code from running. Deciding by destination instead would mean either blocking every remote image
 /// or trusting whichever host a document names.
 /// </para>
 /// <para>
@@ -77,8 +78,8 @@ public static class WebResourcePolicy
     /// parse — is refused.
     /// </para>
     /// <para>
-    /// A drive letter mapped to a network share passes: it is a drive the reader connected themselves,
-    /// not a server a document chose.
+    /// This platform-neutral check establishes only the path's shape. The Windows request boundary
+    /// also checks DOS-device mappings and reparse targets so network storage cannot pass as local.
     /// </para>
     /// </remarks>
     public static bool IsLocalFile(Uri uri)
@@ -129,7 +130,15 @@ public static class WebResourcePolicy
     {
         ArgumentNullException.ThrowIfNull(reference);
 
+        // An absolute reference to a drive backed by network storage is removed before the browser
+        // sees it, so nothing about it depends on the request callback running first. The request
+        // boundary rechecks storage at use time, and is the only check a relative reference gets.
         var text = Normalize(reference);
+        if (Uri.TryCreate(text, UriKind.Absolute, out var absolute)
+            && IsLocalFile(absolute) && !LocalImageStorage.IsLocal(absolute))
+        {
+            return true;
+        }
 
         if (text.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
         {
@@ -146,8 +155,18 @@ public static class WebResourcePolicy
             slashes++;
         }
 
+        // Chromium recognizes a drive after leading slashes (and the legacy C| spelling), whereas
+        // System.Uri rejects these scheme-less forms. Classify their browser meaning before use.
+        if (StartsWithDriveLetter(text.AsSpan(slashes)))
+        {
+            var drivePath = text[slashes..];
+            drivePath = drivePath[0] + ":" + drivePath[2..];
+            return !Uri.TryCreate("file:///" + drivePath, UriKind.Absolute, out var driveUri)
+                || !LocalImageStorage.IsLocal(driveUri);
+        }
+
         // Zero or one slash is a relative or root-relative path, resolved on the document's own drive.
-        return slashes >= 2 && !StartsWithDriveLetter(text.AsSpan(slashes));
+        return slashes >= 2;
     }
 
     private static string Normalize(string reference)

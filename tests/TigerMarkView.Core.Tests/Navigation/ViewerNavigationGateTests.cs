@@ -9,6 +9,31 @@ namespace TigerMarkView.Core.Tests.Navigation;
 /// </summary>
 public class ViewerNavigationGateTests
 {
+    [Fact]
+    public void RecreatingAnEngineHoldsTheLastPageUntilItsOwnBoundaryIsInstalled()
+    {
+        var gate = new ViewerNavigationGate();
+        gate.BoundaryInstalled();
+        gate.Request(First);
+        gate.BoundaryDestroyed();
+        Assert.Equal(ViewerBoundaryState.Pending, gate.State);
+        Assert.Equal(First, gate.BoundaryInstalled());
+        gate.BoundaryDestroyed();
+        Assert.Null(gate.Request(Second));
+        Assert.Equal(Second, gate.BoundaryInstalled());
+    }
+
+    [Fact]
+    public void RecreatingAnEngineNeverReopensAFailedBoundary()
+    {
+        var gate = new ViewerNavigationGate();
+        gate.BoundaryUnavailable("unavailable");
+        gate.BoundaryDestroyed();
+        Assert.Null(gate.Request(First));
+        Assert.Null(gate.BoundaryInstalled());
+        Assert.Equal(ViewerBoundaryState.Unavailable, gate.State);
+    }
+
     private static readonly Uri First = new("file:///C:/Temp/TigerMarkView/preview.html?t=1");
     private static readonly Uri Second = new("file:///C:/Temp/TigerMarkView/preview.html?t=2");
 
