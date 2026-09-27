@@ -465,7 +465,7 @@ try {
     $machineRemoval = Invoke-Setup -FilePath $quiet.program -Arguments @($quiet.arguments | Where-Object { $_ -notin '--quiet' }) -Name 'machine-uninstall' -AsAdministrator
     $machineLeft = @(Get-PathEntries (Get-ItemProperty -LiteralPath $machinePathKey).Path | Where-Object { $_ -ieq $machineRoot })
     [IO.File]::WriteAllText((Join-Path $Artifacts 'machine-root-after-uninstall.txt'), (& $leftovers 'after uninstall'), (New-Object Text.UTF8Encoding $false))
-    $checks.Add((New-Check 'All-users removal' 'machine.uninstall' ($machineRemoval.exitCode -eq 0 -and -not (Test-Path $machineRoot) -and -not (Test-Path "$hklmUninstall\ItTiger.TigerMarkView") -and -not (Test-Path "HKLM:\SOFTWARE\Classes\$ProgId") -and $machineLeft.Count -eq 0) "Exit $($machineRemoval.exitCode); install root left: $(Test-Path $machineRoot) ($(& $leftovers 'contents'); legacy removal returned before its directory was gone - see machine-install.log); PATH entries left: $($machineLeft.Count)."))
+    $checks.Add((New-Check 'All-users removal' 'machine.uninstall' ($machineRemoval.exitCode -eq 0 -and -not (Test-Path $machineRoot) -and -not (Test-Path "$hklmUninstall\ItTiger.TigerMarkView") -and -not (Test-Path "HKLM:\SOFTWARE\Classes\$ProgId") -and $machineLeft.Count -eq 0) "Exit $($machineRemoval.exitCode); install root left: $(Test-Path $machineRoot) ($(& $leftovers 'contents')); PATH entries left: $($machineLeft.Count)."))
     Add-Phase -Name 'machine-scope' -Checks $checks
 }
 catch {

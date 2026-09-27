@@ -119,20 +119,18 @@ ever offered.
 ## An Inno Setup key disappearing is not the end of its uninstall
 
 **Area:** Installer migration from Inno Setup (TigerSetup `[legacy]`)
-**Status:** Active
+**Status:** Fixed in TigerSetup 0.13.0; kept for diagnosis
 
-After an upgrade over an Inno Setup installation, a later uninstall sometimes left an empty install
-directory. The per-user row passed once and then failed in five runs; the all-users row always failed.
-TigerSetup removes the legacy installation by running its quiet uninstaller and waiting for the
-Add/Remove Programs key to disappear. Inno writes that key last, so its uninstaller removes it first
-and goes on deleting files and folders afterwards from a copy of itself in `%TEMP%`. When the key went
-within about a second (`legacy_found` to `legacy_uninstalled` in the install log), the old install root
-still existed as TigerSetup planned, so TigerSetup did not own it (`directories_removed=9` instead of 10
-in the uninstall log) and correctly left it standing on removal.
+Inno's uninstaller removes its Add/Remove Programs key first and goes on deleting files from a copy of
+itself in `%TEMP%`, after the process TigerSetup started has exited. Up to TigerSetup 0.12.0 the
+migration waited only for the key, so the old install root still existed when TigerSetup planned the
+new installation; TigerSetup then did not own it and left it standing on a later uninstall. The
+per-user row failed in five of six runs and the all-users row always failed.
 
-The acceptance keeps asserting that uninstall leaves no install directory; read a failure there
-together with the two log lines above before looking anywhere else. The fix belongs in TigerSetup's
-migration (wait for the legacy uninstaller's process tree or install root, not only the key), not in a
-TigerMarkView custom action.
+TigerSetup 0.13.0 waits for the legacy uninstaller's whole process tree. An upgrade's install log now
+shows `legacy_uninstalled ... processes=2 root_exit_ms=<n> ended_ms=<m>`, with the tree ending about a
+second after its root, and the later uninstall log shows `directories_removed=10`. If the acceptance
+ever again finds an install root left after uninstall on a migration row, read those two lines before
+looking anywhere else; the fix belongs in TigerSetup's migration, not in a TigerMarkView custom action.
 
-**Generalization candidate:** TigerSetup.
+**Generalization candidate:** none; TigerSetup owns and has fixed it.

@@ -4,7 +4,8 @@
   "package": {
     "identifier": "ItTiger.TigerMarkView",
     "version": "VERSION",
-    "productCode": "ItTiger.TigerMarkView"
+    "productCode": "ItTiger.TigerMarkView",
+    "publication": "unpublished"
   },
   "manifestDirectory": "MANIFEST_DIRECTORY",
   "installer": {

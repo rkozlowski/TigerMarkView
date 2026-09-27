@@ -183,7 +183,7 @@ foreach ($file in 'accept.ps1', 'shell.ps1') {
 }
 
 $failures = [Collections.Generic.List[string]]::new()
-$themes = if ($SkipInstallerAcceptance) { @() } elseif ($Theme -eq 'both') { @('light', 'dark') } else { @($Theme) }
+$themes = @(if ($SkipInstallerAcceptance) { @() } elseif ($Theme -eq 'both') { @('light', 'dark') } else { @($Theme) })
 foreach ($windowsTheme in $themes) {
     $run = [ordered]@{
         version = $Version
