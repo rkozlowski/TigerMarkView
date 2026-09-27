@@ -49,5 +49,5 @@ if ($planOnly) {
 
 Write-Host
 Write-Host "Version set to $Version in the two deterministic locations." -ForegroundColor Green
-Write-Host 'Next: update .github/release-notes/{0}.md and any changed public docs, then run' -f $Version
-Write-Host '      eng/release-automation/Test-TigerMarkViewReleaseReadiness.ps1 -Version {0}' -f $Version
+Write-Host ('Next: update .github/release-notes/{0}.md and any changed public docs, then run' -f $Version)
+Write-Host ('      eng/release-automation/Test-TigerMarkViewReleaseReadiness.ps1 -Version {0}' -f $Version)

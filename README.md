@@ -156,6 +156,7 @@ TigerMarkView requires:
 The runtimes are not bundled. The installer checks for both and, when one is missing, downloads it
 from Microsoft and installs it before TigerMarkView; installing a runtime asks for administrator
 approval.
+
 TigerMarkView is not yet published in the WinGet community repository. The prepared package identity
 is `ItTiger.TigerMarkView`; this README will advertise `winget install ItTiger.TigerMarkView` only
 after the first manifest has been accepted and the command is live.

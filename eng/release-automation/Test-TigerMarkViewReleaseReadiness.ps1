@@ -179,6 +179,25 @@ if ($IncludeInstaller) {
         -Condition ($installer.ExitCode -eq 0) `
         -PassObserved 'installer/Build-Installer.ps1 produced the win-x64 installer.' `
         -FailObserved "installer/Build-Installer.ps1 failed (exit $($installer.ExitCode)).")
+    if ($installer.ExitCode -eq 0) {
+        # The same two static checks the release workflow runs on its authoritative build.
+        $metadata = Invoke-Native pwsh @('-NoProfile', '-File',
+            (Join-Path $repositoryRoot 'eng/release-automation/Assert-ProductMetadata.ps1'),
+            '-PublishDirectory', (Join-Path $repositoryRoot 'artifacts/publish/win-x64'),
+            '-ExpectedVersion', $Version)
+        Add-Check (New-TigerMarkViewReleaseAssertion -Id 'installer/metadata' `
+            -Condition ($metadata.ExitCode -eq 0) `
+            -PassObserved 'Assert-ProductMetadata.ps1 accepted the published binaries and TigerCli output.' `
+            -FailObserved "Assert-ProductMetadata.ps1 failed (exit $($metadata.ExitCode)).")
+        $contract = Invoke-Native pwsh @('-NoProfile', '-File',
+            (Join-Path $repositoryRoot 'eng/release-automation/Assert-Installer.ps1'),
+            '-InstallerPath', (Join-Path $repositoryRoot "artifacts/installer/TigerMarkView-$Version-win-x64-setup.exe"),
+            '-ExpectedVersion', $Version)
+        Add-Check (New-TigerMarkViewReleaseAssertion -Id 'installer/contract' `
+            -Condition ($contract.ExitCode -eq 0) `
+            -PassObserved 'Assert-Installer.ps1 accepted the installer and its declared contract.' `
+            -FailObserved "Assert-Installer.ps1 failed (exit $($contract.ExitCode)).")
+    }
 }
 else {
     Add-Check (New-TigerMarkViewReleaseCheck -Id 'installer/build' -Status 'WARN' `

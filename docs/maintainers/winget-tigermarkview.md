@@ -310,10 +310,43 @@ install-style upgrade behavior, the product code `ItTiger.TigerMarkView` (the Ad
 the machine entry's `elevatesSelf`, the `tiger-mark` command, and dependencies on .NET Desktop Runtime
 10 and Microsoft Edge WebView2 Runtime.
 
+The product code is the name of the Add/Remove Programs key TigerSetup writes, which is the package
+id in both scopes (`HKCU` or `HKLM` `...\Uninstall\ItTiger.TigerMarkView`). It is stable across
+versions, so WinGet correlates every TigerSetup installation with this package, and the key's
+`DisplayName`, `Publisher`, and `DisplayVersion` are exactly the manifests' `PackageName`,
+`Publisher`, and `PackageVersion`, so no `AppsAndFeaturesEntries` are needed. The Inno Setup key of
+0.9.0 and earlier (`{E718860E-EDE4-4ACC-8235-BCF1DD40FC25}_is1`) is deliberately not declared: no
+version of that installer was ever in WinGet, and the TigerSetup installer removes that key during
+its migration, so declaring it would describe an entry that never exists after installation.
+
 TigerWinLab receives the sealed manifests and downloaded public installer. It validates dependency
 setup, local-manifest installation with hash enforcement, installed files, ARP registration, machine
 `PATH`, CLI smoke behavior, deliberate wrong-hash refusal, WinGet uninstall, and cleanup in a reset
 Windows guest. Nothing is installed on the maintainer host.
+
+### Lab publication mode
+
+WinGet never records an installation made from a local manifest, so after `winget install
+--manifest` it finds the package again only through a source that carries it or, when none does,
+through its Add/Remove Programs key. `eng/winget/tigermarkview.labspec.template.json` therefore
+declares `package.publication` to TigerWinLab, which cannot tell from inside the guest:
+
+| Value | When | How the lab lists and removes the package |
+| --- | --- | --- |
+| `unpublished` (current) | no version of `ItTiger.TigerMarkView` is in the community source yet | `winget list --name TigerMarkView --exact`, requiring the `ARP\...\ItTiger.TigerMarkView` row, and `winget uninstall --product-code ItTiger.TigerMarkView` |
+| `published` | the community source returns `ItTiger.TigerMarkView` | `winget list --id` and `winget uninstall --id`, as a user would |
+
+The declaration concerns only the lab specification. The submitted manifests are the same in both
+modes.
+
+The first submission's post-release gate runs before its pull request is merged, so it must stay
+`unpublished`. Once a merged version is live - `winget show --id ItTiger.TigerMarkView --exact
+--source winget` returns it - the next release preparation changes `publication` to `published`
+in the template (keep `productCode`), and that release's gate proves the change. Do not switch
+earlier: a `published` specification fails `winget list` and `winget uninstall` with `0x8A150014`
+wherever the guest's sources open. Do not stay `unpublished` afterwards either: once a source
+carries the package, WinGet can correlate the installed entry with it instead of listing the bare
+`ARP\...` row that unpublished mode requires.
 
 Failures involving a missing public release, wrong commit, unsuccessful workflow, expired or
 digest-mismatched artifact, release/hash disagreement, non-reproducible manifests, `winget validate`,
