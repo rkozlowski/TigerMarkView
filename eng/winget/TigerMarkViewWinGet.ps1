@@ -66,6 +66,8 @@ function Get-TigerMarkViewWinGetRelease {
         repositoryUrl = $RepositoryUrl
         installerFileName = $installerFileName
         installerUrl = "$RepositoryUrl/releases/download/v$Version/$installerFileName"
+        # The release asset that publishes the sealed set; see New-TigerMarkViewWinGetArchive.
+        wingetArchiveFileName = "TigerMarkView-$Version-WinGet.zip"
         # Submission order: installer, default locale, version. Read-only consumers
         # index this array, so the order is part of the contract.
         manifestFileNames = @(
@@ -253,6 +255,127 @@ function Get-TigerMarkViewWinGetSubmissionDigest {
     }
     finally {
         $stream.Dispose()
+    }
+}
+
+function New-TigerMarkViewWinGetArchive {
+    <#
+        .SYNOPSIS
+        Packs a sealed submission set into the release's TigerMarkView-<version>-WinGet.zip.
+
+        .DESCRIPTION
+        The archive is how the release publishes the manifests it sealed, beside the
+        installer they describe. It carries the three manifests' bytes unchanged, flat
+        and in submission order, with a fixed timestamp, and nothing else; it is read
+        back before this returns, so an archive whose content digest is not the
+        directory's submission digest is never left behind as if it were the set.
+        An existing file is refused rather than replaced.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $ManifestDirectory,
+
+        [Parameter(Mandatory)]
+        [string] $Version,
+
+        [Parameter(Mandatory)]
+        [string] $Path
+    )
+
+    $submission = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $ManifestDirectory -Version $Version
+    $Path = [IO.Path]::GetFullPath($Path)
+    if ([IO.Path]::GetFileName($Path) -cne $submission.release.wingetArchiveFileName) {
+        throw "The WinGet archive must be named '$($submission.release.wingetArchiveFileName)'."
+    }
+
+    Add-Type -AssemblyName System.IO.Compression
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew)
+    try {
+        $zip = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
+        try {
+            foreach ($document in $submission.documents) {
+                $entry = $zip.CreateEntry($document.name, [IO.Compression.CompressionLevel]::Optimal)
+                $entry.LastWriteTime = [DateTimeOffset]::new(2000, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
+                $writer = $entry.Open()
+                try {
+                    $bytes = [IO.File]::ReadAllBytes($document.path)
+                    $writer.Write($bytes, 0, $bytes.Length)
+                }
+                finally { $writer.Dispose() }
+            }
+        }
+        finally { $zip.Dispose() }
+    }
+    finally { $stream.Dispose() }
+
+    $archive = Read-TigerMarkViewWinGetArchive -Path $Path -Version $Version
+    if ($archive.digest -cne $submission.digest) {
+        Remove-Item -LiteralPath $Path -Force
+        throw "The WinGet archive holds '$($archive.digest)', not the sealed set '$($submission.digest)'."
+    }
+    $archive
+}
+
+function Read-TigerMarkViewWinGetArchive {
+    <#
+        .SYNOPSIS
+        Proves a WinGet archive holds exactly the three submission manifests and
+        reports the submission digest of what it holds.
+
+        .DESCRIPTION
+        The digest is computed exactly as Read-TigerMarkViewWinGetSubmissionSet computes
+        it over a directory, so an archive and a sealed directory with equal digests hold
+        the same three files, byte for byte. A folder entry, an extra or repeated entry,
+        a missing manifest, and a byte-order mark are all refused.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path,
+
+        [Parameter(Mandatory)]
+        [string] $Version
+    )
+
+    $release = Get-TigerMarkViewWinGetRelease -Version $Version
+    $Path = [IO.Path]::GetFullPath($Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "WinGet archive not found: $Path" }
+
+    Add-Type -AssemblyName System.IO.Compression
+    $zip = [IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+        $names = @($zip.Entries | ForEach-Object FullName)
+        $unexpected = @($names | Where-Object { $_ -cnotin $release.manifestFileNames })
+        $missing = @($release.manifestFileNames | Where-Object { $_ -cnotin $names })
+        if ($names.Count -ne $release.manifestFileNames.Count -or $unexpected.Count -ne 0 -or $missing.Count -ne 0) {
+            throw ("'$Path' must hold exactly the three submission manifests. Holds: $($names -join ', ').")
+        }
+        $documents = foreach ($name in $release.manifestFileNames) {
+            $reader = $zip.GetEntry($name).Open()
+            $buffer = [IO.MemoryStream]::new()
+            try { $reader.CopyTo($buffer) }
+            finally { $reader.Dispose() }
+            $bytes = $buffer.ToArray()
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+                throw "'$name' in '$Path' must be UTF-8 without a byte-order mark."
+            }
+            [pscustomobject][ordered]@{
+                name = $name
+                length = [long] $bytes.Length
+                sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes))
+            }
+        }
+    }
+    finally { $zip.Dispose() }
+
+    $documents = @($documents)
+    [pscustomobject][ordered]@{
+        path = $Path
+        length = [long] (Get-Item -LiteralPath $Path).Length
+        sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        documents = $documents
+        digest = Get-TigerMarkViewWinGetSubmissionDigest -Documents $documents
     }
 }
 

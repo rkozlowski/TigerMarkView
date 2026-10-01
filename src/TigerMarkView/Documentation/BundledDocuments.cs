@@ -20,7 +20,7 @@ public sealed record BundledDocument(string Path, string Title);
 /// </summary>
 /// <remarks>
 /// The same split as <see cref="Settings.SettingsStore"/>, one level down: Core knows how to render a
-/// Markdown document, this knows where these particular three files sit on disk. They are copied next
+/// Markdown document, this knows where these particular files sit on disk. They are copied next
 /// to the executable by the project file (see the Docs item group in <c>TigerMarkView.csproj</c>), so
 /// Help works from a build output and from an installed copy, needs no repository checkout, and needs
 /// no network. The sources live in the repository's <c>docs/</c> folder and <em>LICENSE</em> at its

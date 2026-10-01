@@ -10,15 +10,19 @@
       1. The installer acceptance, eng\lab\installer\accept.ps1, as one TigerWinLab -Desktop job per
          Windows theme: a fresh per-user install and removal; an upgrade over the published Inno
          Setup installation; Open with on a path with spaces and Unicode; a followed link, File >
-         Open and a drag from Explorer onto the document, each against Open Recent; the removal of
-         the upgraded installation; and an all-users upgrade and removal. Every assertion is this
-         repository's; TigerWinLab supplies the guest, the interactive desktop and the evidence.
+         Open and a drag from Explorer onto the document, each against Open Recent; an in-place
+         upgrade to a later installer, which keeps the local data; Clear Recent Files; the removal of
+         the installation with its local data; and an all-users upgrade and removal. Every assertion
+         is this repository's; TigerWinLab supplies the guest, the interactive desktop and the
+         evidence.
       2. The generic desktop scenario on a self-contained build: UI Automation exposure, physical
          menu input, modal handling, occlusion, and F1 Help.
 
     The installer is the exact file named by -InstallerPath (a local candidate or a retrieved
-    release asset). The installation it upgrades is the latest published release, downloaded from
-    GitHub and refused unless it matches the digest GitHub recorded for it.
+    release asset). The installation it migrates from is a published Inno Setup release, downloaded
+    from GitHub and refused unless it matches the digest GitHub recorded for it. The later installer
+    it is upgraded to only has to be newer and carry this repository's installer; by default it is a
+    local build of the next patch version.
 
     .PARAMETER InstallerPath
     Defaults to artifacts\installer\TigerMarkView-<version>-win-x64-setup.exe, where <version> is
@@ -28,11 +32,18 @@
     The candidate's version when it was built with installer\Build-Installer.ps1 -Version.
 
     .PARAMETER UpgradeFromVersion
-    The published release to upgrade from. Defaults to the latest published release.
+    The published Inno Setup release to migrate from. Defaults to 0.8.1, the last one published as a
+    GitHub release (0.9.0, the last Inno Setup build, was tagged but not published). Releases from
+    0.10.0 on are TigerSetup installations; the in-place upgrade covers those.
 
     .PARAMETER UpgradeFromInstallerPath
     A published Inno Setup installer to upgrade from, when GitHub no longer serves it: an explicit
     maintainer decision, used as given and recorded by its SHA-256 and version resource.
+
+    .PARAMETER UpgradeToInstallerPath
+    A later TigerMarkView installer to upgrade the candidate to in place. Defaults to
+    artifacts\installer\TigerMarkView-<next patch version>-win-x64-setup.exe, built with
+    installer\Build-Installer.ps1 -Version when it is not there.
 
     .PARAMETER Theme
     light, dark, or both (the default): one installer acceptance run per Windows theme, with the
@@ -52,8 +63,9 @@ param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string] $Version,
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string] $UpgradeFromVersion,
+    [string] $UpgradeFromVersion = '0.8.1',
     [string] $UpgradeFromInstallerPath,
+    [string] $UpgradeToInstallerPath,
     [ValidateSet('light', 'dark', 'both')]
     [string] $Theme = 'both',
     [switch] $SkipInstallerAcceptance,
@@ -136,7 +148,7 @@ if (-not [string]::IsNullOrWhiteSpace($UpgradeFromInstallerPath)) {
 }
 else {
     $api = $repositoryUrl -replace '^https://github\.com/', 'https://api.github.com/repos/'
-    $release = if ($UpgradeFromVersion) { Invoke-RestMethod "$api/releases/tags/v$UpgradeFromVersion" } else { Invoke-RestMethod "$api/releases/latest" }
+    $release = Invoke-RestMethod "$api/releases/tags/v$UpgradeFromVersion"
     if ($release.draft -or $release.prerelease) { throw "Release $($release.tag_name) is not a published release." }
     $UpgradeFromVersion = ([string] $release.tag_name).TrimStart('v')
     $legacyName = "TigerMarkView-$UpgradeFromVersion-win-x64-setup.exe"
@@ -152,7 +164,29 @@ else {
     }
     if ((Get-FileHash -LiteralPath $legacyPath -Algorithm SHA256).Hash -cne $legacyHash) { throw "$legacyName does not match the digest GitHub recorded." }
 }
+if ([version] $UpgradeFromVersion -gt [version] '0.9.0') {
+    throw "TigerMarkView $UpgradeFromVersion is not an Inno Setup release; the migration it proves starts from 0.9.0 or earlier."
+}
 Write-Host "Upgrading from $legacyName, TigerMarkView $UpgradeFromVersion (SHA-256 $legacyHash)."
+
+# --- the later installer the candidate is upgraded to in place -----------------------------------
+if ([string]::IsNullOrWhiteSpace($UpgradeToInstallerPath)) {
+    $candidate = [version] $Version
+    $nextVersion = '{0}.{1}.{2}' -f $candidate.Major, $candidate.Minor, ($candidate.Build + 1)
+    $UpgradeToInstallerPath = Join-Path $repoRoot "artifacts\installer\TigerMarkView-$nextVersion-win-x64-setup.exe"
+    if (-not (Test-Path -LiteralPath $UpgradeToInstallerPath -PathType Leaf)) {
+        Write-Host "Building the later installer, TigerMarkView $nextVersion, to upgrade the candidate to..."
+        & (Join-Path $repoRoot 'installer\Build-Installer.ps1') -Version $nextVersion -Fast
+    }
+}
+$nextPath = (Resolve-Path -LiteralPath $UpgradeToInstallerPath).Path
+$nextName = [IO.Path]::GetFileName($nextPath)
+if ($nextName -notmatch '^TigerMarkView-(?<version>\d+\.\d+\.\d+)-win-x64-setup\.exe$' -or [version] $Matches.version -le [version] $Version) {
+    throw "$nextName is not a TigerMarkView installer later than the candidate $Version."
+}
+$nextVersion = $Matches.version
+& (Join-Path $repoRoot 'eng\release-automation\Assert-Installer.ps1') -InstallerPath $nextPath -ExpectedVersion $nextVersion
+Write-Host "Upgrading in place to $nextName (SHA-256 $((Get-FileHash -LiteralPath $nextPath -Algorithm SHA256).Hash))."
 
 # The .NET 10 Desktop Runtime the product declares, staged so the guest can run offline.
 $runtimeName = 'windowsdesktop-runtime-10-win-x64.exe'
@@ -169,7 +203,7 @@ if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notm
 $payloadRoot = Join-Path $outputRoot 'payload'
 if (Test-Path -LiteralPath $payloadRoot) { Remove-Item -LiteralPath $payloadRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $payloadRoot -Force | Out-Null
-foreach ($file in @($InstallerPath, $legacyPath, $runtimePath)) { Copy-Item -LiteralPath $file -Destination $payloadRoot }
+foreach ($file in @($InstallerPath, $legacyPath, $nextPath, $runtimePath)) { Copy-Item -LiteralPath $file -Destination $payloadRoot }
 foreach ($file in 'accept.ps1', 'shell.ps1') {
     # The guest runs Windows PowerShell 5.1, which reads BOM-less UTF-8 as ANSI.
     Get-Content -LiteralPath (Join-Path $PSScriptRoot "installer\$file") -Raw -Encoding utf8 |
@@ -190,6 +224,8 @@ foreach ($windowsTheme in $themes) {
         candidate = [IO.Path]::GetFileName($InstallerPath)
         legacy = $legacyName
         legacyVersion = $UpgradeFromVersion
+        next = $nextName
+        nextVersion = $nextVersion
         runtime = $runtimeName
         windowsTheme = $windowsTheme
         appTheme = if ($windowsTheme -eq 'dark') { 'Dark' } else { 'Light' }

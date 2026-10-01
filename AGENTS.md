@@ -870,7 +870,9 @@ A dropped file the page also links to is indistinguishable from following the li
 one, which keeps "links never enter Open Recent" exact.
 
 Build both Open Recent surfaces from `BuildRecentFileItems`, and both history surfaces from
-`BuildHistoryItems` at open time. A populated `MenuFlyout` does not reliably refresh from a later
+`BuildHistoryItems` at open time. Clear Recent Files ends both Open Recent surfaces, after a separator,
+only while the list has entries; it clears and saves at once, with no confirmation, and touches neither
+the documents nor the session's navigation history. A populated `MenuFlyout` does not reliably refresh from a later
 `ItemsSource` assignment.
 
 Status semantics keep three timestamps distinct:
@@ -893,8 +895,8 @@ Help is an application documentation context, not a reader-opened document. It u
 modeless `HelpWindow` and preview file. It must not affect the main document, watcher, scroll,
 history, Open Recent, editor target, or PDF target.
 
-`docs/HELP.md`, `docs/THIRD-PARTY-NOTICES.md`, and the root `LICENSE` are copied beside the
-executable by `TigerMarkView.csproj`. `BundledDocuments` is the only path mapping. Help must remain
+`docs/HELP.md`, `docs/PRIVACY.md`, `docs/THIRD-PARTY-NOTICES.md`, and the root `LICENSE` are copied
+beside the executable by `TigerMarkView.csproj`. `BundledDocuments` is the only path mapping. Help must remain
 available offline; do not fetch documentation at run time. The licence is rendered verbatim from the
 single root file rather than duplicated as Markdown.
 
@@ -970,8 +972,17 @@ Add/Remove Programs key and the WinGet identifier; never change it. `[legacy]` n
 registration of 0.9.0 and earlier (`{E718860E-EDE4-4ACC-8235-BCF1DD40FC25}_is1`), which the first
 TigerSetup install in the same scope removes with its own quiet uninstaller. Per-user installation is
 the default; all-users installation elevates. The PATH option is on by default and TigerSetup owns at
-most one install-directory entry per scope, never claiming a pre-existing one. Uninstall removes only
-what the installation owns, so Local AppData settings and WebView profiles stay intact.
+most one install-directory entry per scope, never claiming a pre-existing one.
+
+Uninstall removes what the installation owns and then, through the one custom action
+`remove-local-data` (`installer/actions/remove-local-data.cmd`, a packaged `post-uninstall` action),
+the uninstalling account's `%LOCALAPPDATA%\TigerMarkView` (settings, Open Recent, WebView2 profiles)
+and `%TEMP%\TigerMarkView` (generated pages). An upgrade keeps them: TigerSetup runs uninstall-phase
+actions on an uninstall only, never on an upgrade, so do not move this into an install phase or a
+TigerMarkView-side workaround. Every per-user folder the application writes must stay under those two
+roots; `eng/tests/Installer.Tests.ps1` checks that, and the script removes links without following
+them. The action reports failure (`on_failure = "continue"`) rather than rolling an uninstall back
+over a held file. `docs/PRIVACY.md` describes this behaviour to users and must change with it.
 
 The installer registers TigerMarkView as an available Markdown handler for exactly the extensions
 `MarkdownLinkResolver.MarkdownExtensions` names: the ProgID `TigerMarkView.Markdown` (the installed
@@ -987,7 +998,12 @@ fails with `dependency_requires_elevation` rather than prompting). Debug symbols
 are excluded from the installed files.
 
 TigerMarkView is an application repository. It publishes one GUI+CLI installer, not NuGet packages,
-a separate CLI installer, or a portable ZIP. Public documentation remains `README.md` plus `docs/`;
+a separate CLI installer, or a portable application ZIP. A release carries TigerSetup's four-asset
+model: the installer, `TigerMarkView-<version>-WinGet.zip` packed from the sealed submission set (never
+regenerated; `release-artifacts.json` records its hash and the set's submission digest),
+`SHA256SUMS.txt`, and `release-artifacts.json`. Releases up to 0.10.0 keep their published three
+assets; `Test-TigerMarkViewReleasePredatesWinGetArchive` is that one historic boundary. Release notes
+link `docs/PRIVACY.md` in the release's own tag, which the notes gate requires. Public documentation remains `README.md` plus `docs/`;
 do not introduce DocFX, generated API docs, or an API-documentation site. TigerMarkView's completed
 release/WinGet workflow is the reference model for future Tiger projects. The durable maintainer
 lifecycle is in `docs/maintainers/releasing-tigermarkview.md` and the artifact and submission rules

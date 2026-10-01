@@ -7,7 +7,9 @@
     - it must keep at least two level-2 (##) sections;
     - it must have real prose, not just a "Full Changelog" link;
     - it must contain no placeholder text (TODO, TBD, <describe ...>, ...);
-    - it must contain no secret or local filesystem path.
+    - it must contain no secret or local filesystem path;
+    - it must link the privacy statement in the release's own tag,
+      https://github.com/rkozlowski/TigerMarkView/blob/v<version>/docs/PRIVACY.md.
 
   Keep it short. This is what a person reads on the GitHub Release page to decide
   whether to upgrade.
@@ -35,3 +37,15 @@ someone using the TigerMarkView desktop app or the `tiger-mark` command.
 - Download and run the `TigerMarkView-<version>-win-x64-setup.exe` asset below, or
 - `winget install ItTiger.TigerMarkView` once the manifest is live in the
   community repository.
+
+`SHA256SUMS.txt` lists the SHA-256 of the installer and of
+`TigerMarkView-<version>-WinGet.zip`, the WinGet manifests submitted for this
+release; `release-artifacts.json` records the same hashes with the commit they
+were built from.
+
+## Privacy
+
+TigerMarkView keeps its settings and the Open Recent list on your computer and
+sends them nowhere. What it stores, how to clear it, what uninstalling removes,
+and when a document makes it request remote images are described in the
+[privacy statement for this release](https://github.com/rkozlowski/TigerMarkView/blob/v<version>/docs/PRIVACY.md).

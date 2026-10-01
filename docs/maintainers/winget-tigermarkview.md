@@ -35,6 +35,7 @@ release workflow generated and validated. Nothing downstream regenerates or edit
 | --- | --- |
 | `Prepare-TigerMarkViewWinGet.ps1` and `artifacts\winget\` | Local/pre-release generation. It hashes a local installer and is never a release submission set. |
 | `TigerMarkView-WinGet-<version>-<commit>` | The authoritative submission artifact. The release workflow generates it from the exact installer it publishes, seals it, and records its digest. `winget validate` and TigerWinLab run on it after the draft exists. |
+| `TigerMarkView-<version>-WinGet.zip` release asset | The same sealed bytes, published with the release so the manifests stay inspectable after the workflow artifact expires. Packed from the sealed directory, never regenerated; `release-artifacts.json` records its hash and the sealed set's submission digest, and the release workflow proves the archive holds that set before and after the artifact transfer. It is a published record, not a second submission source. |
 | `WinGetReleaseValidation.ps1`, `Test-TigerMarkViewWinGet.ps1`, and `artifacts\winget-release\<version>\` | Post-release retrieval and verification. It must obtain the sealed artifact and never fall back to local generation. The library holds the gate; the script is the command around it. |
 | `Prepare-TigerMarkViewWinGetSubmission.ps1` and `WinGetPkgsSubmission.ps1` | End-to-end post-release verification and safe preparation of the pushed fork branch. |
 
@@ -109,8 +110,9 @@ Publication verification must prove all of the following before any `winget-pkgs
 - `v<version>` resolves to the expected release commit, dereferencing the annotated tag;
 - the expected release workflow run for that version and commit concluded `success`;
 - the GitHub Release exists and `isDraft` is false;
-- its expected installer, `SHA256SUMS.txt`, and `release-artifacts.json` assets exist with no
-  unexpected package assets; and
+- its expected installer, `TigerMarkView-<version>-WinGet.zip`, `SHA256SUMS.txt`, and
+  `release-artifacts.json` assets exist with no unexpected package assets (releases up to 0.10.0
+  were published without the archive, and only the other three are expected for them); and
 - the release page and immutable installer URL are publicly accessible without authenticated API
   headers.
 

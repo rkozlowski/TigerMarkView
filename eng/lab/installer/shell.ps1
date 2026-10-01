@@ -171,6 +171,7 @@ if ($Mode -eq 'probe') {
     $result = [ordered]@{
         localAppData = $env:LOCALAPPDATA
         appData = $env:APPDATA
+        temp = $env:TEMP
         extensions = $extensions
         progIdExists = Test-Path -LiteralPath "$classes\TigerMarkView.Markdown"
         progIdDescription = Get-Value "$classes\TigerMarkView.Markdown" '(default)'

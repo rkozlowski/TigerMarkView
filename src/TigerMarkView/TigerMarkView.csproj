@@ -32,6 +32,7 @@
   -->
   <ItemGroup>
     <Content Include="..\..\docs\HELP.md" Link="Docs\HELP.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\docs\PRIVACY.md" Link="Docs\PRIVACY.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\docs\THIRD-PARTY-NOTICES.md" Link="Docs\THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\LICENSE" Link="Docs\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

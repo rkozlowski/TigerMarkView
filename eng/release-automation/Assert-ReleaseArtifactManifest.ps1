@@ -3,6 +3,13 @@
     .SYNOPSIS
     Proves a directory holds exactly the recorded TigerMarkView release bytes.
 
+    .DESCRIPTION
+    The set is the installer, TigerMarkView-<version>-WinGet.zip, SHA256SUMS.txt,
+    and release-artifacts.json. Both recorded artifacts must match their recorded
+    length and SHA-256, SHA256SUMS.txt must say exactly the same, and the archive
+    must hold exactly the three submission manifests whose submission digest the
+    record names.
+
     .PARAMETER ArtifactDirectory
     The release directory to check.
 
@@ -17,6 +24,10 @@
     the transfer check: the validation job records the hash and the publication
     job repeats it over the downloaded artifact, so an upload that changed the
     manifest cannot survive both.
+
+    .PARAMETER ExpectedSubmissionDigest
+    When supplied, the submission digest the sealing step recorded: the archive
+    the release publishes must hold exactly that sealed set.
 #>
 [CmdletBinding()]
 param(
@@ -30,11 +41,15 @@ param(
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
     [string] $ExpectedCommit,
 
-    [string] $ExpectedManifestSha256
+    [string] $ExpectedManifestSha256,
+
+    [string] $ExpectedSubmissionDigest
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'winget' 'TigerMarkViewWinGet.ps1')
 
 $ArtifactDirectory = [IO.Path]::GetFullPath($ArtifactDirectory)
 $manifestPath = Join-Path $ArtifactDirectory 'release-artifacts.json'
@@ -53,13 +68,19 @@ if ($manifest.schemaVersion -ne 1 -or
     throw 'Release manifest identity does not match the requested release.'
 }
 
-$expectedNames = @("TigerMarkView-$ExpectedVersion-win-x64-setup.exe")
+$release = Get-TigerMarkViewWinGetRelease -Version $ExpectedVersion
+$expected = [ordered]@{
+    $release.installerFileName = 'WindowsInstaller'
+    $release.wingetArchiveFileName = 'WinGetManifests'
+}
 $entries = @($manifest.artifacts)
-if ($entries.Count -ne 1 -or [string] $entries[0].name -cne $expectedNames[0]) {
-    throw 'Release manifest does not contain the one expected installer.'
+$recorded = @($entries | ForEach-Object { "$($_.name)=$($_.kind)" })
+$wanted = @($expected.Keys | ForEach-Object { "$_=$($expected[$_])" })
+if (($recorded -join ',') -cne ($wanted -join ',')) {
+    throw "Release manifest records '$($recorded -join ', ')', not the installer and its WinGet archive."
 }
 
-$allowedNames = @($expectedNames + @('release-artifacts.json', 'SHA256SUMS.txt'))
+$allowedNames = @(@($expected.Keys) + @('release-artifacts.json', 'SHA256SUMS.txt'))
 $actualNames = @(Get-ChildItem -LiteralPath $ArtifactDirectory -File | ForEach-Object Name)
 $missing = @($allowedNames | Where-Object { $_ -cnotin $actualNames })
 $unexpected = @($actualNames | Where-Object { $_ -cnotin $allowedNames })
@@ -76,10 +97,23 @@ foreach ($entry in $entries) {
     }
 }
 
+$archiveEntry = $entries[1]
+$archive = Read-TigerMarkViewWinGetArchive -Path (Join-Path $ArtifactDirectory $archiveEntry.name) -Version $ExpectedVersion
+if ($null -eq $archiveEntry.PSObject.Properties['submissionSha256'] -or
+    $archive.digest -cne [string] $archiveEntry.submissionSha256) {
+    throw "$($archiveEntry.name) does not hold the WinGet submission set release-artifacts.json records."
+}
+if (-not [string]::IsNullOrWhiteSpace($ExpectedSubmissionDigest) -and
+    $archive.digest -cne $ExpectedSubmissionDigest.ToLowerInvariant()) {
+    throw ("$($archiveEntry.name) holds the set '$($archive.digest)'; the sealed set is " +
+        "'$($ExpectedSubmissionDigest.ToLowerInvariant())'.")
+}
+
 $expectedChecksums = @($entries | ForEach-Object { "$($_.sha256)  $($_.name)" }) -join [Environment]::NewLine
-$actualChecksums = (Get-Content -LiteralPath $checksumPath -Raw).TrimEnd("`r", "`n")
-if ($actualChecksums -cne $expectedChecksums) {
+$actualChecksums = (Get-Content -LiteralPath $checksumPath -Raw).TrimEnd("`r", "`n") -replace "`r`n", "`n"
+if ($actualChecksums -cne ($expectedChecksums -replace "`r`n", "`n")) {
     throw 'SHA256SUMS.txt does not exactly match release-artifacts.json.'
 }
 
 Write-Host "Verified exact TigerMarkView $ExpectedVersion release bytes at $ExpectedCommit."
+Write-Host "$($archiveEntry.name) holds the sealed WinGet submission set $($archive.digest)."

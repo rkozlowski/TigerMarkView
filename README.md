@@ -47,7 +47,8 @@ The reload modes determine what happens when the open file changes:
 | Confirm | Shows an unobtrusive reload action. This is the default. |
 | Automatic | Reloads automatically and preserves the reading position where practical. |
 
-Open Recent records documents explicitly opened by the user and persists between sessions.
+Open Recent records documents explicitly opened by the user and persists between sessions;
+**File > Open Recent > Clear Recent Files** empties it.
 Navigation history records every document visited during the current session, including local links,
 and restores the previous scroll position when navigating Back or Forward.
 
@@ -121,10 +122,10 @@ features.
 
 The initial public distribution is the Windows installer attached to a
 [GitHub Release](https://github.com/rkozlowski/TigerMarkView/releases). The same installer contains
-the desktop application, `tiger-mark`, bundled Help, the MIT licence, and third-party notices. It
-installs for the current user by default and offers an all-users mode, which asks for administrator
-approval. It is built with [TigerSetup](https://github.com/rkozlowski/TigerSetup) and also runs
-unattended:
+the desktop application, `tiger-mark`, bundled Help, the privacy statement, the MIT licence, and
+third-party notices. It installs for the current user by default and offers an all-users mode, which
+asks for administrator approval. It is built with [TigerSetup](https://github.com/rkozlowski/TigerSetup)
+and also runs unattended:
 
 ```powershell
 TigerMarkView-<version>-win-x64-setup.exe install --quiet                  # for the current user
@@ -140,7 +141,11 @@ The installer registers TigerMarkView as an available app for `.md` and `.markdo
 appears under **Open with** and in **Settings > Apps > Default apps**. It never writes a default app
 and never replaces one you have chosen. If you have not chosen an app for Markdown files, Windows may
 open them with TigerMarkView as the app offered for them. Uninstalling removes the registration and
-leaves your settings and your default-app choice alone.
+leaves your default-app choice alone.
+
+Uninstalling also removes TigerMarkView's own data - the settings, the Open Recent list, the WebView2
+profiles, and the generated preview pages - for the Windows account that runs the uninstall.
+Upgrading to a newer version keeps them.
 
 Installing this version over TigerMarkView 0.9.0 or earlier - which used an Inno Setup installer -
 removes the earlier installation first and keeps your settings. The earlier installation is found in
@@ -310,6 +315,13 @@ source of product version and shared application metadata; production projects i
 
 Contributor, architecture, and release guidance is in `AGENTS.md`; maintainer procedures are in
 `docs/maintainers/`.
+
+## Privacy
+
+TigerMarkView keeps its settings and the Open Recent list on the local computer and sends them
+nowhere; it has no telemetry, accounts, or update checks. The application's only network requests are for web images
+that an opened document itself refers to. The [privacy statement](docs/PRIVACY.md) describes what is
+stored, how to clear it, what uninstalling removes, and those image requests.
 
 ## Licence
 

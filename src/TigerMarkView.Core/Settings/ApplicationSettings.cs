@@ -226,6 +226,12 @@ public sealed class ApplicationSettings
         RecentFiles = RecentFilesList.Add(RecentFiles, path);
 
     /// <summary>
+    /// Forgets every Open Recent entry. Only the list changes: the documents it named are neither
+    /// touched nor checked, and nothing else the reader chose is reset.
+    /// </summary>
+    public void ClearRecentFiles() => RecentFiles = [];
+
+    /// <summary>
     /// Repairs anything a partial, hand-edited, or older settings file could contain, so callers never
     /// have to null-check or range-check what they loaded. Unknown enum values are already handled
     /// during deserialization by <see cref="TolerantEnumConverter{TEnum}"/>.

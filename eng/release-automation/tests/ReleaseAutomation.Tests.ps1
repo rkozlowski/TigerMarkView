@@ -110,6 +110,52 @@ try {
     Assert-True (-not (Test-TigerMarkViewReleaseVersion -Version 'v0.9')) 'A malformed version is rejected.'
     Write-Host 'PASS: release constants and version validation'
 
+    # Published releases are never edited, so the historic three-asset shape stays acceptable for
+    # exactly the versions that were published with it, and for no later one.
+    Assert-True ((@(& $constant.releaseAssetNames '0.10.0') -join ',') -ceq
+        'TigerMarkView-0.10.0-win-x64-setup.exe,SHA256SUMS.txt,release-artifacts.json') `
+        '0.10.0 was published with the installer and its two records only.'
+    foreach ($later in '0.10.1', '0.11.0-rc.1', '1.0.0') {
+        Assert-True ((@(& $constant.releaseAssetNames $later) -join ',') -ceq
+            "TigerMarkView-$later-win-x64-setup.exe,TigerMarkView-$later-WinGet.zip,SHA256SUMS.txt,release-artifacts.json") `
+            "A release after 0.10.0 ($later) publishes its WinGet manifests beside the installer."
+    }
+    Assert-True ((& $constant.privacyStatementUrl '0.10.1') -ceq
+        'https://github.com/rkozlowski/TigerMarkView/blob/v0.10.1/docs/PRIVACY.md') `
+        'The privacy statement a release links is the copy in its own tag.'
+    Write-Host 'PASS: the release asset set and privacy link follow the published history'
+
+    # --- Release notes link the release's own privacy statement ----------
+
+    $notesRoot = Join-Path $testRoot 'notes'
+    New-Item -ItemType Directory -Path $notesRoot -Force | Out-Null
+    $notesBody = @"
+## Highlights
+
+This release adds a way to clear the Open Recent list from the File menu, and an
+uninstall now removes the settings and other data the viewer kept on the computer.
+
+## Install
+
+Download and run the installer from the assets below.
+"@
+    Set-Content -LiteralPath (Join-Path $notesRoot '0.10.1.md') -Encoding utf8NoBOM -Value $notesBody
+    $unlinked = Test-TigerMarkViewReleaseNotes -Version '0.10.1' -RepositoryRoot $repositoryRoot -NotesRoot $notesRoot
+    Assert-True ($unlinked.status -ceq 'FAIL' -and $unlinked.expected -match 'blob/v0\.10\.1/docs/PRIVACY\.md') `
+        'Notes for a release after 0.10.0 must link the privacy statement in that release''s tag.'
+    Set-Content -LiteralPath (Join-Path $notesRoot '0.10.1.md') -Encoding utf8NoBOM -Value ($notesBody +
+        "`n## Privacy`n`nSee https://github.com/rkozlowski/TigerMarkView/blob/main/docs/PRIVACY.md.`n")
+    $mainLinked = Test-TigerMarkViewReleaseNotes -Version '0.10.1' -RepositoryRoot $repositoryRoot -NotesRoot $notesRoot
+    Assert-True ($mainLinked.status -ceq 'FAIL') 'A link to the moving main-branch copy is not the release''s statement.'
+    Set-Content -LiteralPath (Join-Path $notesRoot '0.10.1.md') -Encoding utf8NoBOM -Value ($notesBody +
+        "`n## Privacy`n`nSee https://github.com/rkozlowski/TigerMarkView/blob/v0.10.1/docs/PRIVACY.md.`n")
+    $linked = Test-TigerMarkViewReleaseNotes -Version '0.10.1' -RepositoryRoot $repositoryRoot -NotesRoot $notesRoot
+    Assert-True ($linked.status -ceq 'PASS') "Notes linking the tag-bound privacy statement pass; got $($linked.status): $($linked.observed)"
+    Set-Content -LiteralPath (Join-Path $notesRoot '0.10.0.md') -Encoding utf8NoBOM -Value $notesBody
+    $historic = Test-TigerMarkViewReleaseNotes -Version '0.10.0' -RepositoryRoot $repositoryRoot -NotesRoot $notesRoot
+    Assert-True ($historic.status -ceq 'PASS') 'The published 0.10.0 notes predate the privacy statement and still pass.'
+    Write-Host 'PASS: release notes must link the privacy statement in the release''s own tag'
+
     # --- Verdict precedence and exit codes ---------------------------------
 
     $pass = New-TigerMarkViewReleaseCheck -Id 't/pass' -Status 'PASS' -Observed 'ok'
@@ -431,6 +477,10 @@ running-head option to the tiger-mark command line for exported PDFs.
 ## Fixed
 
 - The reload indicator no longer sticks after a file is deleted and recreated.
+
+## Privacy
+
+See the [privacy statement for this release](https://github.com/rkozlowski/TigerMarkView/blob/v$gateVersion/docs/PRIVACY.md).
 "@
     Invoke-FixtureGit -Root $gateRoot -GitArgs @('init', '--quiet', '-b', 'main') | Out-Null
     Invoke-FixtureGit -Root $gateRoot -GitArgs @('config', 'user.email', 'test@example.com') | Out-Null
@@ -581,6 +631,27 @@ running-head option to the tiger-mark command line for exported PDFs.
         'A published non-draft release at the expected commit with the three assets passes.'
     Assert-True ($state.release.isDraft -eq $false -and $state.release.assetNames.Count -eq 3) `
         'The release info records the observed shape.'
+
+    $laterVersion = '0.10.1'
+    $laterRoute = "api repos/$repository/releases/tags/v$laterVersion"
+    function New-LaterRelease([string[]] $Assets) {
+        New-GhOk ([pscustomobject]@{
+            name = "TigerMarkView $laterVersion"; draft = $false; target_commitish = $commit
+            published_at = '2026-10-30T10:00:00Z'; html_url = "https://github.com/$repository/releases/tag/v$laterVersion"
+            assets = @($Assets | ForEach-Object { [pscustomobject]@{ name = $_ } })
+        })
+    }
+    $withoutArchive = New-FakeGh -Routes @{ $laterRoute = (New-LaterRelease @(
+        "TigerMarkView-$laterVersion-win-x64-setup.exe", 'SHA256SUMS.txt', 'release-artifacts.json')) }
+    $state = Get-TigerMarkViewReleaseState -Cli $withoutArchive -Version $laterVersion -ExpectedCommit $commit -Repository $repository
+    Assert-True (@($state.checks | Where-Object { $_.id -ceq 'release/assets' }).status -ceq 'FAIL') `
+        'A release after 0.10.0 without its WinGet archive is FAIL.'
+    $withArchive = New-FakeGh -Routes @{ $laterRoute = (New-LaterRelease @(
+        "TigerMarkView-$laterVersion-win-x64-setup.exe", "TigerMarkView-$laterVersion-WinGet.zip",
+        'SHA256SUMS.txt', 'release-artifacts.json')) }
+    $state = Get-TigerMarkViewReleaseState -Cli $withArchive -Version $laterVersion -ExpectedCommit $commit -Repository $repository
+    Assert-True (@($state.checks | Where-Object { $_.status -cne 'PASS' }).Count -eq 0) `
+        'A release after 0.10.0 with the installer, its WinGet archive and both records passes.'
     Write-Host 'PASS: release-state checks separate missing, draft, wrong-commit, and wrong-asset releases'
 
     # --- Workflow script references -----------------------------------
@@ -628,14 +699,26 @@ running-head option to the tiger-mark command line for exported PDFs.
     # The release workflow no longer stages, copies, or hashes anything itself:
     # these two scripts close the artifact set and prove it, and the transfer
     # check is what makes "the same bytes" checkable across the artifact upload.
-    $artifactVersion = '0.9.0'
+    . (Join-Path (Split-Path -Parent $automationRoot) 'winget' 'TigerMarkViewWinGet.ps1')
+    $artifactVersion = '0.10.1'
     $artifactCommit = 'd' * 40
     $installerName = "TigerMarkView-$artifactVersion-win-x64-setup.exe"
+    $archiveName = "TigerMarkView-$artifactVersion-WinGet.zip"
     $buildRoot = Join-Path $testRoot 'build'
     $releaseRoot = Join-Path $testRoot 'release'
-    New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
+    $sealedRoot = Join-Path $testRoot 'sealed'
+    New-Item -ItemType Directory -Path $buildRoot, $sealedRoot -Force | Out-Null
     $builtInstaller = Join-Path $buildRoot $installerName
     [IO.File]::WriteAllBytes($builtInstaller, [byte[]] (1..64))
+
+    # A sealed submission set: the three manifests exactly as the workflow sealed them. CRLF and a
+    # non-ASCII character on purpose, so a packer that normalised text would change the digest.
+    $utf8 = [Text.UTF8Encoding]::new($false)
+    foreach ($name in (Get-TigerMarkViewWinGetRelease -Version $artifactVersion).manifestFileNames) {
+        [IO.File]::WriteAllText((Join-Path $sealedRoot $name),
+            "PackageIdentifier: ItTiger.TigerMarkView`r`nPackageVersion: $artifactVersion`r`nDescription: zażółć ($name)`r`n", $utf8)
+    }
+    $sealed = Read-TigerMarkViewWinGetSubmissionSet -ManifestDirectory $sealedRoot -Version $artifactVersion
 
     # A leftover file from an earlier attempt must not survive into the set.
     New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
@@ -644,13 +727,15 @@ running-head option to the tiger-mark command line for exported PDFs.
     $outputFile = Join-Path $testRoot 'artifact-output.txt'
     & (Join-Path $automationRoot 'New-ReleaseArtifactManifest.ps1') `
         -InstallerPath $builtInstaller `
+        -WinGetManifestDirectory $sealedRoot `
+        -ExpectedSubmissionDigest $sealed.digest `
         -ArtifactDirectory $releaseRoot `
         -Version $artifactVersion `
         -CommitSha $artifactCommit `
         -GitHubOutput $outputFile | Out-Null
 
     $releaseNames = @(Get-ChildItem -LiteralPath $releaseRoot -File | ForEach-Object Name | Sort-Object)
-    $expectedNames = @(@('SHA256SUMS.txt', 'release-artifacts.json', $installerName) | Sort-Object)
+    $expectedNames = @(@('SHA256SUMS.txt', 'release-artifacts.json', $installerName, $archiveName) | Sort-Object)
     Assert-True (($releaseNames -join ',') -ceq ($expectedNames -join ',')) `
         "Staging must leave exactly the closed set; it left $($releaseNames -join ', ')."
 
@@ -663,8 +748,33 @@ running-head option to the tiger-mark command line for exported PDFs.
         -ArtifactDirectory $releaseRoot `
         -ExpectedVersion $artifactVersion `
         -ExpectedCommit $artifactCommit `
-        -ExpectedManifestSha256 $recordedHash[0] | Out-Null
+        -ExpectedManifestSha256 $recordedHash[0] `
+        -ExpectedSubmissionDigest $sealed.digest | Out-Null
     Write-Host 'PASS: the artifact set is staged, closed, and verified against its recorded manifest'
+
+    # The record and the checksum file name the archive by its own hash, and the record ties it to
+    # the sealed set by the submission digest.
+    $record = Get-Content -LiteralPath (Join-Path $releaseRoot 'release-artifacts.json') -Raw | ConvertFrom-Json
+    $archivePath = Join-Path $releaseRoot $archiveName
+    $archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $archiveEntry = @($record.artifacts | Where-Object name -CEQ $archiveName)
+    Assert-True ($archiveEntry.Count -eq 1 -and $archiveEntry[0].kind -ceq 'WinGetManifests' -and
+        $archiveEntry[0].sha256 -ceq $archiveHash -and [long] $archiveEntry[0].length -eq (Get-Item $archivePath).Length -and
+        $archiveEntry[0].submissionSha256 -ceq $sealed.digest) `
+        'release-artifacts.json records the WinGet archive, its hash and length, and the sealed set it holds.'
+    Assert-True (@(Get-Content -LiteralPath (Join-Path $releaseRoot 'SHA256SUMS.txt')) -ccontains "$archiveHash  $archiveName") `
+        'SHA256SUMS.txt lists the WinGet archive.'
+    Write-Host 'PASS: the WinGet archive is recorded in release-artifacts.json and SHA256SUMS.txt'
+
+    # The archive carries the sealed manifest bytes unchanged: extracted, every file is byte-equal.
+    $extracted = Join-Path $testRoot 'extracted'
+    Expand-Archive -LiteralPath $archivePath -DestinationPath $extracted
+    Assert-True (@(Get-ChildItem -LiteralPath $extracted -Recurse -Force).Count -eq 3) 'The archive holds the three manifests and nothing else.'
+    foreach ($document in $sealed.documents) {
+        Assert-True ((Get-FileHash -LiteralPath (Join-Path $extracted $document.name) -Algorithm SHA256).Hash -ceq $document.sha256) `
+            "$($document.name) leaves the archive byte-for-byte as it was sealed."
+    }
+    Write-Host 'PASS: the sealed manifest bytes survive release packaging unchanged'
 
     Assert-Throws -MessagePattern 'changed in transit' -Action {
         & (Join-Path $automationRoot 'Assert-ReleaseArtifactManifest.ps1') `
@@ -675,16 +785,73 @@ running-head option to the tiger-mark command line for exported PDFs.
     }
     Write-Host 'PASS: a manifest that is not the validated one fails the transfer check'
 
+    Assert-Throws -MessagePattern 'sealed set is' -Action {
+        & (Join-Path $automationRoot 'Assert-ReleaseArtifactManifest.ps1') `
+            -ArtifactDirectory $releaseRoot `
+            -ExpectedVersion $artifactVersion `
+            -ExpectedCommit $artifactCommit `
+            -ExpectedSubmissionDigest ('0' * 64) | Out-Null
+    }
+    Assert-Throws -MessagePattern 'sealed set is' -Action {
+        & (Join-Path $automationRoot 'New-ReleaseArtifactManifest.ps1') `
+            -InstallerPath $builtInstaller `
+            -WinGetManifestDirectory $sealedRoot `
+            -ExpectedSubmissionDigest ('0' * 64) `
+            -ArtifactDirectory (Join-Path $testRoot 'release-other-set') `
+            -Version $artifactVersion `
+            -CommitSha $artifactCommit | Out-Null
+    }
+    Write-Host 'PASS: an archive that does not hold the sealed set is refused when closing and when verifying'
+
+    # An archive repacked with a changed manifest - its own hash recorded consistently - is still not
+    # the set the record says it holds.
+    $tamperedRoot = Join-Path $testRoot 'release-tampered'
+    Copy-Item -LiteralPath $releaseRoot -Destination $tamperedRoot -Recurse
+    $tamperedSet = Join-Path $testRoot 'tampered-set'
+    Copy-Item -LiteralPath $sealedRoot -Destination $tamperedSet -Recurse
+    Add-Content -LiteralPath (Join-Path $tamperedSet 'ItTiger.TigerMarkView.yaml') -Value 'Moniker: other' -Encoding utf8NoBOM
+    [IO.File]::Delete((Join-Path $tamperedRoot $archiveName))
+    $tampered = New-TigerMarkViewWinGetArchive -ManifestDirectory $tamperedSet -Version $artifactVersion -Path (Join-Path $tamperedRoot $archiveName)
+    $tamperedRecord = Get-Content -LiteralPath (Join-Path $tamperedRoot 'release-artifacts.json') -Raw | ConvertFrom-Json
+    $tamperedRecord.artifacts[1].sha256 = $tampered.sha256
+    $tamperedRecord.artifacts[1].length = $tampered.length
+    $tamperedRecord | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $tamperedRoot 'release-artifacts.json') -Encoding utf8NoBOM
+    @($tamperedRecord.artifacts | ForEach-Object { "$($_.sha256)  $($_.name)" }) |
+        Set-Content -LiteralPath (Join-Path $tamperedRoot 'SHA256SUMS.txt') -Encoding utf8NoBOM
+    Assert-Throws -MessagePattern 'does not hold the WinGet submission set' -Action {
+        & (Join-Path $automationRoot 'Assert-ReleaseArtifactManifest.ps1') `
+            -ArtifactDirectory $tamperedRoot `
+            -ExpectedVersion $artifactVersion `
+            -ExpectedCommit $artifactCommit | Out-Null
+    }
+    Write-Host 'PASS: a repacked archive is refused even when its own hash is recorded consistently'
+
     $wrongName = Join-Path $buildRoot 'TigerMarkView-setup.exe'
     Copy-Item -LiteralPath $builtInstaller -Destination $wrongName
     Assert-Throws -MessagePattern 'must be named' -Action {
         & (Join-Path $automationRoot 'New-ReleaseArtifactManifest.ps1') `
             -InstallerPath $wrongName `
+            -WinGetManifestDirectory $sealedRoot `
             -ArtifactDirectory (Join-Path $testRoot 'release-wrong') `
             -Version $artifactVersion `
             -CommitSha $artifactCommit | Out-Null
     }
     Write-Host 'PASS: only the expected release installer can close the set'
+
+    # The draft carries all four, and the workflow closes the set only from the sealed directory.
+    $publish = Get-Content -LiteralPath (Join-Path $automationRoot 'Publish-GitHubDraftRelease.ps1') -Raw
+    Assert-True ($publish.Contains('"TigerMarkView-$Version-WinGet.zip"')) 'The draft release uploads the WinGet archive.'
+    $releaseWorkflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github/workflows/release.yml') -Raw
+    $sealStep = $releaseWorkflow.IndexOf('Seal and record the WinGet submission set')
+    $closeStep = $releaseWorkflow.IndexOf('Close and hash the release artifact set')
+    Assert-True ($sealStep -gt 0 -and $closeStep -gt $sealStep) 'The workflow seals the WinGet set before it closes the release set.'
+    Assert-True ($releaseWorkflow -match '(?s)New-ReleaseArtifactManifest\.ps1.{0,400}?-WinGetManifestDirectory "artifacts/winget/manifests/i/ItTiger/TigerMarkView/\$env:RELEASE_VERSION".{0,200}?-ExpectedSubmissionDigest \$env:SUBMISSION_SHA256') `
+        'The release set is closed from the sealed directory and checked against the sealed digest.'
+    Assert-True ($releaseWorkflow -match 'artifacts/release/TigerMarkView-\$\{\{ inputs\.version \}\}-WinGet\.zip') `
+        'The validated release artifact carries the WinGet archive to the publication job.'
+    Assert-True (([regex]::Matches($releaseWorkflow, '-ExpectedSubmissionDigest')).Count -ge 3) `
+        'The archive is checked against the sealed digest when closed, when verified, and after the transfer.'
+    Write-Host 'PASS: the workflow and the draft carry the WinGet archive packed from the sealed set'
 
     Write-Host
     Write-Host 'PASS: release automation foundation' -ForegroundColor Green

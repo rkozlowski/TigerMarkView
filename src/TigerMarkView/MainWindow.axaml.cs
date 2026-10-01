@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -1129,11 +1130,24 @@ public partial class MainWindow : Window
     /// </summary>
     private void RebuildRecentFilesMenu()
     {
-        var items = BuildRecentFileItems();
+        var hasRecentFiles = _settings.RecentFiles.Count > 0;
 
-        OpenRecentMenuItem.ItemsSource = items;
-        OpenRecentMenuItem.IsEnabled = items.Count > 0;
-        OpenRecentToolbarButton.IsEnabled = items.Count > 0;
+        OpenRecentMenuItem.ItemsSource = BuildRecentFileItems();
+        OpenRecentMenuItem.IsEnabled = hasRecentFiles;
+        OpenRecentToolbarButton.IsEnabled = hasRecentFiles;
+    }
+
+    /// <summary>
+    /// File &gt; Open Recent &gt; Clear Recent Files: forgets the list at once and saves that, so the
+    /// next run starts with nothing to offer either. No confirmation, because nothing is lost but the
+    /// shortcuts — the documents themselves are not touched, and the session's navigation trail is a
+    /// different list that this does not reach.
+    /// </summary>
+    private void OnClearRecentFilesClick(object? sender, RoutedEventArgs e)
+    {
+        _settings.ClearRecentFiles();
+        RebuildRecentFilesMenu();
+        SaveSettings();
     }
 
     /// <summary>
@@ -1148,12 +1162,14 @@ public partial class MainWindow : Window
     /// they are built here, from <c>_settings.RecentFiles</c>, by the same code — exactly as
     /// <see cref="BuildHistoryItems"/> feeds the two history surfaces. There is no second recent-files
     /// list anywhere, so ordering, labels, tooltips and open semantics cannot differ between the two.
+    /// Clear Recent Files closes the list on both surfaces for the same reason, after a separator, and
+    /// only when there is something to clear.
     /// </remarks>
-    private List<MenuItem> BuildRecentFileItems()
+    private List<Control> BuildRecentFileItems()
     {
         var paths = _settings.RecentFiles;
         var labels = BuildDocumentLabels(paths);
-        var items = new List<MenuItem>(paths.Count);
+        var items = new List<Control>(paths.Count + 2);
 
         for (var i = 0; i < paths.Count; i++)
         {
@@ -1167,6 +1183,16 @@ public partial class MainWindow : Window
             item.Click += (_, _) => OpenFile(target, DocumentOpenOrigin.ExplicitOpen);
 
             items.Add(item);
+        }
+
+        if (paths.Count > 0)
+        {
+            var clear = new MenuItem { Header = "_Clear Recent Files" };
+            AutomationProperties.SetAutomationId(clear, "ClearRecentFilesMenuItem");
+            clear.Click += OnClearRecentFilesClick;
+
+            items.Add(new Separator());
+            items.Add(clear);
         }
 
         return items;
@@ -1209,7 +1235,7 @@ public partial class MainWindow : Window
     /// <see cref="PlacementMode.BottomEdgeAlignedLeft"/> lines the two left edges up, which is what
     /// makes the list look attached to the chevron the reader clicked.
     /// </remarks>
-    private static void ShowToolbarFlyout(List<MenuItem> items, Control anchor)
+    private static void ShowToolbarFlyout(IEnumerable<Control> items, Control anchor)
     {
         var flyout = new MenuFlyout
         {

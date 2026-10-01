@@ -62,7 +62,8 @@ There are five ways to open a document:
   Choose another app** with **Always**, or in **Settings > Apps > Default apps**; if you have never
   chosen one, Windows may already open Markdown files with TigerMarkView.
 - **File > Open Recent** — the last 10 documents you opened explicitly, newest first. The toolbar can
-  show the same list too; see [Toolbar buttons](#toolbar-buttons).
+  show the same list too; see [Toolbar buttons](#toolbar-buttons). **Clear Recent Files**, at the end
+  of the list, empties it at once; the documents themselves are not touched.
 - **From the command line** — `TigerMarkView.exe C:\notes\README.md` opens that file at startup.
 
 ### Open Recent is not the same as history
@@ -287,7 +288,7 @@ apply on screen, in an exported PDF, and in `tiger-mark`.
 
 Pictures work as usual. Local images load from beside the file, and web images load from the web, like
 the badges on a project's README — which also means that the server hosting a web image can see that
-the document was opened. Nothing else in a document can reach the network.
+the document was opened (see the [privacy statement](PRIVACY.md)). Nothing else in a document can reach the network.
 Web images do not receive browser cookies or Windows sign-in credentials. A picture that requires
 you to sign in will not load; open its website in your browser to view it there.
 
@@ -320,8 +321,13 @@ Between sessions, TigerMarkView remembers:
 - which optional toolbar buttons you added.
 
 These are kept in a small settings file in your own user profile, under
-`%LocalAppData%\TigerMarkView`. Deleting it resets TigerMarkView to its defaults; nothing else is
-affected.
+`%LocalAppData%\TigerMarkView`, and are not sent anywhere. Deleting that folder while TigerMarkView is
+closed resets it to its defaults; nothing else is affected. To forget only the recent files, choose
+**File > Open Recent > Clear Recent Files**.
+
+Upgrading to a newer version keeps all of this. Uninstalling TigerMarkView removes it for the Windows
+account that runs the uninstall. The [privacy statement](PRIVACY.md) describes exactly what is stored,
+what uninstalling removes, and when a document makes TigerMarkView request web images.
 
 ## Troubleshooting
 

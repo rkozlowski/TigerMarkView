@@ -76,8 +76,22 @@ executable = "TigerMarkView.exe"         # the completion page's Launch check bo
 [registration]
 display_icon = "TigerMarkView.exe"
 
+# What the application wrote while it ran - settings with the Open Recent list, the WebView2 profiles
+# and the generated pages - goes with an explicit uninstall, for the account that runs it. TigerSetup
+# runs an uninstall-phase action on an uninstall only and never on an upgrade, so upgrades keep it.
+# The program is packaged, because the install root is gone by the time a post-uninstall action runs.
+[[actions]]
+name = "remove-local-data"
+phase = "post-uninstall"
+run_on = ["uninstall"]
+kind = "cmd"
+source = "actions/remove-local-data.cmd"
+timeout_seconds = 60
+on_failure = "continue"                  # a held file must not roll the uninstall back; it is reported
+
 # The Inno Setup installation of 0.9.0 and earlier. The first TigerSetup install on a machine that
-# holds it runs its own quiet uninstaller first; settings in %LOCALAPPDATA%\TigerMarkView survive.
+# holds it runs its own quiet uninstaller first; that is a migration, not an uninstall, so settings in
+# %LOCALAPPDATA%\TigerMarkView survive it.
 [legacy]
 installer_type = "inno"
 registration_key = "{E718860E-EDE4-4ACC-8235-BCF1DD40FC25}_is1"

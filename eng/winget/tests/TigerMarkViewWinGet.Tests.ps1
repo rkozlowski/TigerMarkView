@@ -296,6 +296,49 @@ exit /b 2
     Assert-True ($tampered.digest -cne $stored.digest) 'An edited manifest must change the submission digest.'
     Write-Host 'PASS: the submission digest survives a copy and detects an edit'
 
+    # --- The release's WinGet archive ---
+
+    # The archive is the same set in another container: flat, exactly the three manifests, and the
+    # same submission digest as the directory it was packed from.
+    $archiveRoot = Join-Path $testRoot 'archive'
+    New-Item -ItemType Directory -Path $archiveRoot -Force | Out-Null
+    $archivePath = Join-Path $archiveRoot $release.wingetArchiveFileName
+    $archive = New-TigerMarkViewWinGetArchive -ManifestDirectory $storedDirectory -Version $version -Path $archivePath
+    Assert-True ($release.wingetArchiveFileName -ceq "TigerMarkView-$version-WinGet.zip") 'The archive is named after the release version.'
+    Assert-True ($archive.digest -ceq $stored.digest) 'The archive holds the set it was packed from.'
+    Assert-True ((Read-TigerMarkViewWinGetArchive -Path $archivePath -Version $version).digest -ceq $stored.digest) `
+        'Reading the archive back reproduces the submission digest.'
+    Assert-Throws -MessagePattern 'already exists|being used|exists' -Action {
+        New-TigerMarkViewWinGetArchive -ManifestDirectory $storedDirectory -Version $version -Path $archivePath
+    }
+    Assert-Throws -MessagePattern 'must be named' -Action {
+        New-TigerMarkViewWinGetArchive -ManifestDirectory $storedDirectory -Version $version -Path (Join-Path $archiveRoot 'winget.zip')
+    }
+
+    Add-Type -AssemblyName System.IO.Compression
+    function New-TestArchive([string] $Name, [string[]] $Entries) {
+        $path = Join-Path $archiveRoot $Name
+        $zip = [IO.Compression.ZipFile]::Open($path, [IO.Compression.ZipArchiveMode]::Create)
+        try {
+            foreach ($entryName in $Entries) {
+                $source = Join-Path $storedDirectory ([IO.Path]::GetFileName($entryName))
+                if (Test-Path -LiteralPath $source) { $null = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $source, $entryName) }
+                else { $null = $zip.CreateEntry($entryName) }
+            }
+        }
+        finally { $zip.Dispose() }
+        $path
+    }
+    $extra = New-TestArchive 'extra.zip' (@($release.manifestFileNames) + 'README.txt')
+    $short = New-TestArchive 'short.zip' @($release.manifestFileNames[0], $release.manifestFileNames[1])
+    $nested = New-TestArchive 'nested.zip' @($release.manifestFileNames | ForEach-Object { "manifests/$_" })
+    foreach ($bad in $extra, $short, $nested) {
+        Assert-Throws -MessagePattern 'exactly the three submission manifests' -Action {
+            Read-TigerMarkViewWinGetArchive -Path $bad -Version $version
+        }
+    }
+    Write-Host 'PASS: the release archive holds exactly the sealed set, and anything else is refused'
+
     # --- The sealing gate ---
 
     $installerHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash

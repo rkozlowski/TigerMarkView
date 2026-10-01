@@ -81,3 +81,91 @@ foreach ($script in 'Build-Installer.ps1', 'Assert-Installer.ps1', 'Prepare-Tige
 Assert-True ($workflow -match '(?m)^\s+TIGER_SETUP: \$\{\{ steps\.tigersetup\.outputs\.path \}\}\r?$') `
     'The builder path must reach the scripts through an environment variable.'
 Write-Host 'PASS: the release workflow builds with exactly the pinned TigerSetup builder'
+
+# --- local data: removed by an explicit uninstall, kept by an upgrade ----------------------------
+
+$action = Get-TomlSection -Lines $manifestLines -Section 'actions'
+Assert-True (@($manifestLines | Where-Object { $_ -match '^\s*\[\[actions\]\]' }).Count -eq 1) 'TigerSetup.toml must declare exactly one custom action.'
+Assert-True ($action.name -ceq 'remove-local-data' -and $action.phase -ceq 'post-uninstall' -and $action.kind -ceq 'cmd' -and
+    $action.source -ceq 'actions/remove-local-data.cmd' -and $action.on_failure -ceq 'continue') `
+    'The local-data removal must be the packaged cmd action remove-local-data, after an uninstall, reporting rather than rolling back a failure.'
+Assert-True (@($manifestLines | Where-Object { $_ -match '^\s*run_on\s*=\s*\["uninstall"\]\s*(#.*)?$' }).Count -eq 1) `
+    'The local-data removal must run on an uninstall only, never on an install, upgrade or repair.'
+
+# The folders the action removes are the ones the application writes: settings and WebView2 profiles
+# under the user's Local AppData, generated pages under the user's temporary folder.
+$actionScript = Join-Path $repositoryRoot 'installer\actions\remove-local-data.cmd'
+$actionText = Get-Content -LiteralPath $actionScript -Raw
+$appSources = @(
+    'src\TigerMarkView\Settings\SettingsStore.cs'
+    'src\TigerMarkView\Hosting\WebViewProfile.cs'
+    'src\TigerMarkView.Pdf\OffScreenWebViewHost.cs'
+) | ForEach-Object { Get-Content -LiteralPath (Join-Path $repositoryRoot $_) -Raw }
+foreach ($source in $appSources) {
+    Assert-True ($source -match 'SpecialFolder\.LocalApplicationData\),\s*"TigerMarkView"') `
+        'Every per-user data folder the application writes must be %LOCALAPPDATA%\TigerMarkView, the folder the uninstall removes.'
+}
+$tempSources = @(
+    'src\TigerMarkView\MainWindow.axaml.cs'
+    'src\TigerMarkView\HelpWindow.axaml.cs'
+    'src\TigerMarkView.Pdf\OffScreenPdfHost.cs'
+) | ForEach-Object { Get-Content -LiteralPath (Join-Path $repositoryRoot $_) -Raw }
+foreach ($source in $tempSources) {
+    Assert-True ($source -match 'Path\.GetTempPath\(\),\s*"TigerMarkView"') `
+        'Every generated page must live under %TEMP%\TigerMarkView, the folder the uninstall removes.'
+}
+Assert-True ($actionText.Contains('set "data=%LOCALAPPDATA%\TigerMarkView"') -and $actionText.Contains('set "pages=%TEMP%\TigerMarkView"')) `
+    'remove-local-data.cmd must remove exactly %LOCALAPPDATA%\TigerMarkView and %TEMP%\TigerMarkView.'
+Assert-True ([IO.File]::ReadAllText($actionScript) -notmatch "(?<!`r)`n") 'remove-local-data.cmd must have CRLF line endings, which cmd.exe needs for its labels.'
+Write-Host 'PASS: an uninstall-only action removes exactly the folders the application writes'
+
+# The script itself, against redirected profile folders: what it removes, what it leaves alone, and
+# that a link inside the data is removed without being followed.
+$sandbox = Join-Path ([IO.Path]::GetTempPath()) ('TigerMarkView-remove-local-data-' + [Guid]::NewGuid().ToString('N'))
+try {
+    $localAppData = Join-Path $sandbox 'Local'
+    $temp = Join-Path $sandbox 'Temp'
+    $outside = Join-Path $sandbox 'Outside'
+    $null = New-Item -ItemType Directory -Force -Path (Join-Path $localAppData 'TigerMarkView\WebView2\Viewer'),
+        (Join-Path $temp 'TigerMarkView\pdf'), (Join-Path $localAppData 'Other'), $outside
+    Set-Content -LiteralPath (Join-Path $localAppData 'TigerMarkView\settings.json') -Value '{ "recentFiles": [ "C:\\docs\\a.md" ] }'
+    Set-Content -LiteralPath (Join-Path $temp 'TigerMarkView\preview.html') -Value '<p>a document</p>'
+    Set-Content -LiteralPath (Join-Path $localAppData 'Other\keep.txt') -Value 'another application'
+    Set-Content -LiteralPath (Join-Path $outside 'keep.txt') -Value 'reached only through a link'
+    $null = New-Item -ItemType Junction -Path (Join-Path $localAppData 'TigerMarkView\link') -Target $outside
+
+    function Invoke-RemoveLocalData([string] $LocalAppDataValue) {
+        $start = [Diagnostics.ProcessStartInfo]::new('cmd.exe')
+        foreach ($argument in '/d', '/s', '/c', $actionScript) { $start.ArgumentList.Add($argument) }
+        $start.UseShellExecute = $false
+        $start.RedirectStandardInput = $true
+        $start.RedirectStandardOutput = $true
+        if ($LocalAppDataValue) { $start.Environment['LOCALAPPDATA'] = $LocalAppDataValue } else { $null = $start.Environment.Remove('LOCALAPPDATA') }
+        $start.Environment['TEMP'] = $temp
+        $process = [Diagnostics.Process]::Start($start)
+        $process.StandardInput.Close()
+        $output = $process.StandardOutput.ReadToEnd()
+        $process.WaitForExit()
+        [pscustomobject]@{ exitCode = $process.ExitCode; output = $output.Trim() }
+    }
+
+    $removed = Invoke-RemoveLocalData $localAppData
+    Assert-True ($removed.exitCode -eq 0) "remove-local-data.cmd exited $($removed.exitCode): $($removed.output)"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $localAppData 'TigerMarkView')) -and
+        -not (Test-Path -LiteralPath (Join-Path $temp 'TigerMarkView'))) 'The settings, profiles and generated pages are removed.'
+    Assert-True ((Test-Path -LiteralPath (Join-Path $localAppData 'Other\keep.txt')) -and (Test-Path -LiteralPath (Join-Path $outside 'keep.txt'))) `
+        'Nothing outside the two folders is touched, including what a link inside them points to.'
+    Assert-True ((Invoke-RemoveLocalData $localAppData).exitCode -eq 0) 'Removing data that is already gone succeeds: the action is safe to run again.'
+    Assert-True ((Invoke-RemoveLocalData '').exitCode -eq 2) 'Without a profile folder to name, the action removes nothing and says so.'
+
+    $null = New-Item -ItemType Directory -Force -Path (Join-Path $localAppData 'TigerMarkView')
+    $held = [IO.File]::Open((Join-Path $localAppData 'TigerMarkView\held.txt'), 'Create', 'ReadWrite', 'None')
+    try { $blocked = Invoke-RemoveLocalData $localAppData }
+    finally { $held.Dispose() }
+    Assert-True ($blocked.exitCode -eq 1 -and $blocked.output -match 'Could not remove') `
+        'A file something still holds is reported as a failure, never as removed.'
+    Write-Host 'PASS: remove-local-data.cmd removes the application''s data and nothing else'
+}
+finally {
+    [IO.Directory]::Delete($sandbox, $true)
+}

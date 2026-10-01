@@ -12,7 +12,8 @@
     own.
 
     .PARAMETER ArtifactDirectory
-    The validated release directory: installer, SHA256SUMS.txt, release-artifacts.json.
+    The validated release directory: installer, WinGet manifest archive, SHA256SUMS.txt,
+    release-artifacts.json.
 
     .PARAMETER Version
     The release version.
@@ -117,6 +118,7 @@ $tag = "v$Version"
 $title = "TigerMarkView $Version"
 $assetNames = @(
     "TigerMarkView-$Version-win-x64-setup.exe"
+    "TigerMarkView-$Version-WinGet.zip"
     'SHA256SUMS.txt'
     'release-artifacts.json'
 )
@@ -249,7 +251,7 @@ if (-not [string]::IsNullOrWhiteSpace($RunUrl)) {
 $report = New-TigerMarkViewReleaseReport -Title "Draft GitHub Release for TigerMarkView $Version" `
     -Checks $checks `
     -Handoff @(
-        "Review the draft at $draftUrl - tag, commit, the three assets, the recorded hashes, and the notes."
+        "Review the draft at $draftUrl - tag, commit, the four assets, the recorded hashes, and the notes."
         'Confirm the notes state the runtime prerequisites and the current unsigned status.'
         'Publish the draft explicitly. Automation never publishes it.'
     ) `

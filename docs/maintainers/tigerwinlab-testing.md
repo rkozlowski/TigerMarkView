@@ -61,23 +61,27 @@ then runs two lab phases on `TigerWinLab-Win11-Clean`.
 **Installer acceptance** - `eng/lab/installer/accept.ps1` as one `-Desktop` job per Windows theme
 (`-Theme light|dark|both`, both by default), offline, with the viewer's own theme set to match. The
 host stages the candidate, the published installer it upgrades from, and the .NET 10 Desktop Runtime
-installer (Microsoft-signed; Windows 11 already carries WebView2). Every assertion is this
+installer (Microsoft-signed; Windows 11 already carries WebView2), and a later installer the candidate is
+upgraded to in place (by default a fast local build of the next patch version). Every assertion is this
 repository's; `eng/lab/installer/shell.ps1` reads the interactive user's own hive and shell as that
 user. In order:
 
 | Phase | Proves |
 |---|---|
-| `fresh-install` | a quiet per-user install: files, Add/Remove Programs, one user PATH entry, the Start Menu shortcut, the `TigerMarkView.Markdown` ProgID with the exact `"<exe>" "%1"` command, `OpenWithProgids` for `.md` and `.markdown`, the Default apps capability, TigerMarkView in the list `SHAssocEnumHandlers` gives Open with, no extension default or `UserChoice` written (what a ShellExecute of a `.md` file - a double-click's path - then opens is recorded), `tiger-mark` runs; then the registered quiet uninstall removes all of it |
+| `fresh-install` | a quiet per-user install: files, Add/Remove Programs, one user PATH entry, the Start Menu shortcut, the `TigerMarkView.Markdown` ProgID with the exact `"<exe>" "%1"` command, `OpenWithProgids` for `.md` and `.markdown`, the Default apps capability, TigerMarkView in the list `SHAssocEnumHandlers` gives Open with, no extension default or `UserChoice` written (what a ShellExecute of a `.md` file - a double-click's path - then opens is recorded), `tiger-mark` runs; then the registered quiet uninstall removes all of it, the user's `%LOCALAPPDATA%\TigerMarkView` and `%TEMP%\TigerMarkView` included, with `remove-local-data` reported `completed` |
 | `upgrade` | the published Inno Setup release installed per user with its PATH task; the candidate replaces it in place: Inno registration and `unins000.exe` gone, one PATH entry, settings byte-identical, and no default written |
 | `shell-open` | `IAssocHandler::Invoke` - Explorer's Open with - on a document whose folder and name carry spaces, Polish letters, an en dash and a diaeresis: the viewer shows it, the process command line is exactly the registered one, the file enters Open Recent, and the document area is dark or light as the theme asks |
 | `navigation` | a real click on a local link opens the target, which does not enter Open Recent |
 | `picker-open` | File > Open through the real dialog enters Open Recent |
 | `drag-drop` | Explorer beside the viewer; a real pointer drag of a file onto the rendered document, the hit test proving the drop point is the WebView; the file opens and enters Open Recent |
-| `uninstall` | the upgraded installation removed: files, registration, PATH, handler and capability gone; settings kept; `.md` resolving exactly as before the first install |
+| `upgrade-in-place` | the viewer closed and the candidate upgraded to the later installer: the later version installed, `remove-local-data` not run, settings byte-identical with the three opened documents still in Open Recent, and the WebView2 viewer profile kept |
+| `clear-recent` | the upgraded viewer opened on a document; **File > Open Recent > Clear Recent Files** reached by real pointer input (the menu captured in the run's theme); the saved list empty at once and still empty after the viewer closes, the theme setting kept, and the documents untouched |
+| `uninstall` | the upgraded installation removed: files, registration, PATH, handler and capability gone; the user's local data removed with `remove-local-data` reported `completed`; the documents untouched; `.md` resolving exactly as before the first install |
 | `machine-scope` | the published release installed for all users is replaced by `--scope machine` (HKLM registration, machine PATH, HKLM handler) and removed cleanly |
 
-The published installer comes from the latest GitHub release when GitHub still serves it, refused
-unless it matches the digest GitHub recorded. A release whose asset is no longer served is passed
+The published installer is the last Inno Setup release published on GitHub, 0.8.1
+(`-UpgradeFromVersion`), downloaded from GitHub and refused unless it matches the digest GitHub
+recorded. A release whose asset is no longer served is passed
 explicitly with `-UpgradeFromInstallerPath` - a retained copy of the published bytes, recorded by its
 SHA-256.
 

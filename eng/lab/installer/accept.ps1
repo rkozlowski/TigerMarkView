@@ -6,12 +6,12 @@
     .DESCRIPTION
     Runs inside a TigerWinLab -Desktop job (Windows PowerShell 5.1, session 0, as LabAdmin); the
     interactive standard user is reached through $TigerWinLabDesktop. run.json names the candidate
-    installer, the published installer it upgrades from, the .NET runtime to provision, and the theme
-    of the run. In order:
+    installer, the published Inno Setup installer it migrates from, a later installer it is upgraded
+    to in place, the .NET runtime to provision, and the theme of the run. In order:
 
       fresh-install      per user, no prerequisite prompt, registration, PATH, Start Menu, the
                          Markdown handler offered by Open with, no default written (what a double-click
-                         then does is recorded); then uninstall
+                         then does is recorded); then uninstall, which removes the local data too
       upgrade            the published Inno Setup installation, per user, replaced in place: legacy
                          registration and uninstaller gone, settings kept, one PATH entry, no default
                          written
@@ -20,8 +20,13 @@
       navigation         a followed link stays out of Open Recent
       picker-open        File > Open adds to Open Recent
       drag-drop          a file dragged from Explorer onto the document area opens and enters Open Recent
-      uninstall          files, registration, PATH, handler and capability gone; settings kept, and
-                         Markdown resolving exactly as before the first install
+      upgrade-in-place   the candidate upgraded to the later installer: the data removal does not run,
+                         settings, Open Recent and the WebView2 profile are kept
+      clear-recent       File > Open Recent > Clear Recent Files, by real pointer input: the saved list is
+                         empty, everything else in the settings and the documents themselves are kept
+      uninstall          files, registration, PATH, handler and capability gone; the local data
+                         removed, the documents kept, and Markdown resolving exactly as before the
+                         first install
       machine-scope      an all-users Inno Setup installation replaced by an all-users install, and
                          removed again
 
@@ -41,6 +46,7 @@ $LegacyKey = '{E718860E-EDE4-4ACC-8235-BCF1DD40FC25}_is1'
 $Config = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $Candidate = Join-Path $AppRoot ([string] $Config.candidate)
 $Legacy = Join-Path $AppRoot ([string] $Config.legacy)
+$Next = Join-Path $AppRoot ([string] $Config.next)
 
 $phases = New-Object System.Collections.Generic.List[object]
 
@@ -132,6 +138,36 @@ function Get-Settings([string] $LocalAppData) {
 function Test-Recent([object] $Settings, [string] $Path) {
     if ($null -eq $Settings -or $null -eq $Settings.PSObject.Properties['recentFiles']) { return $false }
     @($Settings.recentFiles | Where-Object { [string]::Equals([string] $_, $Path, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+}
+
+function Test-RecentEmpty([object] $Settings) {
+    $null -ne $Settings -and $null -ne $Settings.PSObject.Properties['recentFiles'] -and @($Settings.recentFiles).Count -eq 0
+}
+
+function Get-OutcomeAction {
+    <# What a run's --json outcome says about one custom action: parsed, and the action or $null. #>
+    param([object] $Run, [string] $Name)
+    $outcome = $null
+    try { $outcome = (@($Run.stdout) -join "`n") | ConvertFrom-Json } catch { $outcome = $null }
+    if ($null -eq $outcome) { return [pscustomobject]@{ parsed = $false; action = $null; text = 'no readable outcome' } }
+    $action = $null
+    if ($null -ne $outcome.PSObject.Properties['actions']) {
+        $action = @($outcome.actions | Where-Object { $_.name -eq $Name }) | Select-Object -First 1
+    }
+    $text = 'not run'
+    if ($null -ne $action) { $text = "status $($action.status), exit $($action.exit_code)" }
+    [pscustomobject]@{ parsed = $true; action = $action; text = $text }
+}
+
+function Test-DataRemoved {
+    <# The uninstall's own data removal: both folders gone, and the action reported it completed. #>
+    param([object] $Probe, [object] $Removal, [string] $Code)
+    $data = Join-Path $Probe.localAppData 'TigerMarkView'
+    $pages = Join-Path $Probe.temp 'TigerMarkView'
+    $ran = Get-OutcomeAction -Run $Removal -Name 'remove-local-data'
+    $gone = -not (Test-Path -LiteralPath $data) -and -not (Test-Path -LiteralPath $pages)
+    $completed = $null -ne $ran.action -and [string] $ran.action.status -eq 'completed'
+    New-Check 'Local data removed by the uninstall' $Code ($gone -and $completed) "$data exists: $(Test-Path -LiteralPath $data); $pages exists: $(Test-Path -LiteralPath $pages); remove-local-data: $($ran.text)."
 }
 
 function Wait-Viewer([string] $DocumentName, [int] $TimeoutSeconds = 90) {
@@ -250,7 +286,7 @@ try {
     $checks = New-Object System.Collections.Generic.List[object]
     if (Test-Path -LiteralPath $Root) { Remove-Item -LiteralPath $Root -Recurse -Force }
     $null = New-Item -ItemType Directory -Path $AppRoot, $IoRoot, $DocRoot -Force
-    foreach ($file in @($Config.candidate, $Config.legacy, $Config.runtime)) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $AppRoot }
+    foreach ($file in @($Config.candidate, $Config.legacy, $Config.next, $Config.runtime)) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $AppRoot }
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'shell.ps1') -Destination $Root
 
     $unicodeDoc = Join-Path $DocRoot 'Notatki – zażółć gęślą.md'
@@ -264,7 +300,7 @@ try {
     [IO.File]::WriteAllText($droppedDoc, "# Dropped file`r`n`r`nDragged from Explorer onto the document.`r`n", $utf8)
 
     $null = & icacls.exe $Root '/grant' 'Users:(OI)(CI)M' '/T' '/Q' 2>&1
-    $checks.Add((New-Check 'Payload staged' 'stage.files' ((Test-Path $Candidate) -and (Test-Path $Legacy) -and $LASTEXITCODE -eq 0) "Candidate $($Config.candidate) $($Config.version), legacy $($Config.legacy), documents under $DocRoot."))
+    $checks.Add((New-Check 'Payload staged' 'stage.files' ((Test-Path $Candidate) -and (Test-Path $Legacy) -and (Test-Path $Next) -and $LASTEXITCODE -eq 0) "Candidate $($Config.candidate) $($Config.version), legacy $($Config.legacy), later $($Config.next) $($Config.nextVersion), documents under $DocRoot."))
 
     # The two runtimes the product declares. .NET is installed from the staged offline installer;
     # the Evergreen WebView2 Runtime is part of Windows 11.
@@ -304,6 +340,10 @@ try {
     $checks.Add((New-Check 'Registered quiet uninstall' 'fresh.uninstall' ($removal.exitCode -eq 0) "$($after.registration.quietUninstall) -> exit $($removal.exitCode)."))
     $removed = Invoke-Shell -Mode probe -Name 'fresh-removed'
     foreach ($check in @(Test-Removed -Probe $removed -Prefix 'fresh-cleanup')) { $checks.Add($check) }
+    # The staged settings file is TigerMarkView's data like any other, so the uninstall removes it.
+    $checks.Add((Test-DataRemoved -Probe $removed -Removal $removal -Code 'fresh-cleanup.data'))
+    $reseeded = Invoke-UserScript $seed
+    $checks.Add((New-Check 'Viewer theme seeded again' 'fresh-cleanup.reseed' ($reseeded.exitCode -eq 0) "The later phases show the viewer in the $theme theme."))
     Add-Phase -Name 'fresh-install' -Checks $checks
 
     # --- upgrade from the published Inno Setup installation, per user -----------------------------
@@ -426,6 +466,58 @@ try {
     [IO.File]::WriteAllText((Join-Path $Artifacts 'settings-after-opens.json'), ($settings | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding $false))
     Add-Phase -Name 'drag-drop' -Checks $checks
 
+    # --- an upgrade keeps the local data ---------------------------------------------------------
+    # The installed candidate carries the uninstall-only data removal; an upgrade must not run it.
+    $checks = New-Object System.Collections.Generic.List[object]
+    Close-Windows 'TigerMarkView'
+    $settingsBeforeUpgrade = [IO.File]::ReadAllBytes($settingsPath)
+    $viewerProfile = Join-Path $upgraded.localAppData 'TigerMarkView\WebView2\Viewer'
+    $profileBeforeUpgrade = Test-Path -LiteralPath $viewerProfile
+    $inPlace = Invoke-Setup -FilePath $Next -Arguments @('install') -Name 'in-place-upgrade'
+    $checks.Add((New-Check 'Quiet upgrade to a later version' 'in-place.install' ($inPlace.exitCode -eq 0) "$($Config.next) exit $($inPlace.exitCode)."))
+    $inPlaceProbe = Invoke-Shell -Mode probe -Name 'in-place-after'
+    foreach ($check in @(Test-Installed -Probe $inPlaceProbe -Version $Config.nextVersion -Prefix 'in-place')) { $checks.Add($check) }
+    $ranOnUpgrade = Get-OutcomeAction -Run $inPlace -Name 'remove-local-data'
+    $checks.Add((New-Check 'The data removal does not run on an upgrade' 'in-place.no-removal' ($ranOnUpgrade.parsed -and $null -eq $ranOnUpgrade.action) "remove-local-data during the upgrade: $($ranOnUpgrade.text)."))
+    $afterUpgrade = Get-Settings $upgraded.localAppData
+    $keptRecent = (Test-Recent $afterUpgrade $unicodeDoc) -and (Test-Recent $afterUpgrade $pickedDoc) -and (Test-Recent $afterUpgrade $droppedDoc)
+    $checks.Add((New-Check 'Settings and Open Recent kept by the upgrade' 'in-place.settings' ((Test-Path -LiteralPath $settingsPath) -and $keptRecent -and [Convert]::ToBase64String($settingsBeforeUpgrade) -eq [Convert]::ToBase64String([IO.File]::ReadAllBytes($settingsPath))) "$settingsPath unchanged; the three opened documents still listed: $keptRecent."))
+    $checks.Add((New-Check 'WebView2 profile kept by the upgrade' 'in-place.profile' ($profileBeforeUpgrade -and (Test-Path -LiteralPath $viewerProfile)) "$viewerProfile before: $profileBeforeUpgrade; after: $(Test-Path -LiteralPath $viewerProfile)."))
+    Add-Phase -Name 'upgrade-in-place' -Checks $checks
+    $installRoot = Join-Path $inPlaceProbe.localAppData 'Programs\TigerMarkView'
+
+    # --- File > Open Recent > Clear Recent Files --------------------------------------------------
+    # Avalonia's File menu exposes no UIA invoke or expand pattern, so the menu is driven by real
+    # pointer input; its submenus are popup windows of the viewer's process.
+    $checks = New-Object System.Collections.Generic.List[object]
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command start-process -Parameters @{ filePath = (Join-Path $installRoot 'TigerMarkView.exe'); arguments = @(ConvertTo-Argument $pickedDoc) }
+    $reopened = Wait-Viewer -DocumentName (Split-Path -Leaf $pickedDoc)
+    $checks.Add((New-Check 'The upgraded viewer opens a document' 'clear.open' ($null -ne $reopened) "Window: $(if ($reopened) { $reopened.title })."))
+    $menuShown = $false
+    $menuFailure = ''
+    if ($null -ne $reopened) {
+        try {
+            $viewerProcess = [int] @(Get-Process -Name 'TigerMarkView' -ErrorAction Stop)[0].Id
+            $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command window -Parameters @{ hwnd = [int64] $reopened.hwnd; action = 'activate'; settleMilliseconds = 1000 }
+            $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command mouse -Parameters @{ selector = @{ hwnd = [int64] $reopened.hwnd; scope = 'descendants'; automationId = 'FileMenu'; index = 0 }; action = 'click'; settleMilliseconds = 800 }
+            $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-wait -Parameters @{ selector = @{ processId = $viewerProcess; automationId = 'OpenRecentMenuItem'; index = 0 }; timeoutSeconds = 15 }
+            $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command mouse -Parameters @{ selector = @{ processId = $viewerProcess; automationId = 'OpenRecentMenuItem'; index = 0 }; action = 'click'; settleMilliseconds = 800 }
+            $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-wait -Parameters @{ selector = @{ processId = $viewerProcess; automationId = 'ClearRecentFilesMenuItem'; index = 0 }; timeoutSeconds = 15 }
+            $menuShown = $true
+            $null = Save-DesktopCapture -Session $TigerWinLabDesktop -Name "clear-recent-menu-$($Config.windowsTheme).png" -Destination $Artifacts
+            $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command mouse -Parameters @{ selector = @{ processId = $viewerProcess; automationId = 'ClearRecentFilesMenuItem'; index = 0 }; action = 'click'; settleMilliseconds = 1000 }
+        }
+        catch { $menuFailure = $_.Exception.Message }
+    }
+    $checks.Add((New-Check 'Open Recent ends with Clear Recent Files' 'clear.menu' $menuShown "File > Open Recent > Clear Recent Files reached by pointer: $menuShown. $menuFailure"))
+    $checks.Add((New-Check 'The cleared list is saved at once' 'clear.saved' (Wait-Condition { Test-RecentEmpty (Get-Settings $upgraded.localAppData) }) $settingsPath))
+    $null = Save-DesktopCapture -Session $TigerWinLabDesktop -Name "clear-recent-after-$($Config.windowsTheme).png" -Destination $Artifacts
+    Close-Windows 'TigerMarkView'
+    $afterClear = Get-Settings $upgraded.localAppData
+    $checks.Add((New-Check 'The list stays empty after the viewer closes, and the other settings are kept' 'clear.persisted' ((Test-RecentEmpty $afterClear) -and [string] $afterClear.theme -eq $theme) "recentFiles: $(@($afterClear.recentFiles).Count) entries; theme: $($afterClear.theme)."))
+    $checks.Add((New-Check 'The documents themselves are untouched' 'clear.documents' ((Test-Path -LiteralPath $unicodeDoc) -and (Test-Path -LiteralPath $pickedDoc) -and (Test-Path -LiteralPath $droppedDoc) -and (Test-Path -LiteralPath $linkedDoc)) $DocRoot))
+    Add-Phase -Name 'clear-recent' -Checks $checks
+
     # --- uninstall after the upgrade ---------------------------------------------------------------
     $checks = New-Object System.Collections.Generic.List[object]
     foreach ($window in @(Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command list-windows -Parameters @{})) {
@@ -440,7 +532,8 @@ try {
     $checks.Add((New-Check 'Registered quiet uninstall' 'uninstall.run' ($removal.exitCode -eq 0) "$($installed.registration.quietUninstall) -> exit $($removal.exitCode)."))
     $removed = Invoke-Shell -Mode probe -Name 'uninstall-after'
     foreach ($check in @(Test-Removed -Probe $removed -Prefix 'uninstall')) { $checks.Add($check) }
-    $checks.Add((New-Check 'Settings kept' 'uninstall.settings' ((Test-Path -LiteralPath $settingsPath) -and [Convert]::ToBase64String($settingsBeforeRemoval) -eq [Convert]::ToBase64String([IO.File]::ReadAllBytes($settingsPath))) $settingsPath))
+    $checks.Add((Test-DataRemoved -Probe $removed -Removal $removal -Code 'uninstall.data'))
+    $checks.Add((New-Check 'The documents themselves are untouched' 'uninstall.documents' ((Test-Path -LiteralPath $unicodeDoc) -and (Test-Path -LiteralPath $pickedDoc) -and (Test-Path -LiteralPath $droppedDoc) -and $settingsBeforeRemoval.Length -gt 0) $DocRoot))
     $checks.Add((New-Check 'Markdown resolves as before the installer' 'uninstall.association-restored' (-not $removed.extensions.'.md'.classDefault -and $removed.extensions.'.md'.userChoice -eq $mdBefore.userChoice -and $removed.extensions.'.md'.openCommand -eq $mdBefore.openCommand) "Opening a .md file resolves to '$($removed.extensions.'.md'.openCommand)' (before any install: '$($mdBefore.openCommand)')."))
     Add-Phase -Name 'uninstall' -Checks $checks
 

@@ -331,4 +331,60 @@ public class ApplicationSettingsTests
         Assert.Null(settings.Window.X);
         Assert.Null(settings.Window.Y);
     }
+
+    [Fact]
+    public void ClearingRecentFilesForgetsEveryEntryAndNothingElse()
+    {
+        var settings = new ApplicationSettings
+        {
+            Theme = MarkdownTheme.Dark,
+            EditorType = EditorType.Custom,
+            CustomEditorPath = @"C:\Tools\editor.exe",
+            ToolbarOpenRecentVisible = true,
+            PdfPageNumbers = true,
+        };
+        settings.AddRecentFile(@"C:\docs\a.md");
+        settings.AddRecentFile(@"C:\docs\b.md");
+
+        settings.ClearRecentFiles();
+
+        Assert.Empty(settings.RecentFiles);
+        Assert.Equal(MarkdownTheme.Dark, settings.Theme);
+        Assert.Equal(EditorType.Custom, settings.EditorType);
+        Assert.Equal(@"C:\Tools\editor.exe", settings.CustomEditorPath);
+        Assert.True(settings.ToolbarOpenRecentVisible);
+        Assert.True(settings.PdfPageNumbers);
+    }
+
+    /// <summary>
+    /// What is saved after Clear Recent Files is what the next run loads: the cleared list is written
+    /// as an empty list, and loading and normalising it does not bring any entry back.
+    /// </summary>
+    [Fact]
+    public void ClearedRecentFilesStayClearedAfterTheSettingsAreSavedAndLoaded()
+    {
+        var settings = ApplicationSettings.CreateDefault();
+        settings.AddRecentFile(@"C:\docs\a.md");
+        var saved = ApplicationSettingsSerializer.Serialize(settings.Normalized());
+        Assert.Contains(@"a.md", saved);
+
+        settings.ClearRecentFiles();
+        var cleared = ApplicationSettingsSerializer.Serialize(settings.Normalized());
+        var restored = ApplicationSettingsSerializer.Deserialize(cleared).Normalized();
+
+        Assert.DoesNotContain(@"a.md", cleared);
+        Assert.Empty(restored.RecentFiles);
+    }
+
+    [Fact]
+    public void ARecentFileOpenedAfterClearingStartsANewList()
+    {
+        var settings = ApplicationSettings.CreateDefault();
+        settings.AddRecentFile(@"C:\docs\a.md");
+        settings.ClearRecentFiles();
+
+        settings.AddRecentFile(@"C:\docs\b.md");
+
+        Assert.Equal([@"C:\docs\b.md"], settings.RecentFiles);
+    }
 }
