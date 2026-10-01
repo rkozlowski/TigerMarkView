@@ -6,7 +6,7 @@
     Project-specific metadata such as AssemblyName and Description may remain in a project file.
   -->
   <PropertyGroup>
-    <Version>0.10.0</Version>
+    <Version>0.11.0</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>
     <UtcBuildTimestamp>$([System.DateTime]::UtcNow.ToString('yyyyMMdd.HHmmss'))</UtcBuildTimestamp>
@@ -26,6 +26,8 @@
     <RepositoryType>git</RepositoryType>
     <DocumentationUrl>$(RepositoryUrl)/blob/main/docs/HELP.md</DocumentationUrl>
     <IssueTrackerUrl>$(RepositoryUrl)/issues</IssueTrackerUrl>
+    <!-- The product privacy statement; WinGet publishes it as PrivacyUrl. -->
+    <PrivacyUrl>$(RepositoryUrl)/blob/main/docs/PRIVACY.md</PrivacyUrl>
     <WebsiteUrl>https://www.ittiger.net/</WebsiteUrl>
     <LicenseIdentity>MIT</LicenseIdentity>
 

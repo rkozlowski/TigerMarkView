@@ -41,8 +41,9 @@ release workflow generated and validated. Nothing downstream regenerates or edit
 
 The release workflow's artifact root is the submission directory itself: exactly the version,
 default-locale, and installer YAML files. `Assert-TigerMarkViewWinGetSubmission.ps1` proves the file
-set, encoding, identity, version, immutable asset URL, installer hash, and combined submission
-digest. The publication job downloads and rechecks that sealed set; it does not regenerate it.
+set, encoding, identity, version, the default-locale `PrivacyUrl` (Version.props `PrivacyUrl`, the
+product privacy statement WinGet policy requires), immutable asset URL, installer hash, and combined
+submission digest. The publication job downloads and rechecks that sealed set; it does not regenerate it.
 
 Post-release regeneration is verification-only. It writes to throwaway storage, compares all files
 byte-for-byte with the sealed set, and can never replace the sealed files. It needs the pinned TigerSetup

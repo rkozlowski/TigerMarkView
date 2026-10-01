@@ -5,7 +5,7 @@
 
     .DESCRIPTION
     installer\TigerSetup.toml repeats a few values TigerSetup cannot read from the build - the
-    product links and the WinGet descriptions - and names the extensions the Markdown handler is
+    product links, the privacy statement's URL and the WinGet descriptions - and names the extensions the Markdown handler is
     registered for. Version.props owns the first, Core's MarkdownLinkResolver the second; this suite
     fails when either drifts. It also checks the builder pin and that the release workflow provisions
     exactly that builder. It needs no TigerSetup, so it runs in normal CI.
@@ -55,6 +55,12 @@ Assert-True ($winget.package_url -ceq $repositoryUrl) 'TigerSetup.toml [winget] 
 Assert-True ($winget.publisher_url -ceq [string] $properties.WebsiteUrl) 'TigerSetup.toml [winget] publisher_url is not Version.props WebsiteUrl.'
 Assert-True ($winget.publisher_support_url -ceq (& $expand ([string] $properties.IssueTrackerUrl))) 'TigerSetup.toml [winget] publisher_support_url is not Version.props IssueTrackerUrl.'
 Assert-True ($winget.short_description -ceq [string] $properties.Description) 'TigerSetup.toml [winget] short_description is not Version.props Description.'
+# WinGet repository policy requires a product privacy statement; TigerSetup writes PrivacyUrl only when declared.
+$privacyUrl = & $expand ([string] $properties.PrivacyUrl)
+Assert-True ($privacyUrl -ceq "$repositoryUrl/blob/main/docs/PRIVACY.md" -and
+    (Test-Path -LiteralPath (Join-Path $repositoryRoot 'docs\PRIVACY.md') -PathType Leaf)) `
+    "Version.props PrivacyUrl '$privacyUrl' must be the default branch's docs/PRIVACY.md, and that file must exist."
+Assert-True ($winget.ContainsKey('privacy_url') -and $winget.privacy_url -ceq $privacyUrl) 'TigerSetup.toml [winget] privacy_url is not Version.props PrivacyUrl.'
 Assert-True (@($manifestLines | Where-Object { $_ -match '^\s*version\s*=' }).Count -eq 0) 'TigerSetup.toml must not state a version; [metadata] reads it from Version.props.'
 Write-Host 'PASS: TigerSetup.toml repeats Version.props exactly and states no version'
 

@@ -38,7 +38,8 @@ function Get-TigerMarkViewWinGetRelease {
         .DESCRIPTION
         The installer file name, the immutable release asset URL, the three
         manifest file names in submission order, and the winget-pkgs path are all
-        functions of the version alone. Deriving them once keeps the generator and
+        functions of the version alone; the privacy statement's URL comes from
+        Version.props. Deriving them once keeps the generator and
         the gate from drifting into two slightly different opinions.
     #>
     [CmdletBinding()]
@@ -52,10 +53,15 @@ function Get-TigerMarkViewWinGetRelease {
     if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
         throw "Invalid version '$Version'."
     }
+    $properties = Get-TigerMarkViewWinGetVersionProperty
     if ([string]::IsNullOrWhiteSpace($RepositoryUrl)) {
-        $RepositoryUrl = (Get-TigerMarkViewWinGetVersionProperty).RepositoryUrl
+        $RepositoryUrl = $properties.RepositoryUrl
     }
     $RepositoryUrl = $RepositoryUrl.TrimEnd('/')
+    $privacyUrl = ([string] $properties.PrivacyUrl).Replace('$(RepositoryUrl)', $RepositoryUrl)
+    if ([string]::IsNullOrWhiteSpace($privacyUrl)) {
+        throw 'Version.props does not define PrivacyUrl, which every WinGet submission must declare.'
+    }
 
     $packageIdentifier = 'ItTiger.TigerMarkView'
     $installerFileName = "TigerMarkView-$Version-win-x64-setup.exe"
@@ -66,6 +72,9 @@ function Get-TigerMarkViewWinGetRelease {
         repositoryUrl = $RepositoryUrl
         installerFileName = $installerFileName
         installerUrl = "$RepositoryUrl/releases/download/v$Version/$installerFileName"
+        # The product privacy statement; WinGet repository policy requires the
+        # default-locale manifest to name it as PrivacyUrl.
+        privacyUrl = $privacyUrl
         # The release asset that publishes the sealed set; see New-TigerMarkViewWinGetArchive.
         wingetArchiveFileName = "TigerMarkView-$Version-WinGet.zip"
         # Submission order: installer, default locale, version. Read-only consumers
@@ -189,6 +198,7 @@ function Read-TigerMarkViewWinGetSubmissionSet {
         locale = [pscustomobject][ordered]@{
             packageIdentifier = Get-TigerMarkViewWinGetManifestField -Lines $documents[1].lines -Name 'PackageIdentifier'
             packageVersion = Get-TigerMarkViewWinGetManifestField -Lines $documents[1].lines -Name 'PackageVersion'
+            privacyUrl = Get-TigerMarkViewWinGetManifestField -Lines $documents[1].lines -Name 'PrivacyUrl'
         }
         version = [pscustomobject][ordered]@{
             packageIdentifier = Get-TigerMarkViewWinGetManifestField -Lines $documents[2].lines -Name 'PackageIdentifier'

@@ -143,6 +143,10 @@ if ($submission.installer.installerUrl -cne $InstallerUrl -or
     $submission.installer.installerSha256 -cne $installerHash) {
     throw 'The generated installer manifest does not declare the release URL and this installer''s hash.'
 }
+if ($submission.locale.privacyUrl -cne $release.privacyUrl) {
+    throw ("The generated default-locale manifest declares PrivacyUrl '$($submission.locale.privacyUrl)', " +
+        "not the product privacy statement '$($release.privacyUrl)'.")
+}
 
 if ($Validate) {
     $null = Invoke-TigerMarkViewWinGetValidation -ManifestDirectory $manifestDirectory -WinGetPath $WinGetPath

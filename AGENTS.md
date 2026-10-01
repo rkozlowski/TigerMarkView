@@ -1,10 +1,10 @@
 ---
-TigerAiCore.version: 1.26.0
+TigerAiCore.version: 1.27.0
 ---
 
 # AI Agent Instructions
 
-<!-- TigerAiCore:begin version="1.26.0" sha256="d991df77e716d1f840891100fbacd0fca420d7c599f90350bce94035a420dcad" -->
+<!-- TigerAiCore:begin version="1.27.0" sha256="d991df77e716d1f840891100fbacd0fca420d7c599f90350bce94035a420dcad" -->
 ## TigerAiCore inherited rules
 
 <!-- Managed content. Author these rules in AGENTS.core.md in the TigerAiCore repository, never in a project copy. -->
@@ -941,7 +941,9 @@ lock, or deletes anything, and the default direct-write path must stay unchanged
 ### Versioning and packaging
 
 `Version.props` is the single source of `Version`, assembly/file/informational versions, `Product`,
-`Authors`, `Company`, `Copyright`, repository/documentation/issue links, and shared description.
+`Authors`, `Company`, `Copyright`, repository/documentation/issue/privacy-statement links, and shared
+description. The privacy statement link is the WinGet `PrivacyUrl`, which every submission set must
+declare.
 The four shipped projects import it explicitly; test/helper projects do not. `Directory.Build.props`
 contains repository-wide build policy only. Assemblies, About, TigerCli help/version output, installer
 metadata, artifact names, release automation, and WinGet preparation derive from `Version.props`. Do

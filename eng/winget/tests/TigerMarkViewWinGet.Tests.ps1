@@ -105,8 +105,10 @@ if ($arguments[0] -eq 'winget' -and $arguments[1] -eq 'prepare') {
         ($header -f 'installer') + "`n" + $common + "InstallerType: exe`nInstallers:`n- Architecture: x64`n" +
         "  Scope: user`n  InstallerUrl: <unresolved>`n  InstallerSha256: <unresolved>`n" +
         "ManifestType: installer`nManifestVersion: 1.12.0`n")
+    $privacy = if ($env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL) { "PrivacyUrl: $env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL`n" } else { '' }
     [IO.File]::WriteAllText((Join-Path $directory 'ItTiger.TigerMarkView.locale.en-US.yaml'),
-        ($header -f 'defaultLocale') + "`n" + $common + "PackageLocale: en-US`nManifestType: defaultLocale`nManifestVersion: 1.12.0`n")
+        ($header -f 'defaultLocale') + "`n" + $common + "PackageLocale: en-US`n" + $privacy +
+        "ManifestType: defaultLocale`nManifestVersion: 1.12.0`n")
     [IO.File]::WriteAllText((Join-Path $directory 'ItTiger.TigerMarkView.yaml'),
         ($header -f 'version') + "`n" + $common + "DefaultLocale: en-US`nManifestType: version`nManifestVersion: 1.12.0`n")
     exit 0
@@ -125,6 +127,9 @@ exit 2
     $env:TIGERMARKVIEW_TEST_TIGERSETUP_LOG = $fakeTigerSetupLog
     $env:TIGERMARKVIEW_TEST_TIGERSETUP_VERSION = $pinnedTigerSetup
     $env:TIGERMARKVIEW_TEST_TIGERSETUP_URL = ''
+    # What [winget] privacy_url in installer\TigerSetup.toml makes TigerSetup write.
+    $privacyUrl = 'https://github.com/rkozlowski/TigerMarkView/blob/main/docs/PRIVACY.md'
+    $env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL = $privacyUrl
 
     $defaultOutput = Join-Path $testRoot 'default'
     & $prepareScript `
@@ -161,6 +166,16 @@ exit 2
     }
     $env:TIGERMARKVIEW_TEST_TIGERSETUP_URL = ''
     Write-Host 'PASS: a generated set that does not declare the release URL is refused'
+
+    foreach ($generatedPrivacyUrl in '', 'https://www.ittiger.net/privacy') {
+        $env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL = $generatedPrivacyUrl
+        Assert-Throws -MessagePattern 'PrivacyUrl' -Action {
+            & $prepareScript -TigerSetupPath $fakeTigerSetup -InstallerPath $installerPath `
+                -OutputRoot (Join-Path $testRoot 'wrong-privacy') -ExpectedVersion $version | Out-Host
+        }
+    }
+    $env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL = $privacyUrl
+    Write-Host 'PASS: a generated set without the product privacy statement as PrivacyUrl is refused'
 
     $fakeWinGet = Join-Path $testRoot 'winget-test.cmd'
     $fakeWinGetContent = @'
@@ -249,6 +264,8 @@ exit /b 2
         'The submission documents must be the three expected manifests in submission order.'
     Assert-True ($stored.installer.installerUrl -ceq $release.installerUrl) `
         'The installer manifest must declare the immutable release asset URL.'
+    Assert-True ($release.privacyUrl -ceq $privacyUrl -and $stored.locale.privacyUrl -ceq $privacyUrl) `
+        'The default-locale manifest must declare the product privacy statement as PrivacyUrl.'
     Write-Host 'PASS: a prepared directory reads back as the three-file submission set'
 
     $extraFile = Join-Path $storedDirectory 'notes.txt'
@@ -380,6 +397,19 @@ exit /b 2
             -InstallerPath $otherInstaller | Out-Host
     }
     Write-Host 'PASS: sealing hashes the installer it is given and refuses a different one'
+
+    $noPrivacyDirectory = Join-Path $testRoot 'no-privacy'
+    New-Item -ItemType Directory -Path $noPrivacyDirectory -Force | Out-Null
+    foreach ($document in $stored.documents) {
+        Copy-Item -LiteralPath $document.path -Destination (Join-Path $noPrivacyDirectory $document.name)
+    }
+    $noPrivacyLocale = Join-Path $noPrivacyDirectory $release.manifestFileNames[1]
+    [IO.File]::WriteAllText($noPrivacyLocale,
+        (([IO.File]::ReadAllText($noPrivacyLocale) -split "`n" | Where-Object { $_ -notmatch '^PrivacyUrl:' }) -join "`n"))
+    Assert-Throws -MessagePattern 'PrivacyUrl' -Action {
+        & $assertScript -ManifestDirectory $noPrivacyDirectory -Version $version -InstallerPath $installerPath | Out-Host
+    }
+    Write-Host 'PASS: sealing refuses a set whose default-locale manifest lacks PrivacyUrl'
 
     Assert-Throws -MessagePattern 'not the same manifests' -Action {
         & $assertScript `
@@ -886,5 +916,6 @@ finally {
     Remove-Item Env:TIGERMARKVIEW_TEST_TIGERSETUP_LOG -ErrorAction SilentlyContinue
     Remove-Item Env:TIGERMARKVIEW_TEST_TIGERSETUP_VERSION -ErrorAction SilentlyContinue
     Remove-Item Env:TIGERMARKVIEW_TEST_TIGERSETUP_URL -ErrorAction SilentlyContinue
+    Remove-Item Env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

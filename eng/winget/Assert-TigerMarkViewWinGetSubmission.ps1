@@ -7,8 +7,9 @@
     The release workflow validates one manifest set and then uploads it. This is
     what makes "the same set" checkable on both sides of that upload: it asserts
     the directory holds exactly the three submission manifests, UTF-8 without a
-    byte-order mark, that all three agree on identity and version, and that the
-    installer manifest names the immutable v<version> release asset URL. It then
+    byte-order mark, that all three agree on identity and version, that the
+    default-locale manifest names the product privacy statement as PrivacyUrl, and
+    that the installer manifest names the immutable v<version> release asset URL. It then
     prints a digest over the three files.
 
     The validation job records that digest; the publication job downloads the
@@ -88,6 +89,10 @@ foreach ($document in @('installer', 'locale', 'version')) {
     }
 }
 
+if ($submission.locale.privacyUrl -cne $release.privacyUrl) {
+    throw ("The default-locale manifest declares PrivacyUrl '$($submission.locale.privacyUrl)'; " +
+        "the product privacy statement is '$($release.privacyUrl)'.")
+}
 if ($submission.installer.installerUrl -cne $release.installerUrl) {
     throw ("The installer manifest declares InstallerUrl '$($submission.installer.installerUrl)'; " +
         "the immutable release asset URL is '$($release.installerUrl)'.")

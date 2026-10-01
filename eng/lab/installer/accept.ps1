@@ -25,8 +25,8 @@
       clear-recent       File > Open Recent > Clear Recent Files, by real pointer input: the saved list is
                          empty, everything else in the settings and the documents themselves are kept
       uninstall          files, registration, PATH, handler and capability gone; the local data
-                         removed, the documents kept, and Markdown resolving exactly as before the
-                         first install
+                         removed, neighbouring data sharing its names' prefix and the documents kept,
+                         and Markdown resolving exactly as before the first install
       machine-scope      an all-users Inno Setup installation replaced by an all-users install, and
                          removed again
 
@@ -527,12 +527,26 @@ try {
     $checks.Add((New-Check 'The viewer closes' 'uninstall.viewer-closed' $closed 'Every TigerMarkView window was asked to close.'))
     $settingsBeforeRemoval = [IO.File]::ReadAllBytes($settingsPath)
     $installed = Invoke-Shell -Mode probe -Name 'uninstall-before'
+    # Another application's data whose names share the prefix of the two data folders and of the
+    # install root. The uninstall removes exactly its own folders, so every one of these is kept.
+    $neighbours = @(
+        (Join-Path $installed.localAppData 'TigerMarkView.Neighbour\keep.txt'),
+        (Join-Path $installed.localAppData 'TigerMarkView-keep.txt'),
+        (Join-Path $installed.localAppData 'Programs\TigerMarkView.Neighbour\keep.txt'),
+        (Join-Path $installed.temp 'TigerMarkView.Neighbour\keep.txt'),
+        (Join-Path $installed.temp 'TigerMarkView-keep.txt'))
+    foreach ($neighbour in $neighbours) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $neighbour) -Force | Out-Null
+        [IO.File]::WriteAllText($neighbour, 'another application', (New-Object Text.UTF8Encoding $false))
+    }
     $uninstallCommand = Split-Command ([string] $installed.registration.quietUninstall)
     $removal = Invoke-Setup -FilePath $uninstallCommand.program -Arguments @($uninstallCommand.arguments | Where-Object { $_ -notin '--quiet' }) -Name 'upgrade-uninstall'
     $checks.Add((New-Check 'Registered quiet uninstall' 'uninstall.run' ($removal.exitCode -eq 0) "$($installed.registration.quietUninstall) -> exit $($removal.exitCode)."))
     $removed = Invoke-Shell -Mode probe -Name 'uninstall-after'
     foreach ($check in @(Test-Removed -Probe $removed -Prefix 'uninstall')) { $checks.Add($check) }
     $checks.Add((Test-DataRemoved -Probe $removed -Removal $removal -Code 'uninstall.data'))
+    $keptNeighbours = @($neighbours | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+    $checks.Add((New-Check 'Neighbouring data is kept' 'uninstall.neighbours' ($keptNeighbours.Count -eq $neighbours.Count) "$($keptNeighbours.Count) of $($neighbours.Count) kept: $($neighbours -join '; ')."))
     $checks.Add((New-Check 'The documents themselves are untouched' 'uninstall.documents' ((Test-Path -LiteralPath $unicodeDoc) -and (Test-Path -LiteralPath $pickedDoc) -and (Test-Path -LiteralPath $droppedDoc) -and $settingsBeforeRemoval.Length -gt 0) $DocRoot))
     $checks.Add((New-Check 'Markdown resolves as before the installer' 'uninstall.association-restored' (-not $removed.extensions.'.md'.classDefault -and $removed.extensions.'.md'.userChoice -eq $mdBefore.userChoice -and $removed.extensions.'.md'.openCommand -eq $mdBefore.openCommand) "Opening a .md file resolves to '$($removed.extensions.'.md'.openCommand)' (before any install: '$($mdBefore.openCommand)')."))
     Add-Phase -Name 'uninstall' -Checks $checks

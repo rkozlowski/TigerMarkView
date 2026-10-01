@@ -118,6 +118,7 @@ tags = ["markdown", "pdf", "viewer"]
 package_url = "https://github.com/rkozlowski/TigerMarkView"
 publisher_url = "https://www.ittiger.net/"
 publisher_support_url = "https://github.com/rkozlowski/TigerMarkView/issues"
+privacy_url = "https://github.com/rkozlowski/TigerMarkView/blob/main/docs/PRIVACY.md"   # docs\PRIVACY.md; WinGet requires it
 short_description = "A local Markdown viewer, reviewer and PDF exporter."
 description = """
 TigerMarkView is a Windows desktop application for reading and reviewing local Markdown files.

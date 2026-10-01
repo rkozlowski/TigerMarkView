@@ -76,7 +76,7 @@ user. In order:
 | `drag-drop` | Explorer beside the viewer; a real pointer drag of a file onto the rendered document, the hit test proving the drop point is the WebView; the file opens and enters Open Recent |
 | `upgrade-in-place` | the viewer closed and the candidate upgraded to the later installer: the later version installed, `remove-local-data` not run, settings byte-identical with the three opened documents still in Open Recent, and the WebView2 viewer profile kept |
 | `clear-recent` | the upgraded viewer opened on a document; **File > Open Recent > Clear Recent Files** reached by real pointer input (the menu captured in the run's theme); the saved list empty at once and still empty after the viewer closes, the theme setting kept, and the documents untouched |
-| `uninstall` | the upgraded installation removed: files, registration, PATH, handler and capability gone; the user's local data removed with `remove-local-data` reported `completed`; the documents untouched; `.md` resolving exactly as before the first install |
+| `uninstall` | the upgraded installation removed: files, registration, PATH, handler and capability gone; the user's local data removed with `remove-local-data` reported `completed`; another application's files whose names share the prefix of the two data folders and the install root kept; the documents untouched; `.md` resolving exactly as before the first install |
 | `machine-scope` | the published release installed for all users is replaced by `--scope machine` (HKLM registration, machine PATH, HKLM handler) and removed cleanly |
 
 The published installer is the last Inno Setup release published on GitHub, 0.8.1
