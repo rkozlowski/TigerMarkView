@@ -48,7 +48,7 @@ internal sealed class OffScreenPdfHost : OffScreenWebViewHost
             htmlPath = WriteTemporaryHtml(request.Html);
             var htmlUri = new Uri(htmlPath);
 
-            ConfineToDocument(core, htmlUri);
+            ConfineToDocument(core, htmlUri, request.RemoteImages);
 
             if (await NavigateAsync(core, htmlUri.AbsoluteUri, "for export", cancellationToken) is
                 { } navigationError)
@@ -84,16 +84,17 @@ internal sealed class OffScreenPdfHost : OffScreenWebViewHost
     /// wait uses, is host-injected and unaffected. The page has no channel to this process (no web
     /// messages, no host objects), cannot navigate away from the file written for it or open a window,
     /// and every request it makes is held to <see cref="WebViewResourceBoundary"/> — the same boundary
-    /// the viewer applies — so an exported PDF can embed a remote image exactly as the viewer shows it.
+    /// the viewer applies, with the same Load Remote Images choice — so an exported PDF embeds a remote
+    /// image exactly when the viewer shows it.
     /// </remarks>
-    private static void ConfineToDocument(CoreWebView2 core, Uri documentUri)
+    private static void ConfineToDocument(CoreWebView2 core, Uri documentUri, bool remoteImages)
     {
         core.Settings.IsScriptEnabled = false;
         core.Settings.IsWebMessageEnabled = false;
         core.Settings.AreHostObjectsAllowed = false;
         core.Settings.AreDefaultScriptDialogsEnabled = false;
 
-        WebViewResourceBoundary.Apply(core);
+        WebViewResourceBoundary.Apply(core, () => remoteImages);
 
         core.NavigationStarting += (_, e) =>
         {

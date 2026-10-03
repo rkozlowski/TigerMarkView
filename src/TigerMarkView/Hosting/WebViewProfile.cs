@@ -1,22 +1,28 @@
 using Avalonia.Controls;
 using Avalonia.Platform;
+using TigerMarkView.Pdf;
 
 namespace TigerMarkView.Hosting;
 
 /// <summary>
-/// Points a <see cref="NativeWebView"/> at a browser profile under <c>%LocalAppData%</c> instead of
-/// the one WebView2 would otherwise create beside the executable.
+/// Runs a <see cref="NativeWebView"/> InPrivate, in a browser folder under <c>%LocalAppData%</c>
+/// instead of the one WebView2 would otherwise create beside the executable.
 /// </summary>
 /// <remarks>
+/// <para>
+/// InPrivate keeps the engine's browsing state — history, cache, sessions — in memory, so viewing a
+/// document leaves no browsing trail on disk, and the persistent profile earlier versions recorded is
+/// removed once. <see cref="InPrivateBrowsing"/> has the reasoning, shared with PDF export.
+/// </para>
 /// <para>
 /// With no user data folder set, WebView2 uses <c>&lt;exe name&gt;.WebView2</c> in the application
 /// directory. That is writable for a per-user install and is <em>not</em> writable for an all-users
 /// install under <c>%ProgramFiles%</c>. WebView2 cannot initialise there when it cannot create the
-/// profile directory. The installer offers an all-users mode, so the profile has to live somewhere
-/// the reader can write.
+/// folder. The installer offers an all-users mode, so the folder has to live somewhere the reader can
+/// write. Even InPrivate, the engine keeps its own runtime files there.
 /// </para>
 /// <para>
-/// It is a sibling of the PDF exporter's profile rather than the same folder. Two WebView2
+/// It is a sibling of the PDF exporter's folder rather than the same folder. Two WebView2
 /// environments in one process may share a user data folder only when their creation options match,
 /// and the viewer's options are Avalonia's to choose, not this project's — so the two are kept apart
 /// instead of coupled through something outside our control.
@@ -24,7 +30,7 @@ namespace TigerMarkView.Hosting;
 /// <para>
 /// Best-effort, like <see cref="Windowing.NativeTitleBar"/>: if the folder cannot be created the
 /// default is left in place, because a browser cache location must never be the reason a window fails
-/// to open.
+/// to open. InPrivate is requested either way.
 /// </para>
 /// </remarks>
 internal static class WebViewProfile
@@ -43,9 +49,12 @@ internal static class WebViewProfile
             return;
         }
 
+        windows.IsInPrivateModeEnabled = true;
+
         var folder = TryCreateViewerProfileFolder();
         if (folder is not null)
         {
+            InPrivateBrowsing.RemovePersistentProfile(folder);
             windows.UserDataFolder = folder;
         }
     }

@@ -94,4 +94,37 @@ public class WebResourcePolicyTests
     {
         Assert.False(WebResourcePolicy.Allows(new Uri("images/diagram.png", UriKind.Relative), WebResourceKind.Image));
     }
+
+    /// <summary>
+    /// Load Remote Images off refuses web images and nothing else changes: local and data images still
+    /// load, and every other rule stays exactly as strict.
+    /// </summary>
+    [Theory]
+    [InlineData("https://img.shields.io/badge/build-passing-green.svg", false)]
+    [InlineData("http://example.com/photo.png?size=large", false)]
+    [InlineData("HTTPS://EXAMPLE.COM/PHOTO.PNG", false)]
+    [InlineData("http://127.0.0.1:8080/local-service.png", false)]
+    [InlineData("file:///C:/Docs/images/diagram.png", true)]
+    [InlineData("data:image/png;base64,iVBORw0KGgo=", true)]
+    public void WithRemoteImagesOffOnlyWebImagesAreRefused(string uri, bool allowed)
+    {
+        Assert.Equal(allowed, WebResourcePolicy.Allows(new Uri(uri), WebResourceKind.Image, remoteImages: false));
+        Assert.True(WebResourcePolicy.Allows(new Uri(uri), WebResourceKind.Image, remoteImages: true));
+    }
+
+    [Theory]
+    [InlineData("file:///C:/Users/Reader/AppData/Local/Temp/TigerMarkView/preview-1.html?t=1", WebResourceKind.Document, true)]
+    [InlineData("https://attacker.example/frame.html", WebResourceKind.Document, false)]
+    [InlineData("https://attacker.example/collect", WebResourceKind.Other, false)]
+    public void TheRemoteImageSettingChangesNothingButImages(string uri, WebResourceKind kind, bool allowed)
+    {
+        Assert.Equal(allowed, WebResourcePolicy.Allows(new Uri(uri), kind, remoteImages: false));
+        Assert.Equal(allowed, WebResourcePolicy.Allows(new Uri(uri), kind, remoteImages: true));
+    }
+
+    [Fact]
+    public void RemoteImagesAreAllowedUnlessTurnedOff()
+    {
+        Assert.True(WebResourcePolicy.Allows(new Uri("https://example.com/a.png"), WebResourceKind.Image));
+    }
 }

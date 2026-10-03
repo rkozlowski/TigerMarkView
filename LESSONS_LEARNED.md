@@ -138,17 +138,49 @@ looking anywhere else; the fix belongs in TigerSetup's migration, not in a Tiger
 ## The Inno Setup migration source is the published 0.8.1, not the local copy
 
 **Area:** TigerWinLab installer acceptance (Inno Setup migration row)
-**Status:** Active
+**Status:** Active; prevented by `Test-TigerMarkViewRelease.ps1`
 
-The published v0.8.0 and v0.8.1 GitHub Releases no longer serve any asset, so
-`Test-TigerMarkViewRelease.ps1` stops before staging: it downloads the migration source only when
-GitHub records its digest. Two different files named `TigerMarkView-0.8.1-win-x64-setup.exe` sit under
-`artifacts\`: `CDD8978F...` in `artifacts\installer\` is a local build made before publication, and
-`B81118C9...` is the published asset, as `artifacts\winget-release\0.8.1\validation\result.json`
-records from its download on 2026-08-28.
+The v0.8.x GitHub Releases no longer serve any asset; they were withdrawn on purpose and are not
+restored. Two different files named `TigerMarkView-0.8.1-win-x64-setup.exe` sit under `artifacts\`:
+`CDD8978F...` in `artifacts\installer\` is a local build made before publication, and `B81118C9...` is
+the published asset, as `artifacts\winget-release\0.8.1\validation\result.json` records from its
+download on 2026-08-28. Migrating from the local build would prove an upgrade nobody ever installed.
 
-Pass the published bytes explicitly, for example
-`-UpgradeFromInstallerPath artifacts\lab\0.11.0\payload\TigerMarkView-0.8.1-win-x64-setup.exe`, and
-check its SHA-256 is `B81118C96655A7E6E28642A22AE5FC14CBD4EF47F2FA5928A35408833EE4BE9F` first.
+The script never downloads the migration source. It reads the retained copy at
+`artifacts\lab\retained\TigerMarkView-0.8.1-win-x64-setup.exe` (or `-UpgradeFromInstallerPath`) and
+refuses any file that does not hash to the recorded
+`B81118C96655A7E6E28642A22AE5FC14CBD4EF47F2FA5928A35408833EE4BE9F`. `artifacts\` is ignored, so a new
+machine has to be given that copy; any of the `payload\` copies above with that hash will do.
 
 **Generalization candidate:** none; the migration source is this product's history.
+
+## A UNC path in a Markdown link destination loses a backslash
+
+**Area:** TigerWinLab acceptance fixtures (network-share links)
+**Status:** Active
+
+In CommonMark `\\` is an escape for one backslash, so `[x](\\server\share\a.md)` links to `\server\share\a.md`, a
+root-relative path on the document's own drive, not to the share. A share-link fixture written that way tests a local link
+and cost a whole VM run before the cause was seen. Write share links in fixtures as raw HTML anchors
+(`<a href="\\server\share\a.md">`), as `shares.md` already does for images, or as `file://server/share/...`, and wait
+for the link element to exist before clicking: a window's title is set before its page has rendered.
+Read a transient status note (6 s) from `StatusText` by its automation id right after the click: a
+search of the whole window by text walks the page's UIA tree too and can finish after the note expired,
+which reported a correct refusal as a failure.
+
+**Generalization candidate:** none; fixture spelling is this payload's concern.
+
+## A guest scan that skips what it cannot read proves nothing
+
+**Area:** TigerWinLab active-content acceptance (browsing-history oracle)
+**Status:** Active; prevented by the oracle's unreadable count
+
+In Windows PowerShell the comma binds tighter than `-bor`: `New-Object IO.FileStream($path, $mode, $access, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)`
+passes a malformed argument list, and every open throws. The history scan caught that per file and moved on, so it reported
+no history record because it had read no file at all, and its positive control failed for no visible reason.
+
+Parenthesize the flag expression, and never let a scan oracle skip silently: `Find-EngineMarkers` counts unreadable files,
+the product check requires none, and the control must find its record. Prove a guest scan under Windows PowerShell 5.1
+against a local folder that does contain the marker before paying for a VM run.
+
+**Generalization candidate:** none; the oracle is this payload's.

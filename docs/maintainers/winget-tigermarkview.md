@@ -41,14 +41,14 @@ release workflow generated and validated. Nothing downstream regenerates or edit
 
 The release workflow's artifact root is the submission directory itself: exactly the version,
 default-locale, and installer YAML files. `Assert-TigerMarkViewWinGetSubmission.ps1` proves the file
-set, encoding, identity, version, the default-locale `PrivacyUrl`, immutable asset URL, installer
+set, encoding, identity, version, the default-locale `PrivacyUrl`, `LicenseUrl` and `ReleaseNotesUrl`,
+immutable asset URL, installer
 hash, and combined submission digest. `PrivacyUrl` must be exactly the version's own `PRIVACY.md`
 release asset, `https://github.com/rkozlowski/TigerMarkView/releases/download/v<version>/PRIVACY.md`
 (Version.props `PrivacyUrl` with `$(Version)`): a `blob/main` copy, a tag's repository file, another
 release's asset, another document, or a `releases/latest` URL is refused by generation and by sealing.
-TigerSetup writes `[winget] privacy_url` verbatim, so `installer\TigerSetup.toml` declares it with a
-`{version}` token that `Prepare-TigerMarkViewWinGet.ps1` resolves between `winget prepare` and
-`finalize`; that line is then exactly what TigerSetup writes for the literal URL. The publication job downloads and rechecks that sealed set; it does not regenerate it.
+The default-locale manifest also declares `LicenseUrl`, the `LICENSE` at the version's own tag
+(`blob/v<version>/LICENSE`), and `ReleaseNotesUrl`, the version's release (`releases/tag/v<version>`); and sealing refuse any other value. TigerSetup writes `[winget] privacy_url`, `license_url` `release_notes_url` verbatim, so `installer\TigerSetup.toml` declares each with a `{version}` token `Prepare-TigerMarkViewWinGet.ps1` resolves between `winget prepare` and `finalize`; each line is exactly what TigerSetup writes for the literal URL. The publication job downloads and rechecks that sealed set; it does not regenerate it.
 
 Post-release regeneration is verification-only. It writes to throwaway storage, compares all files
 byte-for-byte with the sealed set, and can never replace the sealed files. It needs the pinned TigerSetup

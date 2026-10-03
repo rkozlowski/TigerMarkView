@@ -23,8 +23,9 @@
     The manifests themselves are TigerSetup's: `tiger-setup winget prepare` writes
     them from installer\TigerSetup.toml and the installer's bytes, and
     `tiger-setup winget finalize` fills in the immutable release URL and the hash.
-    Between the two, the {version} token of the declared privacy_url is resolved, so
-    PrivacyUrl names the PRIVACY.md asset of this exact release. This script pins the
+    Between the two, the {version} token of the declared privacy_url, license_url and
+    release_notes_url is resolved, so PrivacyUrl names the PRIVACY.md asset of this exact
+    release, LicenseUrl its LICENSE at its tag, and ReleaseNotesUrl its release. This script pins the
     inputs - the builder installer\tigersetup.json names, the version, the file name,
     the URL - and proves the result is exactly the three submission manifests.
 
@@ -129,10 +130,11 @@ New-Item -ItemType Directory -Path $manifestDirectory -Force | Out-Null
 $manifest = Join-Path $repoRoot 'installer\TigerSetup.toml'
 & $tigerSetup winget prepare $manifest --installer $InstallerPath --output $manifestDirectory | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "tiger-setup winget prepare failed with exit code $LASTEXITCODE." }
-# The one value TigerSetup cannot derive: [winget] privacy_url names the version's own release
-# asset through a {version} token, written into the generated line here. The equality check below
-# refuses anything that does not then name exactly this version's PRIVACY.md.
-$null = Resolve-TigerMarkViewWinGetPrivacyUrl -ManifestDirectory $manifestDirectory -Version $Version
+# The values TigerSetup cannot derive: [winget] privacy_url, license_url and release_notes_url name
+# this version's own release asset, tag and release page through a {version} token, written into the
+# generated lines here. The equality checks below refuse anything that does not then name exactly
+# this version's PRIVACY.md, licence and release.
+Resolve-TigerMarkViewWinGetVersionedUrls -ManifestDirectory $manifestDirectory -Version $Version
 & $tigerSetup winget finalize $manifestDirectory --url $InstallerUrl --installer $InstallerPath | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "tiger-setup winget finalize failed with exit code $LASTEXITCODE." }
 
@@ -151,6 +153,10 @@ if ($submission.installer.installerUrl -cne $InstallerUrl -or
 $privacyProblem = Get-TigerMarkViewPrivacyStatementUrlProblem -Url $submission.locale.privacyUrl -Version $Version
 if ($null -ne $privacyProblem -or $submission.locale.privacyUrl -cne $release.privacyUrl) {
     throw "The generated default-locale manifest's PrivacyUrl is not the privacy statement of ${Version}: $privacyProblem."
+}
+if ($submission.locale.licenseUrl -cne $release.licenseUrl -or $submission.locale.releaseNotesUrl -cne $release.releaseNotesUrl) {
+    throw ("The generated default-locale manifest must declare LicenseUrl '$($release.licenseUrl)' and ReleaseNotesUrl " +
+        "'$($release.releaseNotesUrl)'; it declares '$($submission.locale.licenseUrl)' and '$($submission.locale.releaseNotesUrl)'.")
 }
 
 if ($Validate) {

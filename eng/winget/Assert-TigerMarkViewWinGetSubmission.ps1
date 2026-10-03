@@ -9,8 +9,9 @@
     the directory holds exactly the three submission manifests, UTF-8 without a
     byte-order mark, that all three agree on identity and version, that the
     default-locale manifest names the version's own PRIVACY.md release asset as
-    PrivacyUrl (never a branch, another release, or another document), and
-    that the installer manifest names the immutable v<version> release asset URL. It then
+    PrivacyUrl (never a branch, another release, or another document), its
+    LICENSE at the version's tag as LicenseUrl and its release page as
+    ReleaseNotesUrl, and that the installer manifest names the immutable v<version> release asset URL. It then
     prints a digest over the three files.
 
     The validation job records that digest; the publication job downloads the
@@ -93,6 +94,10 @@ foreach ($document in @('installer', 'locale', 'version')) {
 $privacyProblem = Get-TigerMarkViewPrivacyStatementUrlProblem -Url $submission.locale.privacyUrl -Version $Version
 if ($null -ne $privacyProblem -or $submission.locale.privacyUrl -cne $release.privacyUrl) {
     throw "The default-locale manifest's PrivacyUrl is not the privacy statement of ${Version}: $privacyProblem."
+}
+if ($submission.locale.licenseUrl -cne $release.licenseUrl -or $submission.locale.releaseNotesUrl -cne $release.releaseNotesUrl) {
+    throw ("The default-locale manifest must declare LicenseUrl '$($release.licenseUrl)' and ReleaseNotesUrl " +
+        "'$($release.releaseNotesUrl)'; it declares '$($submission.locale.licenseUrl)' and '$($submission.locale.releaseNotesUrl)'.")
 }
 if ($submission.installer.installerUrl -cne $release.installerUrl) {
     throw ("The installer manifest declares InstallerUrl '$($submission.installer.installerUrl)'; " +

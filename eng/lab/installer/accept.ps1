@@ -539,10 +539,26 @@ try {
         New-Item -ItemType Directory -Path (Split-Path -Parent $neighbour) -Force | Out-Null
         [IO.File]::WriteAllText($neighbour, 'another application', (New-Object Text.UTF8Encoding $false))
     }
-    # The privacy statement discloses the browser engine's own history of the pages it showed; it lives
-    # in the profile the uninstall removes.
-    $engineHistory = Join-Path $installed.localAppData 'TigerMarkView\WebView2\Viewer\EBWebView\Default\History'
-    $checks.Add((New-Check 'Browser engine history is in the removed profile' 'uninstall.engine-history' (Test-Path -LiteralPath $engineHistory -PathType Leaf) "$engineHistory exists before the uninstall: $(Test-Path -LiteralPath $engineHistory -PathType Leaf)."))
+    # The engine runs InPrivate: after every open in this run, upgrades from the Inno Setup release
+    # included, its folder holds no record of a page it showed, and records the removal of the
+    # persistent profile the earlier version kept.
+    $engineRoot = Join-Path $installed.localAppData 'TigerMarkView\WebView2'
+    $engineRecords = @()
+    foreach ($file in @(Get-ChildItem -LiteralPath $engineRoot -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+        try {
+            $stream = New-Object IO.FileStream($file.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            try { $bytes = New-Object byte[] $stream.Length; $null = $stream.Read($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+        }
+        catch { $engineRecords += "$($file.FullName) => unreadable"; continue }
+        $text = [Text.Encoding]::UTF8.GetString($bytes) + [Text.Encoding]::Unicode.GetString($bytes)
+        # Whole file names, as a page title records them, and the generated page's address: a fragment
+        # such as "dropped" also occurs in the engine's own diagnostic logs.
+        foreach ($marker in @('TigerMarkView/preview', (Split-Path -Leaf $unicodeDoc), (Split-Path -Leaf $linkedDoc), (Split-Path -Leaf $pickedDoc), (Split-Path -Leaf $droppedDoc))) {
+            if ($text.Contains($marker)) { $engineRecords += "$($file.FullName) => $marker" }
+        }
+    }
+    $inPrivateMarker = Join-Path $engineRoot 'Viewer\TigerMarkView.InPrivate'
+    $checks.Add((New-Check 'The browser engine kept no history of the documents shown' 'uninstall.engine-history' ((Test-Path -LiteralPath $inPrivateMarker -PathType Leaf) -and $engineRecords.Count -eq 0) "$inPrivateMarker exists: $(Test-Path -LiteralPath $inPrivateMarker -PathType Leaf); records found: $(if ($engineRecords.Count) { $engineRecords -join '; ' } else { '(none)' })."))
     $uninstallCommand = Split-Command ([string] $installed.registration.quietUninstall)
     $removal = Invoke-Setup -FilePath $uninstallCommand.program -Arguments @($uninstallCommand.arguments | Where-Object { $_ -notin '--quiet' }) -Name 'upgrade-uninstall'
     # The statement says the uninstaller's log (here written to an explicit --log path; by default to

@@ -139,6 +139,21 @@ public sealed class ApplicationSettings
     [JsonConverter(typeof(TolerantBooleanConverter))]
     public bool SyntaxHighlighting { get; set; }
 
+    /// <summary>
+    /// Whether documents may show <c>http</c>/<c>https</c> images, under <c>View &gt; Rendering &gt;
+    /// Load Remote Images</c>. On by default: a web image is ordinary Markdown. Off, the viewer and GUI
+    /// PDF export refuse every web image request before anything is sent; local and <c>data:</c>
+    /// images are unaffected.
+    /// </summary>
+    /// <remarks>
+    /// Additive, so a settings file written before it existed lands on <see langword="true"/>. It
+    /// carries <see cref="TolerantBooleanConverter"/>, which reads an unusable value as
+    /// <see langword="false"/>: for this flag that is the more private reading, and better than
+    /// discarding the reader's whole file over one bad value.
+    /// </remarks>
+    [JsonConverter(typeof(TolerantBooleanConverter))]
+    public bool LoadRemoteImages { get; set; } = true;
+
     public WindowPlacement Window { get; set; } = new();
 
     public static ApplicationSettings CreateDefault() => new();

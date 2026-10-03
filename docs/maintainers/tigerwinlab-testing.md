@@ -76,14 +76,15 @@ user. In order:
 | `drag-drop` | Explorer beside the viewer; a real pointer drag of a file onto the rendered document, the hit test proving the drop point is the WebView; the file opens and enters Open Recent |
 | `upgrade-in-place` | the viewer closed and the candidate upgraded to the later installer: the later version installed, `remove-local-data` not run, settings byte-identical with the three opened documents still in Open Recent, and the WebView2 viewer profile kept |
 | `clear-recent` | the upgraded viewer opened on a document; **File > Open Recent > Clear Recent Files** reached by real pointer input (the menu captured in the run's theme); the saved list empty at once and still empty after the viewer closes, the theme setting kept, and the documents untouched |
-| `uninstall` | the upgraded installation removed: files, registration, PATH, handler and capability gone; the user's local data removed with `remove-local-data` reported `completed`; another application's files whose names share the prefix of the two data folders and the install root kept; the documents untouched; `.md` resolving exactly as before the first install |
+| `uninstall` | the upgraded installation removed: files, registration, PATH, handler and capability gone; the user's local data removed with `remove-local-data` reported `completed`; another application's files whose names share the prefix of the two data folders and the install root kept; the documents untouched; `.md` resolving exactly as before the first install; and, before the removal, no record of any shown document in the WebView2 folders, whose removal of the earlier persistent profile is recorded |
 | `machine-scope` | the published release installed for all users is replaced by `--scope machine` (HKLM registration, machine PATH, HKLM handler) and removed cleanly |
 
 The published installer is the last Inno Setup release published on GitHub, 0.8.1
-(`-UpgradeFromVersion`), downloaded from GitHub and refused unless it matches the digest GitHub
-recorded. A release whose asset is no longer served is passed
-explicitly with `-UpgradeFromInstallerPath` - a retained copy of the published bytes, recorded by its
-SHA-256.
+(`-UpgradeFromVersion`). The v0.8.x release assets were withdrawn on purpose - they predate the
+active-content remediation - and are not restored, so the row never downloads one: it uses the retained
+copy of the published bytes at `artifacts\lab\retained\TigerMarkView-0.8.1-win-x64-setup.exe` (or
+`-UpgradeFromInstallerPath`), and refuses it unless it hashes to the published SHA-256 the script records,
+`B81118C96655A7E6E28642A22AE5FC14CBD4EF47F2FA5928A35408833EE4BE9F`.
 
 **Desktop scenario** - the generic composition on a self-contained build: UI Automation exposure,
 semantic commands, physical menu input, modal handling, occlusion, captures, and F1 Help.
@@ -163,6 +164,33 @@ spellings, and a relative path through a symbolic link), is opened in the viewer
 `tiger-mark`: no share file may be requested, while its relative and absolute local images and its web
 image still load. A document opened from the share itself must be read, but its relative image must
 not be — the case only the request boundary can stop.
+
+The payload then proves the reader-facing privacy behaviour in the same guest:
+
+- **Share links** - `links.md` links to Markdown on the strict share (`\\` and `//` spellings) and
+  through the mapped drive; a real click on each must leave the viewer on `links.md`, explain the refusal
+  in the status bar, and cause no share access, while a local link is still followed. A relative link in
+  the document opened from the share must not be followed either, and naming a share document on the
+  command line (an explicit open) must still open it.
+- **Remote images off** - with `loadRemoteImages` false in the user's settings, `hostile.md` makes no
+  `/img/` request in the viewer, its local image still renders, and a GUI export embeds fewer images
+  than the `tiger-mark` PDF without requesting any; **View > Rendering > Load Remote Images**, clicked
+  by real pointer input, brings the requests back and saves the setting.
+- **Proxy credentials** - the interactive user's proxy is pointed at the logger, which answers every
+  proxied request with an NTLM challenge. A control client that opts in (`-ProxyUseDefaultCredentials`)
+  must offer credentials; the viewer and `tiger-mark` must ask the proxy for the image and never send
+  `Proxy-Authorization`.
+- **Several windows** - two viewer processes share the seeded settings: window B reopens a seed file
+  from its Open Recent after window A opened another (both must stay listed), window A clears Open
+  Recent, window B then switches to Dark, and both close normally. The list must stay empty, the theme
+  Dark, and the seeded editor, paper size, highlighting, toolbar button and remote-image settings kept.
+- **Browsing history** - staging seeds a `History` file into each engine folder's `EBWebView\Default`
+  profile, as an earlier version left one. After every viewer and export of the run (several killed
+  rather than closed), no file under `%LOCALAPPDATA%\TigerMarkView\WebView2` may contain a generated
+  page's address, a document's name or that seeded marker, and each folder must record the removal.
+  The control is a WebView2 engine with an ordinary persistent profile, as earlier versions ran one
+  (`ActiveContentProbe --history-control`), visiting a page of the same shape: the same scan must find
+  its record. (Headless Edge keeps no history and cannot serve as that control.)
 
 `eng/lab/active-content/code.md` covers syntax highlighting and hostile code. The payload seeds the
 interactive user's settings with Syntax Highlighting and the Export to PDF toolbar button on, opens the

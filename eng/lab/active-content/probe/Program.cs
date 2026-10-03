@@ -23,6 +23,10 @@ internal static class Program
             Console.WriteLine(allowed);
             return allowed == (args[2].Contains("local-link") || args[2].StartsWith("file:///X:")) ? 0 : 1;
         }
+        if (args.Length > 3 && args[1] == "--history-control")
+        {
+            return RunHistoryControl(userDataFolder: args[2], page: args[3]);
+        }
         using var form = new Form { Width = 900, Height = 700, ShowInTaskbar = false };
         using var view = new WebView2 { Dock = DockStyle.Fill };
         form.Controls.Add(view);
@@ -68,6 +72,39 @@ internal static class Program
         };
         Application.Run(form);
         return success ? 0 : 1;
+    }
+
+    /// <summary>
+    /// The counterfactual for the browsing-history check: a WebView2 engine with an ordinary persistent
+    /// profile, as TigerMarkView ran one before InPrivate, shows <paramref name="page"/> and closes. Its
+    /// folder must then hold a record of the visit that the same scan finds.
+    /// </summary>
+    private static int RunHistoryControl(string userDataFolder, string page)
+    {
+        using var form = new Form { Width = 900, Height = 700, ShowInTaskbar = false };
+        using var view = new WebView2 { Dock = DockStyle.Fill };
+        form.Controls.Add(view);
+        var loaded = false;
+        form.Shown += async (_, _) =>
+        {
+            try
+            {
+                var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: userDataFolder);
+                await view.EnsureCoreWebView2Async(environment);
+                var completed = new TaskCompletionSource<bool>();
+                view.CoreWebView2.NavigationCompleted += (_, e) => completed.TrySetResult(e.IsSuccess);
+                view.CoreWebView2.Navigate(new Uri(page).AbsoluteUri);
+                loaded = await completed.Task;
+                // Chromium commits History on a timer of about ten seconds; stay open past one.
+                await Task.Delay(15000);
+            }
+            finally
+            {
+                form.Close();
+            }
+        };
+        Application.Run(form);
+        return loaded ? 0 : 1;
     }
 
     private static void Check(string code, bool passed, string message)

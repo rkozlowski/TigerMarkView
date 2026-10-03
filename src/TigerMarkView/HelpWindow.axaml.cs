@@ -36,12 +36,11 @@ namespace TigerMarkView;
 public partial class HelpWindow : Window
 {
     /// <summary>
-    /// Help's own generated page. Deliberately <em>not</em> the viewer's <c>preview.html</c>: sharing
-    /// one file would have Help and the document overwrite each other's rendering, which is the session
-    /// interference this window exists to avoid.
+    /// Help's own generated page. Deliberately <em>not</em> the viewer's page: sharing one file would have
+    /// Help and the document overwrite each other's rendering, which is the session interference this
+    /// window exists to avoid. Per process, like the viewer's; see <see cref="GeneratedPages"/>.
     /// </summary>
-    private static readonly string PreviewHtmlPath =
-        Path.Combine(Path.GetTempPath(), "TigerMarkView", "help.html");
+    private static readonly string PreviewHtmlPath = GeneratedPages.ForThisProcess("help");
 
     /// <summary>
     /// The one Help window, if it is open. F1 is easy to lean on, and a help window per keypress is
@@ -75,7 +74,9 @@ public partial class HelpWindow : Window
         // The same request boundary as the viewer. Help shows only bundled documents, but it renders
         // them through the same pipeline into the same kind of WebView, and one rule for both is
         // simpler to reason about than an exception for the trusted one. See DocumentWebView.
-        _documentWebView = DocumentWebView.Attach(Browser, () => _theme);
+        // Help is offline by contract and the bundled documents name no web images, so it never fetches
+        // one whatever the reader's Load Remote Images setting.
+        _documentWebView = DocumentWebView.Attach(Browser, () => _theme, static () => false);
 
         Browser.NavigationCompleted += OnNavigationCompleted;
 
@@ -114,6 +115,8 @@ public partial class HelpWindow : Window
             {
                 _instance = null;
             }
+
+            GeneratedPages.Remove(PreviewHtmlPath);
         };
 
         window.LoadDocument(document);

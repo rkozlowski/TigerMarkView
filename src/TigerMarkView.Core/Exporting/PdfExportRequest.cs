@@ -17,7 +17,12 @@ namespace TigerMarkView.Core.Exporting;
 /// setup the HTML was rendered with — the sheet size comes from here and the printable area from the
 /// document's own <c>@page</c> rule, so the two are halves of one answer.
 /// </param>
-public sealed record PdfExportRequest(string Html, string OutputPath, PdfPageSetup? Page = null)
+/// <param name="RemoteImages">
+/// Whether the export may fetch <c>http</c>/<c>https</c> images. The GUI passes the reader's
+/// <c>Load Remote Images</c> setting so a PDF shows what the viewer shows; <c>tiger-mark</c> keeps the
+/// default.
+/// </param>
+public sealed record PdfExportRequest(string Html, string OutputPath, PdfPageSetup? Page = null, bool RemoteImages = true)
 {
     public PdfPageSetup PageSetup => Page ?? PdfPageSetup.Default;
 }

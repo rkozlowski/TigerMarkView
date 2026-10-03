@@ -33,7 +33,7 @@ function Get-TigerMarkViewTigerSetupPin {
 }
 
 function Get-TigerMarkViewTigerSetupVersion {
-    <# The version tiger-setup.exe reports: "tiger-setup 0.12.0". #>
+    <# The version tiger-setup.exe reports: "tiger-setup <major>.<minor>.<patch>". #>
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string] $Path)
 

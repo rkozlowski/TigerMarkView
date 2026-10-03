@@ -19,8 +19,10 @@
          menu input, modal handling, occlusion, and F1 Help.
 
     The installer is the exact file named by -InstallerPath (a local candidate or a retrieved
-    release asset). The installation it migrates from is a published Inno Setup release, downloaded
-    from GitHub and refused unless it matches the digest GitHub recorded for it. The later installer
+    release asset). The installation it migrates from is a published Inno Setup release, taken from a
+    retained copy of its published bytes and refused unless it matches the SHA-256 recorded while
+    GitHub still served it; the v0.8.x assets were withdrawn on purpose and are never downloaded. The
+    later installer
     it is upgraded to only has to be newer and carry this repository's installer; by default it is a
     local build of the next patch version.
 
@@ -34,11 +36,13 @@
     .PARAMETER UpgradeFromVersion
     The published Inno Setup release to migrate from. Defaults to 0.8.1, the last one published as a
     GitHub release (0.9.0, the last Inno Setup build, was tagged but not published). Releases from
-    0.10.0 on are TigerSetup installations; the in-place upgrade covers those.
+    0.10.0 on are TigerSetup installations; the in-place upgrade covers those. The script records the
+    published SHA-256 of each release it accepts.
 
     .PARAMETER UpgradeFromInstallerPath
-    A published Inno Setup installer to upgrade from, when GitHub no longer serves it: an explicit
-    maintainer decision, used as given and recorded by its SHA-256 and version resource.
+    The retained copy of that published installer. Defaults to
+    artifacts\lab\retained\TigerMarkView-<UpgradeFromVersion>-win-x64-setup.exe. It is used only when
+    it hashes to the recorded published SHA-256 and its version resource names that release.
 
     .PARAMETER UpgradeToInstallerPath
     A later TigerMarkView installer to upgrade the candidate to in place. Defaults to
@@ -86,7 +90,6 @@ $env:AVALONIA_TELEMETRY_OPTOUT = '1'
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 [xml] $versionProps = Get-Content -LiteralPath (Join-Path $repoRoot 'Version.props') -Raw
 if ([string]::IsNullOrWhiteSpace($Version)) { $Version = [string] $versionProps.Project.PropertyGroup.Version }
-$repositoryUrl = ([string] $versionProps.Project.PropertyGroup.RepositoryUrl).TrimEnd('/')
 if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
     $InstallerPath = Join-Path $repoRoot "artifacts\installer\TigerMarkView-$Version-win-x64-setup.exe"
 }
@@ -135,35 +138,37 @@ function Invoke-LabChild {
 }
 
 # --- the published release to upgrade from -------------------------------------------------------
-if (-not [string]::IsNullOrWhiteSpace($UpgradeFromInstallerPath)) {
-    $legacyPath = (Resolve-Path -LiteralPath $UpgradeFromInstallerPath).Path
-    $legacyInfo = (Get-Item -LiteralPath $legacyPath).VersionInfo
-    # Inno Setup pads its version-resource strings.
-    if (([string] $legacyInfo.ProductName).Trim() -cne 'TigerMarkView' -or ([string] $legacyInfo.ProductVersion).Trim() -notmatch '^(?<version>\d+\.\d+\.\d+)') {
-        throw "$legacyPath is not a TigerMarkView installer ($($legacyInfo.ProductName) $($legacyInfo.ProductVersion))."
-    }
-    $UpgradeFromVersion = $Matches.version
-    $legacyName = [IO.Path]::GetFileName($legacyPath)
-    $legacyHash = (Get-FileHash -LiteralPath $legacyPath -Algorithm SHA256).Hash
+# The v0.8.x installers were withdrawn from their GitHub Releases on purpose: they predate the
+# active-content remediation. The migration row therefore never downloads one. It uses a retained copy
+# of the bytes that were published, and refuses it unless it hashes to the digest recorded while GitHub
+# still served the asset (artifacts\winget-release\0.8.1\validation\result.json, 2026-08-28).
+$publishedInnoInstallers = @{
+    '0.8.1' = 'B81118C96655A7E6E28642A22AE5FC14CBD4EF47F2FA5928A35408833EE4BE9F'
 }
-else {
-    $api = $repositoryUrl -replace '^https://github\.com/', 'https://api.github.com/repos/'
-    $release = Invoke-RestMethod "$api/releases/tags/v$UpgradeFromVersion"
-    if ($release.draft -or $release.prerelease) { throw "Release $($release.tag_name) is not a published release." }
-    $UpgradeFromVersion = ([string] $release.tag_name).TrimStart('v')
-    $legacyName = "TigerMarkView-$UpgradeFromVersion-win-x64-setup.exe"
-    $asset = @($release.assets | Where-Object { $_.name -ceq $legacyName })
-    if ($asset.Count -ne 1 -or [string] $asset[0].digest -notmatch '^sha256:(?<hash>[0-9a-f]{64})$') {
-        throw ("Release $($release.tag_name) no longer serves $legacyName with a recorded SHA-256 digest. " +
-            'Pass -UpgradeFromInstallerPath with a retained copy of the published installer.')
-    }
-    $legacyHash = $Matches.hash.ToUpperInvariant()
-    $legacyPath = Join-Path $cacheRoot $legacyName
-    if (-not (Test-Path -LiteralPath $legacyPath) -or (Get-FileHash -LiteralPath $legacyPath -Algorithm SHA256).Hash -cne $legacyHash) {
-        Invoke-WebRequest -Uri $asset[0].browser_download_url -OutFile $legacyPath
-    }
-    if ((Get-FileHash -LiteralPath $legacyPath -Algorithm SHA256).Hash -cne $legacyHash) { throw "$legacyName does not match the digest GitHub recorded." }
+if (-not $publishedInnoInstallers.ContainsKey($UpgradeFromVersion)) {
+    throw "No published SHA-256 is recorded for TigerMarkView $UpgradeFromVersion; the migration row starts from $(@($publishedInnoInstallers.Keys) -join ', ')."
 }
+$legacyName = "TigerMarkView-$UpgradeFromVersion-win-x64-setup.exe"
+if ([string]::IsNullOrWhiteSpace($UpgradeFromInstallerPath)) {
+    $UpgradeFromInstallerPath = Join-Path $repoRoot "artifacts\lab\retained\$legacyName"
+}
+if (-not (Test-Path -LiteralPath $UpgradeFromInstallerPath -PathType Leaf)) {
+    throw ("The retained published installer $UpgradeFromInstallerPath is missing. Place the published " +
+        "$legacyName (SHA-256 $($publishedInnoInstallers[$UpgradeFromVersion])) there, or pass -UpgradeFromInstallerPath.")
+}
+$legacyPath = (Resolve-Path -LiteralPath $UpgradeFromInstallerPath).Path
+$legacyHash = (Get-FileHash -LiteralPath $legacyPath -Algorithm SHA256).Hash
+if ($legacyHash -cne $publishedInnoInstallers[$UpgradeFromVersion]) {
+    throw ("$legacyPath hashes to $legacyHash, not the published TigerMarkView $UpgradeFromVersion installer " +
+        "$($publishedInnoInstallers[$UpgradeFromVersion]); a local or rebuilt copy is not the release it migrates from.")
+}
+$legacyInfo = (Get-Item -LiteralPath $legacyPath).VersionInfo
+# Inno Setup pads its version-resource strings.
+if (([string] $legacyInfo.ProductName).Trim() -cne 'TigerMarkView' -or ([string] $legacyInfo.ProductVersion).Trim() -notmatch '^(?<version>\d+\.\d+\.\d+)' -or
+    $Matches.version -cne $UpgradeFromVersion) {
+    throw "$legacyPath is not the TigerMarkView $UpgradeFromVersion installer ($($legacyInfo.ProductName) $($legacyInfo.ProductVersion))."
+}
+$legacyName = [IO.Path]::GetFileName($legacyPath)
 if ([version] $UpgradeFromVersion -gt [version] '0.9.0') {
     throw "TigerMarkView $UpgradeFromVersion is not an Inno Setup release; the migration it proves starts from 0.9.0 or earlier."
 }

@@ -50,4 +50,39 @@ public class WebViewResourceBoundaryTests
             Assert.Equal(context == CoreWebView2WebResourceContext.Image, WebViewResourceBoundary.IsAllowed(uri, context));
         }
     }
+
+    [Theory]
+    [InlineData("https://example.com/a.png", false)]
+    [InlineData("http://localhost/a.png", false)]
+    [InlineData("data:image/svg+xml,%3Csvg/%3E", true)]
+    public void TurningRemoteImagesOffRefusesWebImagesOnly(string uri, bool allowed)
+    {
+        Assert.Equal(allowed, WebViewResourceBoundary.IsAllowed(uri, CoreWebView2WebResourceContext.Image, remoteImages: false));
+        Assert.True(WebViewResourceBoundary.IsAllowed(uri, CoreWebView2WebResourceContext.Image, remoteImages: true));
+    }
+
+    [Fact]
+    public void ALocalImageStillLoadsWithRemoteImagesOff()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            Assert.True(WebViewResourceBoundary.IsAllowed(new Uri(path).AbsoluteUri, CoreWebView2WebResourceContext.Image, remoteImages: false));
+        }
+        finally { File.Delete(path); }
+    }
+
+    /// <summary>
+    /// The image client offers no credentials to anyone: not the reader's Windows sign-in to the image
+    /// host, not explicit credentials, and not the Windows sign-in to an authenticating proxy.
+    /// </summary>
+    [Fact]
+    public void ImageRequestsCarryNoAmbientOrProxyCredentials()
+    {
+        var use = WebViewResourceBoundary.CredentialUse;
+
+        Assert.False(use.UseDefaultCredentials);
+        Assert.False(use.DestinationCredentials);
+        Assert.False(use.ProxyCredentials);
+    }
 }

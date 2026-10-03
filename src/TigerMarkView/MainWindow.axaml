@@ -77,7 +77,7 @@
       is still there when it goes.
     -->
     <Menu x:Name="MainMenu" DockPanel.Dock="Top" AutomationProperties.AutomationId="MainMenu">
-      <MenuItem Header="_File" AutomationProperties.AutomationId="FileMenu">
+      <MenuItem Header="_File" x:Name="FileMenuItem" AutomationProperties.AutomationId="FileMenu">
         <MenuItem Header="_Open..." Click="OnOpenClick" />
         <MenuItem Header="Open _Recent" x:Name="OpenRecentMenuItem" IsEnabled="False"
                   AutomationProperties.AutomationId="OpenRecentMenuItem" />
@@ -159,9 +159,11 @@
                     AutomationProperties.AutomationId="DarkThemeItem" />
         </MenuItem>
         <!--
-          Optional rendering behaviours, both off by default. They live under View because they change
-          what the reader sees rather than what the application does with a document; Tools holds the
-          latter. No toolbar buttons: these are settings a reader picks once, not commands.
+          Rendering behaviours. They live under View because they change what the reader sees rather
+          than what the application does with a document; Tools holds the latter. No toolbar buttons:
+          these are settings a reader picks once, not commands. Emoji shortcodes and syntax highlighting
+          are off by default; remote images are on, because a web image is ordinary Markdown, and can be
+          turned off so a document makes no web requests at all.
           Each handler derives its new value from _settings, never from the sender's IsChecked — a click
           forwarded from the hamburger mirror does not flip it. See SetRenderingMenuChecked.
         -->
@@ -172,6 +174,11 @@
           <MenuItem Header="_Syntax Highlighting" ToggleType="CheckBox" x:Name="SyntaxHighlightingItem"
                     Click="OnSyntaxHighlightingClick"
                     AutomationProperties.AutomationId="SyntaxHighlightingItem" />
+          <Separator />
+          <MenuItem Header="Load _Remote Images" ToggleType="CheckBox" x:Name="LoadRemoteImagesItem"
+                    Click="OnLoadRemoteImagesClick"
+                    ToolTip.Tip="Allow HTTP/HTTPS images referenced by documents"
+                    AutomationProperties.AutomationId="LoadRemoteImagesItem" />
         </MenuItem>
       </MenuItem>
       <MenuItem Header="_Reload Mode" AutomationProperties.AutomationId="ReloadModeMenu">

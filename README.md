@@ -20,9 +20,10 @@ time under **Help > About TigerMarkView**.
 - configurable external editors, including system default, Visual Studio Code, Notepad3, and a
   custom executable and arguments template;
 - Light and Dark application themes;
-- optional emoji shortcode expansion and syntax highlighting, both off by default;
+- optional emoji shortcode expansion and syntax highlighting, both off by default, and remote images,
+  on by default and switchable off;
 - untrusted-content handling: formatting HTML is kept, scripts and other active content are removed,
-  and images on network shares are never fetched;
+  images on network shares are never fetched, and links to network shares are not followed;
 - PDF export using the exact document version currently displayed;
 - configurable menu bar, toolbar, status bar, and optional toolbar buttons;
 - bundled offline Help, About, licence, and third-party notices;
@@ -36,8 +37,10 @@ Printing is not included in the shipped application.
 
 TigerMarkView focuses on files on the local machine. Every document-opening route uses the same
 rendering and file-monitoring workflow. Links to other local Markdown files stay in TigerMarkView;
-web and mail links open through the associated Windows application, and other local file types are
-not launched from a document.
+web and mail links open through the associated Windows application, other local file types are not
+launched from a document, and a link never opens a document on a network share (opening one yourself
+still works). Several TigerMarkView windows can be open at once; they share settings and one Open
+Recent list, and each saves only the setting changed in it.
 
 The reload modes determine what happens when the open file changes:
 
@@ -61,16 +64,19 @@ are used for the viewer and PDF export:
 Markdown -> Markdig -> HTML + CSS -> WebView2 -> viewer / PDF
 ```
 
-Two rendering options are available under **View > Rendering**:
+Three rendering options are available under **View > Rendering**:
 
 - **Emoji Shortcodes** expands recognised forms such as `:rocket:`. It is off by default. Literal
   emoji are unaffected, and unrecognised shortcodes or shortcodes inside code remain unchanged.
 - **Syntax Highlighting** colours fenced code blocks when their declared language is recognised. It
   is off by default. TigerMarkView does not guess languages; an absent or unsupported language falls
   back to the normal code-block rendering.
+- **Load Remote Images** lets documents show `http`/`https` images. It is on by default; turned
+  off, the viewer and GUI PDF export request no web image at all, while local and embedded images still
+  show.
 
-Both options are implemented in `TigerMarkView.Core`, so the displayed document and an exported PDF
-stay consistent. The CLI currently uses the default rendering with both options off.
+The options are applied identically to the displayed document and an exported PDF. The CLI uses the
+defaults: emoji and highlighting off, remote images on.
 
 Documents are treated as untrusted content. Formatting HTML inside Markdown (`<details>`, `<kbd>`,
 sized images, tables, inline styles) is kept; scripts, event handlers, `javascript:` links, frames,
@@ -84,9 +90,10 @@ Windows credentials to that server; this includes the images of a document that 
 or a mapped drive. If the viewer cannot install its request protection, it shows no documents and says
 why rather than showing them unprotected. The viewer, PDF export, and `tiger-mark` apply the same rules.
 Inline SVG supports basic shapes with solid fills; external SVG paint resources are removed.
-Web images are fetched without browser cookies or Windows sign-in credentials, so an image that
-requires signing in does not load; ordinary public web images remain enabled, and a system proxy that
-asks for Windows sign-in is still answered.
+Web images are fetched without browser cookies or any credentials, so an image that requires signing
+in does not load, and neither does one behind a proxy that requires signing in; ordinary public web
+images work unless **Load Remote Images** is turned off. The WebView2 engine runs InPrivate, so viewing
+and exporting leave no browsing history on disk.
 
 ## PDF export
 
@@ -320,8 +327,8 @@ Contributor, architecture, and release guidance is in `AGENTS.md`; maintainer pr
 
 TigerMarkView keeps its settings and the Open Recent list on the local computer and sends them
 nowhere; it has no telemetry, accounts, or update checks. Its network requests are for the web images
-an opened document refers to, for documents opened from a network share, and, in the installer, for a
-missing Microsoft runtime. The [privacy statement](docs/PRIVACY.md) describes what is stored, how to
+an opened document refers to (on by default, and switchable off), for documents you open from a network
+share, and, in the installer, for a missing Microsoft runtime. The [privacy statement](docs/PRIVACY.md) describes what is stored, how to
 clear it, what uninstalling removes, and those requests; each release publishes the statement for its
 version as its `PRIVACY.md` asset.
 

@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using TigerMarkView.Core.Rendering;
+using TigerMarkView.Hosting;
 using TigerMarkView.Settings;
 
 namespace TigerMarkView;
@@ -19,6 +20,9 @@ public partial class App : Application
         {
             // Settings are loaded before the window exists so the saved theme is already in force when
             // it first paints — restoring a theme after the fact would show a flash of the wrong one.
+            // Pages a crashed window left behind, and the shared page names of earlier versions.
+            GeneratedPages.RemoveStale();
+
             var settingsStore = new SettingsStore();
             var settings = settingsStore.Load();
             ApplyThemeVariant(settings.Theme);

@@ -19,8 +19,9 @@ public enum WebResourceKind
 /// </summary>
 /// <remarks>
 /// <para>
-/// The rule is by kind, not by address. A remote image is ordinary Markdown and is allowed from anywhere;
-/// every other network request is refused, whatever its destination. That is what stops content that
+/// The rule is by kind, not by address. A remote image is ordinary Markdown and is allowed from anywhere
+/// unless the reader has turned remote images off; every other network request is refused, whatever its
+/// destination. That is what stops content that
 /// somehow runs from reading the document and sending it out through <c>fetch</c>, a beacon, a
 /// WebSocket, a frame, or a stylesheet — the channels that carry data a page computed rather than a URL
 /// the author wrote down. Executable code could also put data in an allowed image URL: the sanitizer
@@ -46,7 +47,14 @@ public static class WebResourcePolicy
     /// <summary>
     /// True when a rendered page may request <paramref name="uri"/> as a <paramref name="kind"/>.
     /// </summary>
-    public static bool Allows(Uri uri, WebResourceKind kind)
+    /// <param name="uri">The absolute URL the engine is about to request.</param>
+    /// <param name="kind">What the page is requesting it as.</param>
+    /// <param name="remoteImages">
+    /// Whether <c>http</c>/<c>https</c> images may load: the reader's <c>Load Remote Images</c> choice,
+    /// on unless they turned it off. Off refuses web images only; <c>data:</c> and local images, and
+    /// every other rule here, are unchanged.
+    /// </param>
+    public static bool Allows(Uri uri, WebResourceKind kind, bool remoteImages = true)
     {
         ArgumentNullException.ThrowIfNull(uri);
 
@@ -57,7 +65,7 @@ public static class WebResourcePolicy
 
         return kind switch
         {
-            WebResourceKind.Image => IsWebScheme(uri) || IsDataScheme(uri) || IsLocalFile(uri),
+            WebResourceKind.Image => (remoteImages && IsWebScheme(uri)) || IsDataScheme(uri) || IsLocalFile(uri),
             WebResourceKind.Document => IsLocalFile(uri),
             _ => false,
         };

@@ -116,8 +116,9 @@ public static class MarkdownLinkResolver
             return false;
         }
 
-        // An explicitly followed Markdown link may name a UNC file too. Opening that document is a
-        // reader action; its automatically fetched images still pass through the resource boundary.
+        // A UNC or network-drive file still resolves here: this answers what the target is, and a file
+        // the reader dropped may live on a share. Whether a link may lead there is decided by origin,
+        // in NetworkLinkPolicy, before anything opens it.
         string localPath;
         try
         {

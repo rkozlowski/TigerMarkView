@@ -100,6 +100,12 @@ Other kinds of link behave like this:
   client. TigerMarkView does not display web pages itself.
 - **Links to other kinds of local file** are not opened. A note appears in the status bar instead.
   This is deliberate: a Markdown document you were sent should not be able to launch programs.
+- **Links to a Markdown file on a network share** — `\\server\share\...`, a mapped network drive, or a
+  relative link in a document that is itself on a share — are not followed either, and the status bar
+  says so. Windows would sign in to that computer with your account, so a link would otherwise be enough
+  to hand your sign-in to whoever wrote it. Dropping a share's file onto a shown document is refused
+  the same way, since it looks exactly like following a link. To read such a document, open it with
+  **File > Open**, or drop it on the menu bar, toolbar or status bar.
 
 ## Reload modes
 
@@ -251,13 +257,13 @@ would rather not be prompted.
 
 ## Rendering options
 
-**View > Rendering** holds two optional ways of rendering a document. Both are **off by default**, and
-each can be turned on independently.
+**View > Rendering** holds three ways of rendering a document. Each can be turned on or off on its own.
 
-| Option | What it does |
-|---|---|
-| **Emoji Shortcodes** | Expands common `:name:` forms — `:rocket:`, `:warning:` — into the matching emoji. |
-| **Syntax Highlighting** | Colours fenced code blocks whose language TigerMarkView recognises. |
+| Option | Default | What it does |
+|---|---|---|
+| **Emoji Shortcodes** | off | Expands common `:name:` forms — `:rocket:`, `:warning:` — into the matching emoji. |
+| **Syntax Highlighting** | off | Colours fenced code blocks whose language TigerMarkView recognises. |
+| **Load Remote Images** | on | Shows images a document refers to by an `http://` or `https://` address, fetching them from the web. Turn it off and TigerMarkView requests no web image at all; see [HTML inside Markdown](#html-inside-markdown). |
 
 **Emoji Shortcodes** only affects text you wrote as a shortcode. Emoji typed directly into the document
 always appear whether the option is on or not, a shortcode nobody recognises is left exactly as
@@ -270,11 +276,13 @@ so turning the option on can only ever add colour, never change how a listing re
 light or dark theme on screen; a PDF always uses a palette designed for paper, whichever theme you are
 reading in.
 
-Changing either option re-renders what you are already looking at. Your place in the document is kept,
+Changing any of them re-renders what you are already looking at. Your place in the document is kept,
 the file is not re-read from disk, and the times in the status bar do not change — so a document you
-have reviewed stays the version you reviewed, and that is still the version a PDF will contain.
+have reviewed stays the version you reviewed, and that is still the version a PDF will contain. A PDF
+exported from the window shows remote images exactly when the viewer does.
 
-This help is not affected by either option: it is part of the application and always looks the same.
+This help is not affected by these options: it is part of the application, always looks the same, and
+never loads anything from the web.
 
 ### HTML inside Markdown
 
@@ -289,10 +297,15 @@ apply on screen, in an exported PDF, and in `tiger-mark`.
 Pictures work as usual. Local images load from beside the file, and web images load from the web, like
 the badges on a project's README — which also means that the server hosting a web image can see that
 the document was opened (see the [privacy statement](PRIVACY.md)). Nothing else in a document is
-fetched automatically. Web images are requested without browser cookies, and their web servers never
-receive your Windows sign-in; if your network uses a proxy server that requires Windows authentication,
-only that proxy is signed in to. A picture that requires you to sign in will not load; open its website
-in your browser to view it there.
+fetched automatically. Web images are requested without browser cookies or any sign-in: neither the
+image's web server nor a proxy server is ever offered your Windows account. A picture that requires you
+to sign in will not load, and no web image loads through a proxy server that requires signing in; open
+the image's website in your browser to view it there.
+
+To keep documents from making any web request, turn off **View > Rendering > Load Remote Images**. Web
+images then appear as missing images, on screen and in PDFs you export, while local images and images
+embedded in the document still show. The setting applies to every TigerMarkView window and is
+remembered. `tiger-mark` has no settings and always loads web images.
 
 Images on network shares are the exception: a picture addressed as `\\server\share\...`, or reached
 through a mapped network drive or a symbolic link to a share, is not shown. Windows would sign in to
@@ -317,17 +330,19 @@ Between sessions, TigerMarkView remembers:
 - the editor you chose, including a custom editor's path and arguments;
 - your recent files;
 - the page setup used by PDF export — paper size, orientation, margins, and page numbers;
-- the rendering options — emoji shortcodes and syntax highlighting;
+- the rendering options — emoji shortcodes, syntax highlighting, and remote images;
 - the window's size, position, and whether it was maximized;
 - whether the menu bar, toolbar, and status bar were showing;
 - which optional toolbar buttons you added.
 
 These are kept in a small settings file in your own user profile, under
-`%LocalAppData%\TigerMarkView`, and are not sent anywhere. The browser engine that displays documents
-keeps its own data in the same folder, including a history of the documents it has shown by file name.
-Deleting that folder while TigerMarkView is closed resets it to its defaults and removes that history;
-nothing else is affected. To forget only the recent files, choose
-**File > Open Recent > Clear Recent Files** while no other TigerMarkView window is open.
+`%LocalAppData%\TigerMarkView`, and are not sent anywhere. Every TigerMarkView window shares it: a
+setting you change in one window is saved without undoing what you changed in another, and all windows
+share one recent-files list. The browser engine that displays documents keeps its own working files in
+the same folder, but runs InPrivate, so it keeps no history of the documents it has shown. Deleting that
+folder while TigerMarkView is closed resets TigerMarkView to its defaults; nothing else is affected. To
+forget only the recent files, choose **File > Open Recent > Clear Recent Files** in any window; the
+list is then empty in every window.
 
 Upgrading to a newer version keeps all of this. Uninstalling TigerMarkView removes it for the Windows
 account that runs the uninstall. The [privacy statement](PRIVACY.md) describes exactly what is stored,
@@ -351,8 +366,9 @@ document. If it has been moved or deleted, export it again.
 **An image in the document does not appear.**
 Images are resolved relative to the Markdown file itself, exactly as they are on GitHub. Check that
 the path in the document matches where the image really sits next to the file, and that the file name's
-capitalisation and extension match. Images on a network share are never shown — see
-[HTML inside Markdown](#html-inside-markdown).
+capitalisation and extension match. Web images are not shown while **View > Rendering > Load Remote
+Images** is off, or when a proxy server requires signing in. Images on a network share are never shown —
+see [HTML inside Markdown](#html-inside-markdown).
 
 **Part of the document's HTML is missing.**
 Scripts, frames, embedded objects, forms, and similar active HTML are removed on purpose — see
@@ -365,8 +381,9 @@ reason. Restart TigerMarkView; if the notice returns, update or repair the Micro
 Runtime.
 
 **A link does nothing.**
-Links to local files that are not Markdown are refused on purpose, with a note in the status bar. Web
-links open in your default browser — if nothing happens, Windows may have no browser associated.
+Links to local files that are not Markdown, and links to Markdown files on a network share, are refused
+on purpose, with a note in the status bar; open a document on a share with **File > Open**. Web links
+open in your default browser — if nothing happens, Windows may have no browser associated.
 
 **The window came back in an odd place.**
 TigerMarkView keeps a restored window inside a connected monitor's working area, so a window saved on

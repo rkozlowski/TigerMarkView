@@ -68,6 +68,12 @@ foreach ($sampleVersion in [string] $properties.Version, '0.11.1', '1.0.0-rc.1')
     Assert-True ($winget.privacy_url.Replace('{version}', $sampleVersion) -ceq $privacyTemplate.Replace('$(Version)', $sampleVersion)) `
         "TigerSetup.toml [winget] privacy_url '$($winget.privacy_url)' does not resolve to Version.props PrivacyUrl for $sampleVersion."
 }
+# The licence and the release notes of a version are first-party pages too, pinned to its tag.
+Assert-True ($winget.license_url -ceq "$repositoryUrl/blob/v{version}/LICENSE" -and
+    (Test-Path -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -PathType Leaf)) `
+    "TigerSetup.toml [winget] license_url '$($winget.license_url)' must be the LICENSE at the version's own tag."
+Assert-True ($winget.release_notes_url -ceq "$repositoryUrl/releases/tag/v{version}") `
+    "TigerSetup.toml [winget] release_notes_url '$($winget.release_notes_url)' must be the version's own release."
 Assert-True (@($manifestLines | Where-Object { $_ -match '^\s*version\s*=' }).Count -eq 0) 'TigerSetup.toml must not state a version; [metadata] reads it from Version.props.'
 # The statement ships twice from one checkout - installed as Docs\PRIVACY.md and published as the
 # release's PRIVACY.md - so a checkout must reproduce the committed bytes exactly on every machine.
@@ -127,13 +133,17 @@ foreach ($source in $appSources) {
         'Every per-user data folder the application writes must be %LOCALAPPDATA%\TigerMarkView, the folder the uninstall removes.'
 }
 $tempSources = @(
-    'src\TigerMarkView\MainWindow.axaml.cs'
-    'src\TigerMarkView\HelpWindow.axaml.cs'
+    'src\TigerMarkView\Hosting\GeneratedPages.cs'
     'src\TigerMarkView.Pdf\OffScreenPdfHost.cs'
 ) | ForEach-Object { Get-Content -LiteralPath (Join-Path $repositoryRoot $_) -Raw }
 foreach ($source in $tempSources) {
     Assert-True ($source -match 'Path\.GetTempPath\(\),\s*"TigerMarkView"') `
         'Every generated page must live under %TEMP%\TigerMarkView, the folder the uninstall removes.'
+}
+foreach ($window in 'MainWindow', 'HelpWindow') {
+    $source = Get-Content -LiteralPath (Join-Path $repositoryRoot "src\TigerMarkView\$window.axaml.cs") -Raw
+    Assert-True ($source -match 'GeneratedPages\.ForThisProcess\(' -and $source -notmatch 'GetTempPath') `
+        "$window must name its page through GeneratedPages, under %TEMP%\TigerMarkView."
 }
 Assert-True ($actionText.Contains('set "data=%LOCALAPPDATA%\TigerMarkView"') -and $actionText.Contains('set "pages=%TEMP%\TigerMarkView"')) `
     'remove-local-data.cmd must remove exactly %LOCALAPPDATA%\TigerMarkView and %TEMP%\TigerMarkView.'
@@ -190,3 +200,15 @@ try {
 finally {
     [IO.Directory]::Delete($sandbox, $true)
 }
+
+# --- the Inno Setup migration row's source -------------------------------------------------------
+# The v0.8.x release assets were withdrawn on purpose. The lab's migration row must never fetch one:
+# it uses a retained copy of the published bytes, refused unless it hashes to the recorded digest.
+$releaseLab = Get-Content -LiteralPath (Join-Path $repositoryRoot 'eng\lab\Test-TigerMarkViewRelease.ps1') -Raw
+Assert-True ($releaseLab -notmatch '(?i)Invoke-RestMethod|Invoke-WebRequest\s+-Uri\s+\$asset|browser_download_url|api\.github\.com') `
+    'The migration row must not download a published installer from GitHub.'
+Assert-True ($releaseLab -match "'0\.8\.1'\s*=\s*'B81118C96655A7E6E28642A22AE5FC14CBD4EF47F2FA5928A35408833EE4BE9F'") `
+    'The migration row must pin the SHA-256 the published 0.8.1 installer had.'
+Assert-True ($releaseLab -match '(?s)\$legacyHash -cne \$publishedInnoInstallers\[\$UpgradeFromVersion\].{0,80}throw') `
+    'The migration row must refuse a copy that is not the published bytes.'
+Write-Host 'PASS: the migration row uses the retained published 0.8.1 installer, verified by its recorded SHA-256'

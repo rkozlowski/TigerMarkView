@@ -25,23 +25,45 @@ public static class WebViewResourceBoundary
 {
     // WebView2 negotiates NTLM with an intranet image host before BasicAuthenticationRequested is
     // raised, so permitted web images are fetched here without ambient credentials or cookies and
-    // their bytes supplied to the engine. The system proxy is still used, and it alone may be
-    // answered with the reader's Windows credentials: the proxy is the machine's own configuration,
-    // not a host a document chose.
-    private static readonly HttpClient ImageClient = new(new HttpClientHandler
+    // their bytes supplied to the engine. The system proxy is still used, but never signed in to:
+    // DefaultProxyCredentials stays null, so a proxy that demands Windows authentication answers 407
+    // and the image does not load, rather than the reader's credentials being offered on behalf of a
+    // URL a document chose. Nothing here prompts for or stores a credential.
+    private static readonly HttpClientHandler ImageHandler = new()
     {
         UseCookies = false,
         UseDefaultCredentials = false,
         Credentials = null,
-        DefaultProxyCredentials = System.Net.CredentialCache.DefaultCredentials,
+        DefaultProxyCredentials = null,
+        PreAuthenticate = false,
         AutomaticDecompression = System.Net.DecompressionMethods.All,
-    });
+    };
+
+    private static readonly HttpClient ImageClient = new(ImageHandler);
+
+    /// <summary>
+    /// The handler settings that decide which credentials an image request can carry, for the tests
+    /// that pin them: none for the destination and none for the proxy.
+    /// </summary>
+    internal static (bool UseDefaultCredentials, bool DestinationCredentials, bool ProxyCredentials) CredentialUse
+    {
+        get
+        {
+            var handler = ImageHandler;
+            return (handler.UseDefaultCredentials, handler.Credentials is not null, handler.DefaultProxyCredentials is not null);
+        }
+    }
 
     /// <summary>
     /// Installs the request filter on <paramref name="core"/>. Call it before the first navigation, and
     /// once per <see cref="CoreWebView2"/>.
     /// </summary>
-    public static void Apply(CoreWebView2 core)
+    /// <param name="core">The engine to protect.</param>
+    /// <param name="remoteImages">
+    /// Asked on every request: whether <c>http</c>/<c>https</c> images may load now. Omitted, they may —
+    /// the default of the reader's Load Remote Images setting, and what <c>tiger-mark</c> uses.
+    /// </param>
+    public static void Apply(CoreWebView2 core, Func<bool>? remoteImages = null)
     {
         ArgumentNullException.ThrowIfNull(core);
 
@@ -55,7 +77,7 @@ public static class WebViewResourceBoundary
 
         core.WebResourceRequested += async (_, e) =>
         {
-            if (!IsAllowed(e.Request.Uri, e.ResourceContext))
+            if (!IsAllowed(e.Request.Uri, e.ResourceContext, remoteImages?.Invoke() ?? true))
             {
                 e.Response = core.Environment.CreateWebResourceResponse(null, 403, "Forbidden", string.Empty);
                 return;
@@ -84,8 +106,10 @@ public static class WebViewResourceBoundary
                 var type = response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
                 // WebView2 reads this managed buffer after the callback returns. Its COM stream
                 // wrapper retains it; it owns no file/socket handle needing separate disposal.
+                // no-store: a page re-rendered after Load Remote Images is turned off must ask again,
+                // and be refused, rather than reuse an image the engine kept from before.
                 e.Response = core.Environment.CreateWebResourceResponse(
-                    new MemoryStream(bytes, writable: false), 200, "OK", "Content-Type: " + type);
+                    new MemoryStream(bytes, writable: false), 200, "OK", "Content-Type: " + type + "\r\nCache-Control: no-store");
             }
             catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException
                 or IOException or System.Runtime.InteropServices.COMException or InvalidOperationException)
@@ -103,9 +127,10 @@ public static class WebViewResourceBoundary
     /// The policy decision for one request, with WebView2's resource context mapped onto the kinds the
     /// platform-neutral policy knows.
     /// </summary>
-    public static bool IsAllowed(string uri, CoreWebView2WebResourceContext context)
+    public static bool IsAllowed(string uri, CoreWebView2WebResourceContext context, bool remoteImages = true)
     {
-        if (!Uri.TryCreate(uri, UriKind.Absolute, out var target) || !WebResourcePolicy.Allows(target, KindOf(context)))
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out var target)
+            || !WebResourcePolicy.Allows(target, KindOf(context), remoteImages))
         {
             return false;
         }

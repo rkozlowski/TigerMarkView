@@ -268,6 +268,103 @@ function Test-PdfHasColour {
     $false
 }
 
+function Invoke-UserScript {
+    # A Windows PowerShell script run as the interactive user, whose profile and hive the viewer uses.
+    param([string] $Script, [int] $TimeoutSeconds = 120)
+    Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = 'powershell.exe'; arguments = @('-NoProfile', '-NonInteractive', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Script))); timeoutSeconds = $TimeoutSeconds }
+}
+
+function Set-UserSettings {
+    # Merges properties into the interactive user's settings.json, as a reader editing it would.
+    param([hashtable] $Values, [switch] $Replace)
+    $json = ($Values | ConvertTo-Json -Compress -Depth 4).Replace("'", "''")
+    $merge = 'if (Test-Path $p) { $s = Get-Content -Raw $p | ConvertFrom-Json } else { $s = New-Object psobject }; ' +
+        'foreach ($v in ($n.PSObject.Properties)) { $s | Add-Member -NotePropertyName $v.Name -NotePropertyValue $v.Value -Force }; '
+    if ($Replace) { $merge = '$s = $n; ' }
+    $script = '$d = Join-Path $env:LOCALAPPDATA ''TigerMarkView''; $null = New-Item -ItemType Directory -Force $d; $p = Join-Path $d ''settings.json''; ' +
+        "`$n = '$json' | ConvertFrom-Json; " + $merge +
+        '[IO.File]::WriteAllText($p, ($s | ConvertTo-Json -Depth 6))'
+    $run = Invoke-UserScript -Script $script
+    if ($run.exitCode -ne 0) { throw "Could not write the interactive user's settings: $(@($run.stderr) -join ' ')" }
+}
+
+function Get-UserSettings {
+    $run = Invoke-UserScript -Script 'Get-Content -Raw (Join-Path $env:LOCALAPPDATA ''TigerMarkView\settings.json'')'
+    if ($run.exitCode -ne 0) { return $null }
+    try { return (@($run.stdout) -join "`n") | ConvertFrom-Json } catch { return $null }
+}
+
+function Test-SameFile {
+    param([string] $Left, [string] $Right)
+    [string]::Equals([IO.Path]::GetFullPath($Left), [IO.Path]::GetFullPath($Right), [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Close-Viewer {
+    # A normal close, so the window runs its closing writes; then make sure the process is gone.
+    param([object] $Window, [int] $ProcessId)
+    if ($null -ne $Window) {
+        try { $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command window -Parameters @{ hwnd = [int64] $Window.hwnd; action = 'close'; settleMilliseconds = 1000 } } catch { }
+    }
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    while ([DateTime]::UtcNow -lt $deadline -and $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 250 }
+    $null -eq (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
+}
+
+function Invoke-MenuPath {
+    # Avalonia's menus expose no UIA invoke or expand pattern, so they are driven by real pointer input;
+    # a submenu is a popup window of the viewer's process, found by its items' automation ids or names.
+    param([object] $Window, [int] $ProcessId, [hashtable[]] $Path)
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command window -Parameters @{ hwnd = [int64] $Window.hwnd; action = 'activate'; settleMilliseconds = 1000 }
+    $first = $true
+    foreach ($step in $Path) {
+        $selector = @{ index = 0 }
+        foreach ($key in $step.Keys) { $selector[$key] = $step[$key] }
+        if ($first) { $selector.hwnd = [int64] $Window.hwnd; $selector.scope = 'descendants' } else { $selector.processId = $ProcessId }
+        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-wait -Parameters @{ selector = $selector; timeoutSeconds = 15 }
+        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command mouse -Parameters @{ selector = $selector; action = 'click'; settleMilliseconds = 800 }
+        $first = $false
+    }
+}
+
+function Find-EngineMarkers {
+    # Every file under the interactive user's TigerMarkView WebView2 folders (or -Root) that contains one
+    # of the markers, as UTF-8 or UTF-16 text: how a browsing record would show up, whatever its format.
+    param([string[]] $Markers, [string] $Root)
+    $rootExpression = if ($Root) { "'" + $Root.Replace("'", "''") + "'" } else { '(Join-Path $env:LOCALAPPDATA ''TigerMarkView\WebView2'')' }
+    $list = ($Markers | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ','
+    # A file that cannot be read is counted, never silently skipped: a locked History could otherwise
+    # hide exactly the record the scan is looking for.
+    $script = '$root = ' + $rootExpression + '; $markers = @(' + $list + '); $hits = @(); $unreadable = @(); $files = 0; ' +
+        'if (Test-Path $root) { foreach ($f in (Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue)) { $files++; ' +
+        'try { $s = New-Object IO.FileStream($f.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)); ' +
+        'try { $b = New-Object byte[] $s.Length; $null = $s.Read($b, 0, $b.Length) } finally { $s.Dispose() } } catch { $unreadable += $f.FullName; continue }; ' +
+        '$t8 = [Text.Encoding]::UTF8.GetString($b); $t16 = [Text.Encoding]::Unicode.GetString($b); ' +
+        'foreach ($m in $markers) { if ($t8.Contains($m) -or $t16.Contains($m)) { $hits += ($f.FullName + '' => '' + $m) } } } }; ' +
+        '$history = @(Get-ChildItem -LiteralPath $root -Recurse -File -Force -Filter History -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName + '' ('' + $_.Length + '' bytes)'' }); ' +
+        '[pscustomobject]@{ root = $root; files = $files; hits = @($hits); unreadable = @($unreadable); history = @($history) } | ConvertTo-Json -Compress'
+    $run = Invoke-UserScript -Script $script -TimeoutSeconds 300
+    $parsed = $null
+    try { $parsed = (@($run.stdout) -join "`n") | ConvertFrom-Json } catch { $parsed = $null }
+    if ($run.exitCode -ne 0 -or $null -eq $parsed) { throw "The engine-folder scan failed (exit $($run.exitCode)): $(@($run.stderr) -join ' ')" }
+    $parsed
+}
+
+function Invoke-GuiExport {
+    # File > Export to PDF through the toolbar button and the real Save dialog; returns whether the dialog
+    # was found and the PDF written.
+    param([object] $Window, [int] $ProcessId, [string] $PdfPath)
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-invoke -Parameters @{ selector = @{ hwnd = [int64] $Window.hwnd; scope = 'descendants'; automationId = 'ExportPdfToolbarButton'; index = 0 }; pattern = 'invoke'; settleMilliseconds = 500 }
+    $dialog = $null
+    try { $dialog = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $ProcessId; titlePattern = '^Export to PDF$'; timeoutSeconds = 30 } } catch { $dialog = $null }
+    if ($null -ne $dialog) {
+        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command window -Parameters @{ hwnd = [int64] $dialog.hwnd; action = 'activate'; settleMilliseconds = 500 }
+        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command keyboard -Parameters @{ action = 'sequence'; sequence = @(@{ action = 'down'; key = 'ControlKey' }, @{ action = 'down'; key = 'A' }, @{ action = 'up'; key = 'A' }, @{ action = 'up'; key = 'ControlKey' }) }
+        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command keyboard -Parameters @{ action = 'text'; text = $PdfPath; settleMilliseconds = 500 }
+        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command keyboard -Parameters @{ action = 'keys'; keys = @('Enter') }
+    }
+    [pscustomobject]@{ dialog = $null -ne $dialog; exported = (Wait-File -Path $PdfPath -TimeoutSeconds 90) }
+}
+
 function Invoke-Cli {
     param([string[]] $Arguments)
     Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = $cliExe; arguments = $Arguments; workingDirectory = $DocRoot; timeoutSeconds = 180 }
@@ -295,6 +392,17 @@ try {
     }
     Set-Content -LiteralPath (Join-Path $DocRoot 'local-only.md') -Value "# Local image only`r`n`r`n![Local only](local.png)`r`n" -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $DocRoot 'no-image.md') -Value "# No images`r`n`r`nText only.`r`n" -Encoding UTF8
+    # Links to Markdown on the strict share and through the mapped drive, and a local control link.
+    Set-Content -LiteralPath (Join-Path $DocRoot 'links.md') -Encoding UTF8 -Value (
+        "# Links`r`n`r`n<a href=`"\\127.0.0.1\tmvprobe\linked.md`">Share link</a>`r`n`r`n<a href=`"//127.0.0.1/tmvprobe/linked-slash.md`">Slash share link</a>`r`n`r`n" +
+        "[Mapped drive link](file:///Z:/linked-mapped.md)`r`n`r`n[Local link](local-target.md)`r`n")
+    Set-Content -LiteralPath (Join-Path $DocRoot 'local-target.md') -Value "# Local target`r`n`r`nReached by a link.`r`n" -Encoding UTF8
+    # A web image only a proxy can reach: the guest has no network and the name does not resolve.
+    Set-Content -LiteralPath (Join-Path $DocRoot 'proxy.md') -Encoding UTF8 -Value (
+        "# Proxy`r`n`r`n![Proxied image](http://tmv-proxy.invalid/img/proxied.png)`r`n`r`n![Local image](local.png)`r`n")
+    foreach ($name in @('mw-a.md', 'mw-b.md', 'seed-1.md', 'seed-2.md')) {
+        Set-Content -LiteralPath (Join-Path $DocRoot $name) -Value "# $name`r`n`r`nMulti-window fixture.`r`n" -Encoding UTF8
+    }
 
     # A real 48x48 picture, so a rendered local image has a size a broken one cannot have.
     Add-Type -AssemblyName System.Drawing
@@ -332,6 +440,16 @@ try {
                         Add-Content -LiteralPath $RequestLog -Value ([DateTimeOffset]::Now.ToString('o') + "`t" + $line) -Encoding UTF8
                     }
                     $target = ($line -split ' ')[1]
+                    if ($target -like 'http://tmv-proxy.invalid/*') {
+                        # Asked as a proxy for a web image: demand Windows sign-in, and record only
+                        # whether a client offered credentials, never what it offered.
+                        if ([Text.Encoding]::ASCII.GetString($buffer, 0, $read) -match '(?im)^Proxy-Authorization:') {
+                            Add-Content -LiteralPath $RequestLog -Value ([DateTimeOffset]::Now.ToString('o') + "`tGET /proxy-auth-response HTTP/1.1") -Encoding UTF8
+                        }
+                        $header = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 407 Proxy Authentication Required`r`nProxy-Authenticate: NTLM`r`nContent-Length: 0`r`nConnection: close`r`n`r`n")
+                        $stream.Write($header, 0, $header.Length)
+                        continue
+                    }
                     if ($target -eq '/auth/ntlm') {
                         # Record only whether credentials were sent, never their contents.
                         if ([Text.Encoding]::ASCII.GetString($buffer, 0, $read) -match '(?im)^Authorization:') {
@@ -383,7 +501,12 @@ try {
         $null = & icacls.exe $auditedRoot '/grant' 'Users:(OI)(CI)RX' '/T' '/Q' 2>&1
     }
     Set-Content -LiteralPath (Join-Path $ShareRoot 'on-share.md') -Encoding UTF8 -Value (
-        "# On a share`r`n`r`n![Share web image](http://127.0.0.1:$Port/img/on-share-web.png)`r`n`r`n![Relative share image](on-share.png)`r`n")
+        "# On a share`r`n`r`n![Share web image](http://127.0.0.1:$Port/img/on-share-web.png)`r`n`r`n![Relative share image](on-share.png)`r`n`r`n" +
+        "[Next on share](next-on-share.md)`r`n")
+    foreach ($name in @('linked.md', 'linked-slash.md', 'next-on-share.md')) {
+        Set-Content -LiteralPath (Join-Path $ShareRoot $name) -Value "# $name`r`n" -Encoding UTF8
+    }
+    Set-Content -LiteralPath (Join-Path $MappedShareRoot 'linked-mapped.md') -Value "# linked-mapped.md`r`n" -Encoding UTF8
     Start-Service -Name LanmanServer
     $null = New-SmbShare -Name 'tmvprobe' -Path $ShareRoot -ReadAccess 'Everyone'
     $null = New-SmbShare -Name 'tmvmapped' -Path $MappedShareRoot -ReadAccess 'Everyone'
@@ -407,6 +530,14 @@ try {
         '[IO.File]::WriteAllText((Join-Path $d ''settings.json''), ''{ "syntaxHighlighting": true, "toolbarExportPdfVisible": true }'')'
     $seeded = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = 'powershell.exe'; arguments = @('-NoProfile', '-NonInteractive', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($seed))); timeoutSeconds = 60 }
     $checks.Add((New-Check 'Viewer settings seeded' 'stage.settings' ($seeded.exitCode -eq 0) "Syntax Highlighting and the Export to PDF toolbar button are on for the interactive user (exit $($seeded.exitCode); $(@($seeded.stderr) -join ' '))."))
+
+    # What an earlier version's persistent engine profile left behind: a History file in each engine
+    # folder's Default profile. The first viewer start and the first export must remove them.
+    $residue = '$w = Join-Path $env:LOCALAPPDATA ''TigerMarkView\WebView2''; foreach ($f in ''Viewer'', ''Export'') { ' +
+        '$d = Join-Path $w ($f + ''\EBWebView\Default''); $null = New-Item -ItemType Directory -Force $d; ' +
+        '[IO.File]::WriteAllText((Join-Path $d ''History''), (''TMV-LEGACY-HISTORY '' + $f)) }'
+    $residueRun = Invoke-UserScript -Script $residue
+    $checks.Add((New-Check 'Earlier-version engine history seeded' 'stage.legacy-history' ($residueRun.exitCode -eq 0) "Viewer and Export EBWebView\Default\History hold TMV-LEGACY-HISTORY (exit $($residueRun.exitCode))."))
     Add-Phase -Name 'staging' -Checks $checks
     if (-not $ready) { throw 'The request logger did not start.' }
 
@@ -627,19 +758,10 @@ try {
     $checks.Add((New-Check 'Hostile code is shown as literal text' 'viewer.code-literal' $literal "The C# string literal and the plain <script> line are found as page text."))
 
     # GUI export of the same retained, highlighted page, through the Save dialog.
-    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-invoke -Parameters @{ selector = @{ hwnd = [int64] $window.hwnd; scope = 'descendants'; automationId = 'ExportPdfToolbarButton'; index = 0 }; pattern = 'invoke'; settleMilliseconds = 500 }
-    $dialog = $null
-    try { $dialog = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $app.processId; titlePattern = '^Export to PDF$'; timeoutSeconds = 30 } } catch { $dialog = $null }
-    if ($null -ne $dialog) {
-        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command window -Parameters @{ hwnd = [int64] $dialog.hwnd; action = 'activate'; settleMilliseconds = 500 }
-        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command keyboard -Parameters @{ action = 'sequence'; sequence = @(@{ action = 'down'; key = 'ControlKey' }, @{ action = 'down'; key = 'A' }, @{ action = 'up'; key = 'A' }, @{ action = 'up'; key = 'ControlKey' }) }
-        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command keyboard -Parameters @{ action = 'text'; text = $guiPdf; settleMilliseconds = 500 }
-        $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command keyboard -Parameters @{ action = 'keys'; keys = @('Enter') }
-    }
-    $exported = Wait-File -Path $guiPdf -TimeoutSeconds 90
+    $export = Invoke-GuiExport -Window $window -ProcessId $app.processId -PdfPath $guiPdf
     $guiKeyword = Test-PdfHasColour -PdfPath $guiPdf -R $PrintKeyword[0] -G $PrintKeyword[1] -B $PrintKeyword[2]
     $guiComment = Test-PdfHasColour -PdfPath $guiPdf -R $PrintComment[0] -G $PrintComment[1] -B $PrintComment[2]
-    $checks.Add((New-Check 'Syntax highlighting reaches the exported PDF' 'pdf.gui-highlighting' ($exported -and $guiKeyword -and $guiComment) "Save dialog found: $($null -ne $dialog); code-gui.pdf written: $exported; print keyword colour: $guiKeyword; print comment colour: $guiComment."))
+    $checks.Add((New-Check 'Syntax highlighting reaches the exported PDF' 'pdf.gui-highlighting' ($export.exported -and $guiKeyword -and $guiComment) "Save dialog found: $($export.dialog); code-gui.pdf written: $($export.exported); print keyword colour: $guiKeyword; print comment colour: $guiComment."))
 
     Start-Sleep -Seconds 2
     $codeExfil = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -like '/exfil/*' })
@@ -719,6 +841,235 @@ try {
         if (Test-Path -LiteralPath $file) { Copy-Item -LiteralPath $file -Destination $Artifacts }
     }
     Add-Phase -Name 'pdf-shares-code' -Checks $checks
+
+    # --- viewer: links to network shares ---------------------------------------------------------
+    # A followed link must not open a share (which signs in to its host); a share the reader names
+    # still opens. The strict share is the oracle: no drive letter leads to it.
+    $checks = New-Object System.Collections.Generic.List[object]
+    try {
+    $app = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command start-process -Parameters @{ filePath = $viewerExe; arguments = @((Join-Path $DocRoot 'links.md')); workingDirectory = $DocRoot }
+    $window = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $app.processId; titlePattern = '^links\.md'; timeoutSeconds = 120 }
+    # The title is set before the page has rendered; wait for its last link to be on screen.
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-wait -Parameters @{ selector = @{ hwnd = [int64] $window.hwnd; scope = 'descendants'; name = '^Local link$'; index = 0 }; timeoutSeconds = 60 }
+    $since = Get-Date
+    foreach ($name in @('Share link', 'Slash share link', 'Mapped drive link')) {
+        $click = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command mouse -Parameters @{ selector = @{ hwnd = [int64] $window.hwnd; scope = 'descendants'; name = "^$([regex]::Escape($name))$"; index = 0 }; action = 'click'; settleMilliseconds = 700 }
+        # The refusal note is transient (6 s): read the status line itself, by its automation id, at once,
+        # rather than searching the whole tree, which the page's own UIA tree makes slower than the note.
+        $statusText = ''
+        try { $statusText = [string] (Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-find -Parameters @{ selector = @{ hwnd = [int64] $window.hwnd; scope = 'descendants'; automationId = 'StatusText'; index = 0 } }).element.name } catch { $statusText = '' }
+        $explained = $statusText -match 'leads to a network location'
+        $titles = @(Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command list-windows -Parameters @{ processId = $app.processId } | ForEach-Object { $_.title })
+        $stayed = @($titles | Where-Object { $_ -match '^links\.md' }).Count -eq 1
+        $checks.Add((New-Check "A $($name.ToLowerInvariant()) is not followed" ('links.' + ($name.ToLowerInvariant() -replace ' ', '-')) ([bool] $click.targetHit -and $stayed -and $explained) "Click reached the link: $($click.targetHit); windows: $($titles -join ' | '); status: '$statusText'."))
+    }
+    $null = Save-DesktopCapture -Session $TigerWinLabDesktop -Name 'viewer-share-links.png' -Destination $Artifacts -Hwnd ([int64] $window.hwnd)
+    Start-Sleep -Seconds 3
+    $touched = @(Get-DocumentShareAccess -Since $since)
+    $checks.Add((New-Check 'No linked share document is opened' 'links.no-share-access' ($touched.Count -eq 0) "Share accesses since the clicks: $(Format-ShareAccess -Since $since)."))
+    $local = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command mouse -Parameters @{ selector = @{ hwnd = [int64] $window.hwnd; scope = 'descendants'; name = '^Local link$'; index = 0 }; action = 'click'; settleMilliseconds = 1500 }
+    $followed = $null
+    try { $followed = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $app.processId; titlePattern = '^local-target\.md'; timeoutSeconds = 30 } } catch { $followed = $null }
+    $checks.Add((New-Check 'A local link is still followed' 'links.local-control' ([bool] $local.targetHit -and $null -ne $followed) "Click reached the link: $($local.targetHit); local-target.md shown: $($null -ne $followed)."))
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command stop-process -Parameters @{ processId = $app.processId }
+
+    # A relative link inside a document opened from the share leads to the share too.
+    $app = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command start-process -Parameters @{ filePath = $viewerExe; arguments = @('\\127.0.0.1\tmvprobe\on-share.md'); workingDirectory = $DocRoot }
+    $window = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $app.processId; titlePattern = '^on-share\.md'; timeoutSeconds = 120 }
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-wait -Parameters @{ selector = @{ hwnd = [int64] $window.hwnd; scope = 'descendants'; name = '^Next on share$'; index = 0 }; timeoutSeconds = 60 }
+    Start-Sleep -Seconds 3
+    $since = Get-Date
+    $click = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command mouse -Parameters @{ selector = @{ hwnd = [int64] $window.hwnd; scope = 'descendants'; name = '^Next on share$'; index = 0 }; action = 'click'; settleMilliseconds = 2500 }
+    Start-Sleep -Seconds 3
+    $touched = @(Get-ShareAccess -Since $since)
+    $titles = @(Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command list-windows -Parameters @{ processId = $app.processId } | ForEach-Object { $_.title })
+    $checks.Add((New-Check 'A relative link in a document on a share is not followed' 'links.relative-on-share' ([bool] $click.targetHit -and ($touched -notcontains 'next-on-share.md') -and @($titles | Where-Object { $_ -match '^on-share\.md' }).Count -eq 1) "Click reached the link: $($click.targetHit); share files asked for since: $(Join-Names $touched); windows: $($titles -join ' | ')."))
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command stop-process -Parameters @{ processId = $app.processId }
+
+    # The reader may still name a share document themselves: the command line is an explicit open.
+    $since = Get-Date
+    $app = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command start-process -Parameters @{ filePath = $viewerExe; arguments = @('\\127.0.0.1\tmvprobe\linked.md'); workingDirectory = $DocRoot }
+    $opened = $null
+    try { $opened = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $app.processId; titlePattern = '^linked\.md'; timeoutSeconds = 120 } } catch { $opened = $null }
+    $read = Wait-ShareAccess -Since $since -Name 'linked.md' -TimeoutSeconds 30
+    $checks.Add((New-Check 'A share document the reader opens still opens' 'links.explicit-share-open' ($null -ne $opened -and $read) "linked.md shown: $($null -ne $opened); read from the share: $read."))
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command stop-process -Parameters @{ processId = $app.processId }
+    }
+    catch { $checks.Add((New-Check 'Phase completed' 'viewer-share-links.error' $false $_.Exception.Message)) }
+    Add-Phase -Name 'viewer-share-links' -Checks $checks
+
+    # --- remote images turned off ----------------------------------------------------------------
+    $checks = New-Object System.Collections.Generic.List[object]
+    try {
+    Set-UserSettings -Values @{ loadRemoteImages = $false }
+    $mark = @(Get-Requests).Count
+    $app = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command start-process -Parameters @{ filePath = $viewerExe; arguments = @($hostile); workingDirectory = $DocRoot }
+    $window = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $app.processId; titlePattern = '^hostile\.md'; timeoutSeconds = 120 }
+    Start-Sleep -Seconds 15
+    $null = Save-DesktopCapture -Session $TigerWinLabDesktop -Name 'viewer-remote-off.png' -Destination $Artifacts -Hwnd ([int64] $window.hwnd)
+    $web = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -like '/img/*' })
+    $localSize = Get-ImageSize -Hwnd ([int64] $window.hwnd) -Name 'Local image'
+    $checks.Add((New-Check 'With remote images off the viewer requests no web image' 'remote-off.viewer' ($web.Count -eq 0) "Web image requests: $(Format-Paths $web)."))
+    $checks.Add((New-Check 'Local images still render with remote images off' 'remote-off.local-image' $localSize.rendered "'Local image' is laid out at $($localSize.description)."))
+
+    $offPdf = Join-Path $DocRoot 'hostile-remote-off.pdf'
+    $export = Invoke-GuiExport -Window $window -ProcessId $app.processId -PdfPath $offPdf
+    Start-Sleep -Seconds 2
+    $web = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -like '/img/*' })
+    $offImages = Get-ImageObjectCount -PdfPath $offPdf
+    $checks.Add((New-Check 'GUI export follows the setting' 'remote-off.gui-export' ($export.exported -and $web.Count -eq 0 -and $offImages -ge 1 -and $offImages -lt $hostileImages) "Save dialog: $($export.dialog); written: $($export.exported); web image requests: $(Format-Paths $web); image objects: $offImages (remote images on, tiger-mark: $hostileImages)."))
+    if (Test-Path -LiteralPath $offPdf) { Copy-Item -LiteralPath $offPdf -Destination $Artifacts }
+
+    # Back on through View > Rendering > Load Remote Images: the page re-renders and fetches them.
+    $mark = @(Get-Requests).Count
+    $menuFailure = ''
+    try { Invoke-MenuPath -Window $window -ProcessId $app.processId -Path @(@{ automationId = 'ViewMenu' }, @{ automationId = 'RenderingMenu' }, @{ automationId = 'LoadRemoteImagesItem' }) }
+    catch { $menuFailure = $_.Exception.Message }
+    $refetched = Wait-PassiveImages -Mark $mark -TimeoutSeconds 60
+    $saved = Get-UserSettings
+    $savedOn = $null -ne $saved -and $null -ne $saved.PSObject.Properties['loadRemoteImages'] -and [bool] $saved.loadRemoteImages
+    $checks.Add((New-Check 'Turning remote images back on from the menu loads them and is saved' 'remote-off.menu-on' ($refetched -and $savedOn) "Menu: $(if ($menuFailure) { $menuFailure } else { 'clicked' }); passive images requested again: $refetched; saved loadRemoteImages: $savedOn."))
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command stop-process -Parameters @{ processId = $app.processId }
+    }
+    catch { $checks.Add((New-Check 'Phase completed' 'remote-images-off.error' $false $_.Exception.Message)) }
+    Add-Phase -Name 'remote-images-off' -Checks $checks
+
+    # --- an authenticating proxy is never signed in to ------------------------------------------
+    # The interactive user's own proxy setting points at the logger, which answers every proxied
+    # request with an NTLM challenge and records whether a Proxy-Authorization header ever arrives.
+    $checks = New-Object System.Collections.Generic.List[object]
+    try {
+    $internet = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+    $proxyOn = Invoke-UserScript -Script ("Set-ItemProperty '$internet' -Name ProxyEnable -Value 1 -Type DWord; Set-ItemProperty '$internet' -Name ProxyServer -Value '127.0.0.1:$Port'")
+    $mark = @(Get-Requests).Count
+    $control = Invoke-UserScript -Script ("try { Invoke-WebRequest -Uri 'http://tmv-proxy.invalid/img/control.png' -Proxy 'http://127.0.0.1:$Port' -ProxyUseDefaultCredentials -UseBasicParsing -TimeoutSec 20 | Out-Null } catch { }")
+    Start-Sleep -Seconds 2
+    $offered = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -eq '/proxy-auth-response' }).Count
+    $checks.Add((New-Check 'A client that opts in offers the proxy Windows credentials' 'proxy.control' ($proxyOn.exitCode -eq 0 -and $offered -gt 0) "Proxy set: exit $($proxyOn.exitCode); Invoke-WebRequest -ProxyUseDefaultCredentials offered credentials $offered time(s) (exit $($control.exitCode))."))
+
+    $mark = @(Get-Requests).Count
+    $app = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command start-process -Parameters @{ filePath = $viewerExe; arguments = @((Join-Path $DocRoot 'proxy.md')); workingDirectory = $DocRoot }
+    $window = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $app.processId; titlePattern = '^proxy\.md'; timeoutSeconds = 120 }
+    $proxied = Wait-Request -Mark $mark -Path 'http://tmv-proxy.invalid/img/proxied.png' -TimeoutSeconds 60
+    Start-Sleep -Seconds 5
+    $offered = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -eq '/proxy-auth-response' }).Count
+    $localSize = Get-ImageSize -Hwnd ([int64] $window.hwnd) -Name 'Local image'
+    $checks.Add((New-Check 'The viewer never signs in to the proxy' 'proxy.viewer' ($proxied -and $offered -eq 0 -and $localSize.rendered) "Image asked of the proxy: $proxied; credentials offered: $offered; local image $($localSize.description)."))
+    $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command stop-process -Parameters @{ processId = $app.processId }
+
+    $mark = @(Get-Requests).Count
+    $proxyPdf = Join-Path $DocRoot 'proxy.pdf'
+    $run = Invoke-Cli -Arguments @((Join-Path $DocRoot 'proxy.md'), '-o', $proxyPdf)
+    $proxied = Wait-Request -Mark $mark -Path 'http://tmv-proxy.invalid/img/proxied.png' -TimeoutSeconds 10
+    $offered = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -eq '/proxy-auth-response' }).Count
+    $checks.Add((New-Check 'tiger-mark never signs in to the proxy' 'proxy.cli' ((Test-CliCreated -Run $run -Pdf $proxyPdf) -and $proxied -and $offered -eq 0) "Exit $($run.exitCode); image asked of the proxy: $proxied; credentials offered: $offered."))
+    $proxyOff = Invoke-UserScript -Script ("Set-ItemProperty '$internet' -Name ProxyEnable -Value 0 -Type DWord; Remove-ItemProperty '$internet' -Name ProxyServer -ErrorAction SilentlyContinue")
+    $checks.Add((New-Check 'Proxy setting restored' 'proxy.restored' ($proxyOff.exitCode -eq 0) "exit $($proxyOff.exitCode)"))
+    }
+    catch { $checks.Add((New-Check 'Phase completed' 'proxy-credentials.error' $false $_.Exception.Message)) }
+    Add-Phase -Name 'proxy-credentials' -Checks $checks
+
+    # --- several windows, one settings file -----------------------------------------------------
+    # Two viewer processes with their own copies of the settings. Each changes something through its
+    # own UI; nothing either remembers from its start may overwrite what the other saved.
+    $checks = New-Object System.Collections.Generic.List[object]
+    try {
+    $seed1 = Join-Path $DocRoot 'seed-1.md'
+    $seed2 = Join-Path $DocRoot 'seed-2.md'
+    $docA = Join-Path $DocRoot 'mw-a.md'
+    $docB = Join-Path $DocRoot 'mw-b.md'
+    Set-UserSettings -Replace -Values @{ theme = 'Light'; editorType = 'Notepad3'; pdfPaperSize = 'Letter'; syntaxHighlighting = $true; toolbarExportPdfVisible = $true; loadRemoteImages = $true; recentFiles = @($seed1, $seed2) }
+
+    $appB = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command start-process -Parameters @{ filePath = $viewerExe; arguments = @($docB); workingDirectory = $DocRoot }
+    $windowB = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $appB.processId; titlePattern = '^mw-b\.md'; timeoutSeconds = 120 }
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    do { $saved = Get-UserSettings; Start-Sleep -Milliseconds 500 } while ([DateTime]::UtcNow -lt $deadline -and -not ($null -ne $saved -and @($saved.recentFiles | Where-Object { Test-SameFile $_ $docB }).Count -eq 1))
+    $appA = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command start-process -Parameters @{ filePath = $viewerExe; arguments = @($docA); workingDirectory = $DocRoot }
+    $windowA = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $appA.processId; titlePattern = '^mw-a\.md'; timeoutSeconds = 120 }
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    do { $saved = Get-UserSettings; Start-Sleep -Milliseconds 500 } while ([DateTime]::UtcNow -lt $deadline -and -not ($null -ne $saved -and @($saved.recentFiles | Where-Object { Test-SameFile $_ $docA }).Count -eq 1))
+
+    # Window B, started before A opened mw-a.md, reopens seed-2.md from its own Open Recent.
+    $menuFailure = ''
+    try { Invoke-MenuPath -Window $windowB -ProcessId $appB.processId -Path @(@{ automationId = 'FileMenu' }, @{ automationId = 'OpenRecentMenuItem' }, @{ name = '^seed-2\.md$' }) }
+    catch { $menuFailure = $_.Exception.Message }
+    $reopened = $null
+    try { $reopened = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $appB.processId; titlePattern = '^seed-2\.md'; timeoutSeconds = 30 } } catch { $reopened = $null }
+    if ($null -ne $reopened) { $windowB = $reopened }
+    Start-Sleep -Seconds 2
+    $saved = Get-UserSettings
+    $recent = @(if ($null -ne $saved) { @($saved.recentFiles) })
+    $merged = $recent.Count -ge 3 -and (Test-SameFile $recent[0] $seed2) -and @($recent | Where-Object { Test-SameFile $_ $docA }).Count -eq 1 -and @($recent | Where-Object { Test-SameFile $_ $docB }).Count -eq 1
+    $checks.Add((New-Check 'Recent files opened in two windows are all kept' 'multi-window.recent-merged' $merged "Menu: $(if ($menuFailure) { $menuFailure } else { 'clicked' }); B reopened seed-2.md: $($null -ne $reopened); saved list: $($recent -join ' | ')."))
+
+    # Window A clears Open Recent; window B, which still remembers the list, then changes its theme.
+    $menuFailure = ''
+    try { Invoke-MenuPath -Window $windowA -ProcessId $appA.processId -Path @(@{ automationId = 'FileMenu' }, @{ automationId = 'OpenRecentMenuItem' }, @{ automationId = 'ClearRecentFilesMenuItem' }) }
+    catch { $menuFailure = $_.Exception.Message }
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do { $saved = Get-UserSettings; Start-Sleep -Milliseconds 500 } while ([DateTime]::UtcNow -lt $deadline -and -not ($null -ne $saved -and @($saved.recentFiles).Count -eq 0))
+    $checks.Add((New-Check 'Clear Recent Files in window A is saved at once' 'multi-window.cleared' ($null -ne $saved -and @($saved.recentFiles).Count -eq 0) "Menu: $(if ($menuFailure) { $menuFailure } else { 'clicked' }); saved entries: $(if ($saved) { @($saved.recentFiles).Count })."))
+    $menuFailure = ''
+    try { Invoke-MenuPath -Window $windowB -ProcessId $appB.processId -Path @(@{ automationId = 'ViewMenu' }, @{ automationId = 'ThemeMenu' }, @{ automationId = 'DarkThemeItem' }) }
+    catch { $menuFailure = $_.Exception.Message }
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do { $saved = Get-UserSettings; Start-Sleep -Milliseconds 500 } while ([DateTime]::UtcNow -lt $deadline -and -not ($null -ne $saved -and [string] $saved.theme -eq 'Dark'))
+    $null = Save-DesktopCapture -Session $TigerWinLabDesktop -Name 'multi-window.png' -Destination $Artifacts
+    $checks.Add((New-Check 'A later theme change in window B keeps the list cleared' 'multi-window.theme-after-clear' ($null -ne $saved -and [string] $saved.theme -eq 'Dark' -and @($saved.recentFiles).Count -eq 0) "Menu: $(if ($menuFailure) { $menuFailure } else { 'clicked' }); theme: $(if ($saved) { $saved.theme }); entries: $(if ($saved) { @($saved.recentFiles).Count })."))
+
+    # Both windows close normally, B first, each writing its placement.
+    $closedB = Close-Viewer -Window $windowB -ProcessId $appB.processId
+    $closedA = Close-Viewer -Window $windowA -ProcessId $appA.processId
+    $saved = Get-UserSettings
+    $kept = $null -ne $saved -and @($saved.recentFiles).Count -eq 0 -and [string] $saved.theme -eq 'Dark' -and [string] $saved.editorType -eq 'Notepad3' -and
+        [string] $saved.pdfPaperSize -eq 'Letter' -and [bool] $saved.syntaxHighlighting -and [bool] $saved.toolbarExportPdfVisible -and [bool] $saved.loadRemoteImages
+    $description = 'no settings file'
+    if ($null -ne $saved) { $description = "entries $(@($saved.recentFiles).Count), theme $($saved.theme), editor $($saved.editorType), paper $($saved.pdfPaperSize), highlighting $($saved.syntaxHighlighting), export button $($saved.toolbarExportPdfVisible), remote images $($saved.loadRemoteImages)" }
+    $checks.Add((New-Check 'Closing both windows keeps every setting either changed and every unrelated one' 'multi-window.closed' ($closedA -and $closedB -and $kept) "Closed normally: A $closedA, B $closedB; saved: $description."))
+    }
+    catch { $checks.Add((New-Check 'Phase completed' 'multi-window-settings.error' $false $_.Exception.Message)) }
+    Add-Phase -Name 'multi-window-settings' -Checks $checks
+
+    # --- no browsing history on disk -------------------------------------------------------------
+    # Every viewer and export in this run has ended, several by being killed. A persistent engine profile
+    # would now hold the generated pages' addresses and the documents' titles; InPrivate holds nothing.
+    $checks = New-Object System.Collections.Generic.List[object]
+    try {
+    Start-Sleep -Seconds 5
+    $markers = @('TigerMarkView/preview-', 'TigerMarkView\preview-', 'TigerMarkView/pdf/export-', 'TigerMarkView\pdf\export-', 'TMV-LEGACY-HISTORY',
+        'hostile.md', 'shares.md', 'code.md', 'links.md', 'local-target.md', 'proxy.md', 'mw-a.md', 'seed-2.md', 'on-share.md')
+    $scan = Find-EngineMarkers -Markers $markers
+    $checks.Add((New-Check 'No browsing record of any viewed or exported document' 'history.none' ($scan.files -gt 0 -and @($scan.hits).Count -eq 0 -and @($scan.unreadable).Count -eq 0) "$($scan.files) file(s) under $($scan.root), $(@($scan.unreadable).Count) unreadable $(@($scan.unreadable) -join '; '); History files: $(@($scan.history) -join '; '); hits: $(if (@($scan.hits).Count) { @($scan.hits) -join '; ' } else { '(none)' })."))
+    $state = Invoke-UserScript -Script '$w = Join-Path $env:LOCALAPPDATA ''TigerMarkView\WebView2''; foreach ($f in ''Viewer'', ''Export'') { $f + ''='' + (Test-Path (Join-Path $w ($f + ''\TigerMarkView.InPrivate''))) + '','' + (Test-Path (Join-Path $w ($f + ''\EBWebView\Default\History''))) }'
+    $lines = @($state.stdout | Where-Object { $_ })
+    # Chromium may create an empty History of its own for the parent profile; what matters is that the
+    # earlier version's file, with its marker, is gone and the removal recorded.
+    $legacyHits = @(@($scan.hits) | Where-Object { $_ -like '*TMV-LEGACY-HISTORY' })
+    $migrated = @($lines | Where-Object { $_ -match '=True,' }).Count -eq 2 -and $legacyHits.Count -eq 0
+    $checks.Add((New-Check "An earlier version's engine history is removed" 'history.legacy-removed' $migrated "Removal marker written, a History file present, per folder: $($lines -join '; '); legacy marker found: $($legacyHits.Count)."))
+
+    # The control: an ordinary Chromium profile does record such a visit where the scan looks.
+    $controlFolder = Join-Path $DocRoot 'TigerMarkView'
+    $null = New-Item -ItemType Directory -Path $controlFolder -Force
+    $controlPage = Join-Path $controlFolder 'preview-control.html'
+    Set-Content -LiteralPath $controlPage -Encoding ASCII -Value '<!doctype html><html><head><title>history control</title></head><body>control</body></html>'
+    $controlProfile = Join-Path $DocRoot 'history-control-profile'
+    # The documents folder already grants Users modify, inherited by this new folder; a recursive grant
+    # here would walk into the symbolic links to the shares.
+    # A WebView2 engine with an ordinary persistent profile, as earlier versions ran one (headless Edge
+    # keeps no history, so it cannot serve as this control).
+    $controlRun = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = (Join-Path $AppRoot 'ActiveContentProbe.exe'); arguments = @($DocRoot, '--history-control', $controlProfile, $controlPage); workingDirectory = $DocRoot; timeoutSeconds = 120 }
+    # The engine's browser process outlives the host by a moment; give it time to let go of its files.
+    $controlScan = $null
+    for ($attempt = 0; $attempt -lt 7; $attempt++) {
+        Start-Sleep -Seconds 5
+        $controlScan = Find-EngineMarkers -Markers @('TigerMarkView/preview-control') -Root $controlProfile
+        if (@($controlScan.hits).Count -gt 0) { break }
+    }
+    $checks.Add((New-Check 'The scan finds an ordinary profile''s record of a visit' 'history.control' ($controlRun.exitCode -eq 0 -and @($controlScan.hits).Count -gt 0) "Persistent-profile WebView2: exit $($controlRun.exitCode); $($controlScan.files) file(s), $(@($controlScan.unreadable).Count) unreadable $(@($controlScan.unreadable) -join '; '); History files: $(@($controlScan.history) -join '; '); hits: $(@($controlScan.hits) -join '; ')."))
+    }
+    catch { $checks.Add((New-Check 'Phase completed' 'browsing-history.error' $false $_.Exception.Message)) }
+    Add-Phase -Name 'browsing-history' -Checks $checks
 }
 catch {
     Add-Phase -Name 'error' -Checks @(New-Check 'Payload completed' 'payload.error' $false $_.Exception.Message)

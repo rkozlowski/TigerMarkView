@@ -106,6 +106,8 @@ if ($arguments[0] -eq 'winget' -and $arguments[1] -eq 'prepare') {
         "  Scope: user`n  InstallerUrl: <unresolved>`n  InstallerSha256: <unresolved>`n" +
         "ManifestType: installer`nManifestVersion: 1.12.0`n")
     $privacy = if ($env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL) { "PrivacyUrl: $env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL`n" } else { '' }
+    if ($env:TIGERMARKVIEW_TEST_TIGERSETUP_LICENSE_URL) { $privacy += "LicenseUrl: $env:TIGERMARKVIEW_TEST_TIGERSETUP_LICENSE_URL`n" }
+    if ($env:TIGERMARKVIEW_TEST_TIGERSETUP_RELEASE_NOTES_URL) { $privacy += "ReleaseNotesUrl: $env:TIGERMARKVIEW_TEST_TIGERSETUP_RELEASE_NOTES_URL`n" }
     [IO.File]::WriteAllText((Join-Path $directory 'ItTiger.TigerMarkView.locale.en-US.yaml'),
         ($header -f 'defaultLocale') + "`n" + $common + "PackageLocale: en-US`n" + $privacy +
         "ManifestType: defaultLocale`nManifestVersion: 1.12.0`n")
@@ -136,6 +138,13 @@ exit 2
     $privacyTemplate = $Matches.value
     $privacyUrl = "https://github.com/rkozlowski/TigerMarkView/releases/download/v$version/PRIVACY.md"
     $env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL = $privacyTemplate
+    # The same for license_url and release_notes_url: verbatim, {version} included.
+    foreach ($key in 'license_url', 'release_notes_url') {
+        $line = @(Get-Content -LiteralPath (Join-Path $repositoryRoot 'installer\TigerSetup.toml') | Where-Object { $_ -match "^\s*$key\s*=\s*`"[^`"]+`"" })
+        Assert-True ($line.Count -eq 1) "installer\TigerSetup.toml must declare exactly one $key."
+        $null = $line[0] -match '"(?<value>[^"]+)"'
+        Set-Item -Path ('Env:TIGERMARKVIEW_TEST_TIGERSETUP_' + $key.ToUpperInvariant()) -Value $Matches.value
+    }
 
     $defaultOutput = Join-Path $testRoot 'default'
     & $prepareScript `
@@ -182,6 +191,7 @@ exit 2
         'https://github.com/rkozlowski/TigerMarkView/blob/main/docs/PRIVACY.md'
         "https://github.com/rkozlowski/TigerMarkView/blob/v$version/docs/PRIVACY.md"
         'https://github.com/rkozlowski/TigerMarkView/releases/download/v0.11.0/PRIVACY.md'
+        'https://github.com/rkozlowski/TigerMarkView/releases/download/v0.11.1/PRIVACY.md'
         "https://github.com/rkozlowski/TigerMarkView/releases/download/v$version/HELP.md"
         'https://github.com/rkozlowski/TigerMarkView/releases/latest/download/PRIVACY.md'
     )
@@ -288,6 +298,10 @@ exit /b 2
     Assert-True (@($storedLocaleLines | Where-Object { $_ -ceq "PrivacyUrl: $privacyUrl" }).Count -eq 1 -and
         @($storedLocaleLines | Where-Object { $_ -match '\{version\}' }).Count -eq 0) `
         'The {version} token must be resolved in the one PrivacyUrl line, as a plain scalar, and nowhere else left behind.'
+    Assert-True ($stored.locale.licenseUrl -ceq "https://github.com/rkozlowski/TigerMarkView/blob/v$version/LICENSE" -and
+        $stored.locale.releaseNotesUrl -ceq "https://github.com/rkozlowski/TigerMarkView/releases/tag/v$version" -and
+        $release.licenseUrl -ceq $stored.locale.licenseUrl -and $release.releaseNotesUrl -ceq $stored.locale.releaseNotesUrl) `
+        'The default-locale manifest must declare the licence at this version''s tag and this version''s release page.'
     Write-Host 'PASS: a prepared directory reads back as the three-file submission set'
 
     # The rule itself, independently of generation: only the version's own release asset passes.
@@ -297,6 +311,7 @@ exit /b 2
             @{ url = 'https://github.com/rkozlowski/TigerMarkView/blob/main/docs/PRIVACY.md'; reason = 'can change after the release' }
             @{ url = 'https://github.com/rkozlowski/TigerMarkView/raw/main/docs/PRIVACY.md'; reason = 'can change after the release' }
             @{ url = 'https://github.com/rkozlowski/TigerMarkView/releases/download/v0.11.0/PRIVACY.md'; reason = 'release v0\.11\.0, not' }
+            @{ url = 'https://github.com/rkozlowski/TigerMarkView/releases/download/v0.11.1/PRIVACY.md'; reason = 'release v0\.11\.1, not' }
             @{ url = "https://github.com/rkozlowski/TigerMarkView/releases/download/v$version/HELP.md"; reason = "'HELP\.md', not the release's PRIVACY\.md" }
             @{ url = 'https://github.com/rkozlowski/TigerMarkView/releases/latest/download/PRIVACY.md'; reason = 'whichever release is latest' }
             @{ url = 'https://www.ittiger.net/privacy'; reason = 'is not the PRIVACY\.md asset' }
@@ -1022,5 +1037,7 @@ finally {
     Remove-Item Env:TIGERMARKVIEW_TEST_TIGERSETUP_VERSION -ErrorAction SilentlyContinue
     Remove-Item Env:TIGERMARKVIEW_TEST_TIGERSETUP_URL -ErrorAction SilentlyContinue
     Remove-Item Env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL -ErrorAction SilentlyContinue
+    Remove-Item Env:TIGERMARKVIEW_TEST_TIGERSETUP_LICENSE_URL -ErrorAction SilentlyContinue
+    Remove-Item Env:TIGERMARKVIEW_TEST_TIGERSETUP_RELEASE_NOTES_URL -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

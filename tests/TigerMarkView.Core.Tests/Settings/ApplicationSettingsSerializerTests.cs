@@ -34,6 +34,7 @@ public class ApplicationSettingsSerializerTests
             SyntaxHighlighting = true,
             ToolbarOpenRecentVisible = true,
             ToolbarExportPdfVisible = true,
+            LoadRemoteImages = false,
             Window = new WindowPlacement { Width = 1234, Height = 567, X = 40, Y = 80, Maximized = true },
         };
 
@@ -58,6 +59,7 @@ public class ApplicationSettingsSerializerTests
         Assert.True(restored.SyntaxHighlighting);
         Assert.True(restored.ToolbarOpenRecentVisible);
         Assert.True(restored.ToolbarExportPdfVisible);
+        Assert.False(restored.LoadRemoteImages);
         Assert.Equal(1234, restored.Window.Width);
         Assert.Equal(567, restored.Window.Height);
         Assert.Equal(40, restored.Window.X);
@@ -543,5 +545,37 @@ public class ApplicationSettingsSerializerTests
 
         Assert.NotNull(settings.Window);
         Assert.Empty(settings.RecentFiles);
+    }
+
+    /// <summary>
+    /// Remote images are on unless the reader turned them off, and every file written before the
+    /// setting existed lands on that default rather than silently changing what a document shows.
+    /// </summary>
+    [Fact]
+    public void ASettingsFileWrittenBeforeRemoteImagesCouldBeTurnedOffStillLoadsThem()
+    {
+        var restored = ApplicationSettingsSerializer.Deserialize("""{ "theme": "Dark", "recentFiles": [ "C:\\docs\\a.md" ] }""");
+
+        Assert.True(restored.LoadRemoteImages);
+        Assert.True(ApplicationSettings.CreateDefault().LoadRemoteImages);
+        Assert.Equal(MarkdownTheme.Dark, restored.Theme);
+    }
+
+    /// <summary>
+    /// An unusable value is read as off — the more private reading — and does not cost the reader
+    /// the rest of their settings.
+    /// </summary>
+    [Theory]
+    [InlineData("\"sometimes\"")]
+    [InlineData("42")]
+    [InlineData("null")]
+    public void AnUnusableRemoteImageSettingTurnsThemOffWithoutDiscardingTheOtherSettings(string value)
+    {
+        var restored = ApplicationSettingsSerializer.Deserialize(
+            $$"""{ "theme": "Dark", "loadRemoteImages": {{value}}, "recentFiles": [ "C:\\docs\\a.md" ] }""");
+
+        Assert.False(restored.LoadRemoteImages);
+        Assert.Equal(MarkdownTheme.Dark, restored.Theme);
+        Assert.Equal([@"C:\docs\a.md"], restored.RecentFiles);
     }
 }

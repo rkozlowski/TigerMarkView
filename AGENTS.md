@@ -649,10 +649,21 @@ Edge's print preview. The intercepted command must remain a no-op.
 - file-state, reload, navigation, recent-file, timestamp, and window-placement rules;
 - editor-launch planning;
 - PDF request validation, page geometry, and file naming;
-- application-settings shape and version formatting.
+- application-settings shape, the shared settings file's merge-update semantics
+  (`ApplicationSettingsFile`), and version formatting.
 
 `TigerMarkView` owns Avalonia and operating-system integration: windows, menus, WebView hosting, file
-watching, settings storage, process launching, status presentation, and PDF export UI.
+watching, the settings file's location (`SettingsStore`), process launching, status presentation, and
+PDF export UI.
+
+Multi-window is required, and each window is its own process; do not make TigerMarkView
+single-instance or add IPC for it. All windows share one settings file. A window never writes its
+whole in-memory `ApplicationSettings`: every change goes through `MainWindow.UpdateSettings`, which
+applies that one change to the file as it is now under a per-file named mutex
+(`ApplicationSettingsFile.Update`) and adopts the merged Open Recent list back. A change states the
+value it sets, never toggles what it finds. Closing a window writes only its placement. Open Recent is
+re-read from the file when a window is activated and when a surface showing it opens. Generated pages
+are per process (`GeneratedPages`), never one shared file.
 
 `TigerMarkView.Pdf` owns Windows/WebView2 PDF generation. `TigerMarkView.Cli` is a thin front end
 over Core and Pdf. Core must not reference Avalonia or Windows-only assemblies, and the CLI must not
@@ -733,7 +744,17 @@ CSP must also prevent document code from running:
   and supplied as response bytes. Only image negotiation headers are copied; browser cookies,
   authorization and referrers are not. Redirects stay HTTP(S). A browser authentication-event veto is
   too late to prevent automatic NTLM negotiation, so never restore direct browser image networking
-  without the loopback authentication regression. Images requiring authentication do not load.
+  without the loopback authentication regression. Images requiring authentication do not load. The
+  client also offers nothing to a proxy (`DefaultProxyCredentials` stays `null`): a proxy requiring
+  Windows authentication makes web images fail rather than receive the reader's sign-in. Do not restore
+  ambient proxy credentials; authenticated-proxy support would be an explicit opt-in product decision.
+
+  Remote images are a reader setting, `ApplicationSettings.LoadRemoteImages`, on by default. It is not
+  a rendering option and does not change the HTML: `WebResourcePolicy.Allows(..., remoteImages)` is the
+  one rule, and `WebViewResourceBoundary.Apply(core, remoteImages)` asks it on every request, so the
+  viewer refuses web images before any request when it is off. GUI PDF export passes the same value in
+  `PdfExportRequest.RemoteImages`; Help passes `false` (offline by contract); `tiger-mark` keeps the
+  default, on.
 
 PDF export additionally runs with document script, web messages, and host objects disabled, and cancels
 any navigation other than its own temporary file. `eng/lab/Test-TigerMarkViewActiveContent.ps1` is the
@@ -791,7 +812,12 @@ The generated shell scripts have narrow responsibilities:
 
 The WebView displays only TigerMarkView-generated preview files. Intercept other navigation:
 
-- local Markdown routes through the normal document-opening pipeline;
+- local Markdown routes through the normal document-opening pipeline, except that while a document is
+  on screen no WebView request may open a Markdown file not on local storage: `NetworkLinkPolicy`
+  refuses it before anything opens it, whatever `ViewerRequestOrigin` concluded, because opening a share
+  signs in to its host with the reader's credentials and href matching must not be the only guard.
+  Explicit opens that bypass the WebView (picker, a drop on the chrome or the empty viewer, Open Recent,
+  command line) may still name a share;
 - `http`, `https`, and `mailto` route to the system handler; and
 - other local or unknown targets are refused.
 
@@ -827,6 +853,12 @@ above the control rather than at the pointer; use the existing toolbar/status st
 WebView2 user-data folders must be explicit and under Local AppData, never beside the executable.
 Viewer, export, and print hosts use separate sibling folders because WebView2 environments may share a
 folder only when their creation options match.
+
+Every WebView2 engine runs InPrivate (Avalonia's `IsInPrivateModeEnabled` for viewer and Help, the
+controller option for PDF export), so viewing leaves no browsing history, cache or session on disk.
+`InPrivateBrowsing.RemovePersistentProfile` deletes the persistent `EBWebView\Default` profile earlier
+versions recorded, once per folder (marker file). Do not reintroduce a persistent profile or replace
+InPrivate with clearing data at shutdown, which a crash defeats.
 
 `NativeTitleBar` applies the Dark-mode DWM attribute and refreshes the non-client area. Treat this as
 best-effort: title-bar theming must never prevent a window from opening.
@@ -955,7 +987,9 @@ description. The privacy statement link is the WinGet `PrivacyUrl`, which every 
 declare. It is version-derived - `$(RepositoryUrl)/releases/download/v$(Version)/PRIVACY.md`, the
 version's own immutable release asset - and generation, sealing, and the post-release gate refuse any
 other value, `blob/main` included. A privacy statement is version-specific product behaviour: never
-point a released version at a mutable copy.
+point a released version at a mutable copy. The manifest's `LicenseUrl` (`blob/v<version>/LICENSE`) and
+`ReleaseNotesUrl` (`releases/tag/v<version>`) are pinned to the version the same way, through the
+`{version}` token `Resolve-TigerMarkViewWinGetVersionedUrls` resolves.
 The four shipped projects import it explicitly; test/helper projects do not. `Directory.Build.props`
 contains repository-wide build policy only. Assemblies, About, TigerCli help/version output, installer
 metadata, artifact names, release automation, and WinGet preparation derive from `Version.props`. Do
@@ -1019,8 +1053,8 @@ regenerated; `release-artifacts.json` records its hash and the set's submission 
 frozen byte for byte (kind `PrivacyStatement` in both records, proven equal to the commit's blob and to
 the installer's `Docs\PRIVACY.md`; `.gitattributes` pins the file to LF so checkouts reproduce those
 bytes). Releases up to 0.10.0 keep their published three assets;
-`Test-TigerMarkViewReleasePredatesWinGetArchive` is that one historic boundary, and 0.11.0 was never
-published. Release notes link the release's `PRIVACY.md` asset, which the notes gate requires. Public documentation remains `README.md` plus `docs/`;
+`Test-TigerMarkViewReleasePredatesWinGetArchive` is that one historic boundary, and 0.11.0 and 0.11.1
+were never published. Release notes link the release's `PRIVACY.md` asset, which the notes gate requires. Public documentation remains `README.md` plus `docs/`;
 do not introduce DocFX, generated API docs, or an API-documentation site. TigerMarkView's completed
 release/WinGet workflow is the reference model for future Tiger projects. The durable maintainer
 lifecycle is in `docs/maintainers/releasing-tigermarkview.md` and the artifact and submission rules

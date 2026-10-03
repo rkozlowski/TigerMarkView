@@ -15,9 +15,9 @@ TigerMarkView is a viewer for Markdown files on your computer. It has no account
 analytics, advertising, crash reporting of its own, or update checks, and it asks for and stores no
 passwords, keys, or other credentials. TigerMarkView does not send your settings, your recent-file
 history, or the documents you open to IT Tiger or to anyone else. It makes network requests only for
-the web images a document refers to, for a document you open from another computer, and, in the
-installer, to obtain a missing Microsoft runtime; each is described below. The Microsoft components it
-runs on have their own diagnostics, also described below.
+the web images a document refers to (on by default; you can turn them off), for a document you open
+from another computer, and, in the installer, to obtain a missing Microsoft runtime; each is described
+below. The Microsoft components it runs on have their own diagnostics, also described below.
 
 ## What TigerMarkView stores on your computer
 
@@ -25,7 +25,8 @@ Everything below is stored under your own Windows user profile.
 
 **Settings** — `%LocalAppData%\TigerMarkView\settings.json`:
 
-- the theme, the reload mode, and the rendering options (emoji shortcodes and syntax highlighting);
+- the theme, the reload mode, and the rendering options (emoji shortcodes, syntax highlighting, and
+  whether remote images load);
 - the editor you chose, and a custom editor's path and arguments once you have entered them;
 - the **Open Recent** list (see below);
 - the PDF export page setup;
@@ -34,28 +35,41 @@ Everything below is stored under your own Windows user profile.
 
 If the settings file is damaged and cannot be understood, TigerMarkView starts with default settings
 and keeps the damaged file beside the new one as `settings.json.invalid`, replacing any earlier one. If
-the file cannot be read at all, the defaults are used and replace it when TigerMarkView closes.
+the file exists but cannot be read at that moment, that window uses the defaults and leaves the file as
+it is.
+
+Every open TigerMarkView window uses this one settings file. A window saves only the setting you change
+in it, on top of whatever the other windows have saved, and saves its own size and position when it
+closes.
 
 **Browser engine data** — `%LocalAppData%\TigerMarkView\WebView2\`. TigerMarkView displays documents
-and exports PDFs with the Microsoft Edge WebView2 Runtime, which keeps its working data there: the
-`Viewer` folder for the viewer and Help, and the `Export` folder for PDF export and `tiger-mark`. Like a
-web browser profile, this data includes caches and a **browsing history of the pages the engine has
-shown**: for every document you view or export, its file name (the page title) and the time. This
-history is not shown anywhere in TigerMarkView, is not sent anywhere, and is kept until you delete the
-folder or uninstall TigerMarkView. Clearing the Open Recent list does not clear it.
+and exports PDFs with the Microsoft Edge WebView2 Runtime, which keeps its own working files there: the
+`Viewer` folder for the viewer and Help, and the `Export` folder for PDF export and `tiger-mark`. The
+browser engine runs in **InPrivate** mode, so it keeps no browsing history, cache, or other record of the
+pages it shows on disk; what it holds while TigerMarkView runs is discarded when the last window closes.
+What remains in these folders is the engine's own runtime data, such as components it downloaded and
+graphics caches, which names no document — except that if the engine itself crashes, it can keep a
+crash report there, which can include part of the page it was showing (see **The WebView2 Runtime and
+Windows** below).
 
-**Generated pages** — `%TEMP%\TigerMarkView\`. The rendered page of the document you are viewing is
-written to `preview.html` there: a copy of the document's text as shown, which also names the folder
-the document is in. It stays after you close the application, until it is replaced by the next document
-or page, removed by Windows' temporary-file cleanup, or removed by uninstalling. Help uses `help.html`
-the same way. PDF export prints from a temporary page under `%TEMP%\TigerMarkView\pdf\`, which is
-deleted when the export ends; if the export is interrupted, the page can remain there until cleanup or
-uninstalling.
+Earlier versions of TigerMarkView ran the browser engine with an ordinary profile, which kept a browsing
+history of the pages it had shown — for every document viewed or exported, its file name (the page title)
+and the time — together with a cache. This version deletes that profile the first time it starts, and
+the `Export` one the first time it exports a PDF. If an older TigerMarkView window is still open then,
+the deletion is tried again the next time.
+
+**Generated pages** — `%TEMP%\TigerMarkView\`. Each window writes the rendered page of the document it is
+showing to `preview-<number>.html` there, where the number identifies the window's process: a copy of the
+document's text as shown, which also names the folder the document is in. The window deletes it when it
+closes. Help uses `help-<number>.html` the same way and deletes it when Help closes. If a window ends
+without closing normally, its page stays until TigerMarkView next starts and deletes it, Windows'
+temporary-file cleanup removes it, or you uninstall. PDF export prints from a temporary page under
+`%TEMP%\TigerMarkView\pdf\`, which is deleted when the export ends; if the export is interrupted, the page
+can remain there until cleanup or uninstalling.
 
 **Not stored:** TigerMarkView's own navigation history (**Navigate > History**, Back and Forward)
-exists only while the application is running and is forgotten when you close it, apart from the
-browser engine's history described above. Which PDF you last exported from a document is also
-remembered for the current session only.
+exists only while the window is open and is forgotten when you close it. Which PDF you last exported
+from a document is also remembered for the current session only.
 
 The `tiger-mark` command stores no settings and no recent files. It uses the browser engine's `Export`
 folder and a temporary page under `%TEMP%\TigerMarkView\pdf\` that is deleted when the export ends.
@@ -83,9 +97,9 @@ empty list is saved. Your documents themselves are not changed, moved, or delete
 settings are kept. The same command is at the end of the toolbar's Open Recent list when that button
 is shown.
 
-Each open TigerMarkView window keeps its own copy of the list and saves all of its settings, that list
-included, when you open a document, when you change a setting, and when it closes. Clear the list when
-no other TigerMarkView window is open; otherwise another window can save its older list again.
+All open TigerMarkView windows share one list. A document opened in any window is added to it, and
+clearing it in one window clears it for all of them: another window shows the current list when you
+switch to it or open its menu, and saving its own settings never brings cleared entries back.
 
 Windows itself keeps its own records of files and folders used with its standard Open dialog and in
 **Recent** items in Explorer, as it does for every application. Those records belong to Windows;
@@ -100,7 +114,7 @@ installation records. It then removes TigerMarkView's data for the Windows accou
 uninstall:
 
 - `%LocalAppData%\TigerMarkView`, which holds the settings, the Open Recent list, and the browser engine
-  data with its history; and
+  data, including any history an earlier version's browser engine kept; and
 - `%TEMP%\TigerMarkView`, which holds the generated pages.
 
 An all-users installation is removed with administrator rights, and the data removed is that of the
@@ -120,7 +134,8 @@ Markdown files, or the .NET Desktop Runtime and WebView2 Runtime, which other ap
 
 **Upgrading** — installing a newer version over an installed one, including with `winget upgrade`,
 and the first install of a newer version over TigerMarkView 0.9.0 or earlier — keeps your settings,
-your Open Recent list, and the browser engine data.
+your Open Recent list, and the browser engine data; the browsing history an earlier version kept is
+then deleted as described under **Browser engine data**.
 
 TigerMarkView 0.10.0 and earlier did not remove this data when uninstalled. If you uninstalled one of
 those versions, you can delete `%LocalAppData%\TigerMarkView` and `%TEMP%\TigerMarkView` yourself.
@@ -131,25 +146,35 @@ To reset TigerMarkView to its defaults without uninstalling it, close it and del
 ## Network requests
 
 **Web images in documents.** A Markdown document can refer to an image by an `http://` or `https://`
-address, as many README files do for badges and screenshots. When TigerMarkView renders such a
-document — in the viewer, when exporting a PDF, and with `tiger-mark` — it requests each of those
-images from the address written in the document, and requests it again whenever it renders the document
-again. This happens whenever a document contains such an address; there is no setting that turns it
-off, and a document without one causes no such request.
+address, as many README files do for badges and screenshots. Loading these **remote images is on by
+default**. While it is on, when TigerMarkView renders such a document — in the viewer and when exporting
+a PDF — it requests each of those images from the address written in the document, and requests it
+again whenever it renders the document again. A document without such an address causes no such
+request.
+
+To turn remote images off, clear **View > Rendering > Load Remote Images**. The choice is saved with
+your settings and applies to every TigerMarkView window. While it is off, the viewer and PDF export
+send no request for any `http://` or `https://` image — each is refused before anything leaves your
+computer, and shown as a missing image — while images stored on your computer and images embedded in
+the document itself still show. Turning it back on shows the remote images again. Help never requests
+web images. The `tiger-mark` command has no settings: it always requests the web images of the document
+it converts.
 
 Each request goes to the web server the document names, and to any web server that server redirects it
 to. The request carries the `Accept-Encoding` header and, as the browser engine supplies them, the
 `Accept` and `User-Agent` headers, which identify the browser engine and the Windows version. It never
-carries cookies or the name or location of the document, and the web server is never sent your Windows
-sign-in: an image that requires signing in does not load.
+carries cookies or the name or location of the document, and it never carries a sign-in: your Windows
+account is not offered to the web server, and an image that requires signing in does not load.
 
 **Proxy servers.** If Windows or your environment configures a proxy server — the proxy settings of your
 Windows account, including an automatic configuration script or automatic proxy detection, or the
 `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` environment variables — image requests go through that
-proxy, which sees the address of each image. If that proxy requires Windows authentication (Negotiate,
-Kerberos, or NTLM), TigerMarkView signs in to the proxy with your Windows account, as other Windows
-applications do. Only the proxy receives that sign-in; it is never passed to the image's web server.
-With automatic proxy detection, the proxy is whichever server your network announces.
+proxy, which sees the address of each image. With automatic proxy detection, the proxy is whichever
+server your network announces. TigerMarkView never offers a proxy your Windows account, and it never
+asks for or stores a credential. If your proxy requires signing in, remote images do not load;
+everything else in TigerMarkView works as usual. The one exception is a user name and password you have
+written into one of those environment variables yourself (`http://name:password@proxy:port`): like other
+programs that read them, TigerMarkView then sends them to that proxy.
 
 As with any web request, the server that receives one can see your IP address and when the request was
 made, and because the author of the document chose the address, a web image can tell its author or the
@@ -162,11 +187,17 @@ when the document itself is on a share. Images stored on your computer are read 
 is kept online only by a sync service such as OneDrive, that service downloads it when it is read, as
 it does for any application.
 
-**Documents on other computers.** Opening a document from a network share — with **File > Open**, from
-Explorer, from Open Recent, or by following a link in a document to a Markdown file on a share — reads
-it from that computer, and watches it there for changes, as Windows reads any network file: Windows
-connects to that computer and signs in to it with your Windows account. A link in a document can name
-such a file, so check where a link leads before following it.
+**Documents on other computers.** Opening a document from a network share yourself — with
+**File > Open**, by dragging it onto the window (outside a shown document), from Explorer, from Open
+Recent, or by naming it on the command line — reads it from that computer, and watches it there for changes, as Windows reads any
+network file: Windows connects to that computer and signs in to it with your Windows account.
+
+A document never does this. While a document is shown, nothing in it can open a Markdown file on a
+network share — including one on a mapped network drive, and one a relative link reaches inside a
+document that is itself on a share: TigerMarkView says in the status bar that the link leads to a
+network location and makes no connection. Dropping such a file onto the document area is refused the
+same way, because it cannot be told apart from following a link; drop it on the window's menu bar,
+toolbar or status bar, or use **File > Open**, to read it.
 
 **Links.** A web or mail link you click in a document or in Help is opened by your default browser or
 mail application; TigerMarkView does not load the linked page itself. Other kinds of links are refused.

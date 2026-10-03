@@ -34,6 +34,7 @@ internal sealed class DocumentWebView
 {
     private readonly NativeWebView _webView;
     private readonly Func<MarkdownTheme> _theme;
+    private readonly Func<bool> _remoteImages;
     private readonly ViewerNavigationGate _gate = new();
 
     /// <summary>
@@ -45,10 +46,11 @@ internal sealed class DocumentWebView
     private Uri? _source;
     private string? _unavailableHtml;
 
-    private DocumentWebView(NativeWebView webView, Func<MarkdownTheme> theme)
+    private DocumentWebView(NativeWebView webView, Func<MarkdownTheme> theme, Func<bool> remoteImages)
     {
         _webView = webView;
         _theme = theme;
+        _remoteImages = remoteImages;
         webView.AdapterCreated += OnAdapterCreated;
         webView.AdapterDestroyed += (_, _) =>
         {
@@ -120,13 +122,15 @@ internal sealed class DocumentWebView
     /// <summary>
     /// Takes over navigation of <paramref name="webView"/>. Call it before anything navigates the
     /// control, and navigate through the returned object from then on. <paramref name="theme"/> styles
-    /// the notice shown if the boundary cannot be installed.
+    /// the notice shown if the boundary cannot be installed. <paramref name="remoteImages"/> is asked on
+    /// every web image request, so a changed Load Remote Images setting applies to the very next one.
     /// </summary>
-    public static DocumentWebView Attach(NativeWebView webView, Func<MarkdownTheme> theme)
+    public static DocumentWebView Attach(NativeWebView webView, Func<MarkdownTheme> theme, Func<bool> remoteImages)
     {
         ArgumentNullException.ThrowIfNull(webView);
         ArgumentNullException.ThrowIfNull(theme);
-        return new DocumentWebView(webView, theme);
+        ArgumentNullException.ThrowIfNull(remoteImages);
+        return new DocumentWebView(webView, theme, remoteImages);
     }
 
     /// <summary>
@@ -240,7 +244,7 @@ internal sealed class DocumentWebView
 
             core = CoreWebView2.CreateFromComICoreWebView2(pointer);
             core.Settings.AreHostObjectsAllowed = false;
-            WebViewResourceBoundary.Apply(core);
+            WebViewResourceBoundary.Apply(core, _remoteImages);
             _coreIdentity = pointer;
             failure = string.Empty;
             return true;

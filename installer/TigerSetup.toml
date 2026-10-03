@@ -122,8 +122,11 @@ publisher_support_url = "https://github.com/rkozlowski/TigerMarkView/issues"
 # asset. TigerSetup writes this verbatim; eng\winget\Prepare-TigerMarkViewWinGet.ps1 replaces
 # {version}, because no version is stated in this file.
 privacy_url = "https://github.com/rkozlowski/TigerMarkView/releases/download/v{version}/PRIVACY.md"
+# The licence as of this version's tag, and this version's release page; resolved the same way.
+license_url = "https://github.com/rkozlowski/TigerMarkView/blob/v{version}/LICENSE"
+release_notes_url = "https://github.com/rkozlowski/TigerMarkView/releases/tag/v{version}"
 short_description = "A Markdown viewer, reviewer and PDF exporter for local files."
 description = """
 TigerMarkView is a Windows desktop application for reading and reviewing Markdown files on your computer, with PDF export.
 The installer includes the graphical viewer and the tiger-mark Markdown-to-PDF command, adds its folder to PATH, and offers TigerMarkView under Open with for .md and .markdown files without changing your default app.
-Settings and the recent-file list stay on this PC, and there is no telemetry. Web images that a document refers to are downloaded from the addresses it names."""
+Settings and the recent-file list stay on this PC, and TigerMarkView itself has no telemetry. Web images that a document refers to are downloaded from the addresses it names; in the viewer this is on by default and can be turned off under View > Rendering > Load Remote Images, while the tiger-mark command always downloads them. Links in a document never open files on network shares."""

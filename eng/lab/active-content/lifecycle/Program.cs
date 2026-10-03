@@ -37,7 +37,7 @@ internal sealed class ProbeApplication : Application
                     windows.UserDataFolder = Path.Combine(Program.Root, "lifecycle-profile");
                 }
             };
-            var host = DocumentWebView.Attach(browser, () => MarkdownTheme.Light);
+            var host = DocumentWebView.Attach(browser, () => MarkdownTheme.Light, () => true);
             var window = new Window { Width = 800, Height = 600, Content = browser, Title = "Security lifecycle probe" };
             desktop.MainWindow = window;
             var checks = new List<object>();

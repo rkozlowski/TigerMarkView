@@ -78,6 +78,11 @@ function Get-TigerMarkViewWinGetRelease {
         # The privacy statement published with this version; WinGet repository policy
         # expects the default-locale manifest to name it as PrivacyUrl.
         privacyUrl = $privacyUrl
+        # The licence and the release notes as of this version's tag, never a branch: WinGet asks
+        # for first-party LicenseUrl and ReleaseNotesUrl, and a mutable page would describe a
+        # later version.
+        licenseUrl = "$RepositoryUrl/blob/v$Version/LICENSE"
+        releaseNotesUrl = "$RepositoryUrl/releases/tag/v$Version"
         privacyStatementFileName = (Get-TigerMarkViewReleaseConstant).privacyStatementAssetName
         # The release asset that publishes the sealed set; see New-TigerMarkViewWinGetArchive.
         wingetArchiveFileName = "TigerMarkView-$Version-WinGet.zip"
@@ -203,6 +208,8 @@ function Read-TigerMarkViewWinGetSubmissionSet {
             packageIdentifier = Get-TigerMarkViewWinGetManifestField -Lines $documents[1].lines -Name 'PackageIdentifier'
             packageVersion = Get-TigerMarkViewWinGetManifestField -Lines $documents[1].lines -Name 'PackageVersion'
             privacyUrl = Get-TigerMarkViewWinGetManifestField -Lines $documents[1].lines -Name 'PrivacyUrl'
+            licenseUrl = Get-TigerMarkViewWinGetManifestField -Lines $documents[1].lines -Name 'LicenseUrl'
+            releaseNotesUrl = Get-TigerMarkViewWinGetManifestField -Lines $documents[1].lines -Name 'ReleaseNotesUrl'
         }
         version = [pscustomobject][ordered]@{
             packageIdentifier = Get-TigerMarkViewWinGetManifestField -Lines $documents[2].lines -Name 'PackageIdentifier'
@@ -211,19 +218,21 @@ function Read-TigerMarkViewWinGetSubmissionSet {
     }
 }
 
-function Resolve-TigerMarkViewWinGetPrivacyUrl {
+function Resolve-TigerMarkViewWinGetVersionedUrls {
     <#
         .SYNOPSIS
-        Writes the version into the PrivacyUrl TigerSetup generated from its template.
+        Writes the version into the URLs TigerSetup generated from version-free templates.
 
         .DESCRIPTION
-        installer\TigerSetup.toml must not state a version, but the privacy statement of a
-        version is that version's own release asset. TigerSetup writes [winget] privacy_url
-        verbatim, so the manifest declares it with a {version} token and this replaces that
-        token, and nothing else, in the one PrivacyUrl line of the default-locale manifest
-        TigerSetup has just written. The value stays a plain YAML scalar, so the line is
-        exactly what TigerSetup writes for the literal URL. It runs between
-        `winget prepare` and `winget finalize`, before anything reads or seals the set.
+        installer\TigerSetup.toml must not state a version, but three links of a version are
+        that version's own: its privacy statement (the release's PRIVACY.md asset), its licence
+        at its tag, and its release page. TigerSetup writes [winget] privacy_url, license_url
+        and release_notes_url verbatim, so the manifest declares them with a {version} token and
+        this replaces that token, and nothing else, in the one PrivacyUrl, LicenseUrl and
+        ReleaseNotesUrl line of the default-locale manifest TigerSetup has just written. Each
+        value stays a plain YAML scalar, so the line is exactly what TigerSetup writes for the
+        literal URL. It runs between `winget prepare` and `winget finalize`, before anything
+        reads or seals the set.
     #>
     [CmdletBinding()]
     param(
@@ -238,19 +247,19 @@ function Resolve-TigerMarkViewWinGetPrivacyUrl {
     $path = Join-Path $ManifestDirectory $release.manifestFileNames[1]
     $encoding = [Text.UTF8Encoding]::new($false, $true)
     $text = $encoding.GetString([IO.File]::ReadAllBytes($path))
-    $pattern = '(?m)^PrivacyUrl: (?<value>[^\r\n]*)$'
-    $found = @([regex]::Matches($text, $pattern))
-    if ($found.Count -ne 1) {
-        throw "'$path' declares PrivacyUrl $($found.Count) times; TigerSetup writes it exactly once."
-    }
-    $value = $found[0].Groups['value'].Value
-    $resolved = $value.Replace('{version}', $Version)
-    if ($resolved -cne $value) {
-        $text = $text.Substring(0, $found[0].Groups['value'].Index) + $resolved +
+    $original = $text
+    foreach ($field in 'PrivacyUrl', 'LicenseUrl', 'ReleaseNotesUrl') {
+        $found = @([regex]::Matches($text, "(?m)^${field}: (?<value>[^\r\n]*)$"))
+        if ($found.Count -ne 1) {
+            throw "'$path' declares $field $($found.Count) times; TigerSetup writes it exactly once."
+        }
+        $value = $found[0].Groups['value'].Value
+        $text = $text.Substring(0, $found[0].Groups['value'].Index) + $value.Replace('{version}', $Version) +
             $text.Substring($found[0].Groups['value'].Index + $value.Length)
+    }
+    if ($text -cne $original) {
         [IO.File]::WriteAllBytes($path, $encoding.GetBytes($text))
     }
-    $resolved
 }
 
 function Get-TigerMarkViewPublishedPrivacyStatementProblem {

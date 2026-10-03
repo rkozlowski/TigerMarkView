@@ -62,11 +62,19 @@ internal abstract class OffScreenWebViewHost : Form
         }
     }
 
-    /// <summary>Creates the WebView2 in this host's own profile folder and returns its core.</summary>
+    /// <summary>
+    /// Creates the WebView2, InPrivate, in this host's own profile folder and returns its core. See
+    /// <see cref="InPrivateBrowsing"/>: nothing a document export loads is recorded on disk.
+    /// </summary>
     protected async Task<CoreWebView2> CreateCoreAsync()
     {
-        var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: UserDataFolder());
-        await WebView.EnsureCoreWebView2Async(environment);
+        var folder = UserDataFolder();
+        InPrivateBrowsing.RemovePersistentProfile(folder);
+
+        var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: folder);
+        var options = environment.CreateCoreWebView2ControllerOptions();
+        options.IsInPrivateModeEnabled = true;
+        await WebView.EnsureCoreWebView2Async(environment, options);
 
         return WebView.CoreWebView2;
     }

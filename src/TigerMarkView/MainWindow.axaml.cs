@@ -47,8 +47,8 @@ public partial class MainWindow : Window
     // acted on — which a toast-length message does not allow for.
     private static readonly TimeSpan PdfExportSuccessDuration = TimeSpan.FromSeconds(12);
 
-    private static readonly string PreviewHtmlPath =
-        Path.Combine(Path.GetTempPath(), "TigerMarkView", "preview.html");
+    // This window's own generated page; see GeneratedPages for why it is per process.
+    private static readonly string PreviewHtmlPath = GeneratedPages.ForThisProcess("preview");
 
 
     // Fixed status-dot colours rather than theme resources: a 10px dot has to stay legible against
@@ -198,6 +198,19 @@ public partial class MainWindow : Window
         // why it hangs off the parent menu rather than off the submenu's own opening.
         NavigateMenuItem.SubmenuOpened += (_, _) => HistoryMenuItem.ItemsSource = BuildHistoryItems();
 
+        // Open Recent is shared with every other TigerMarkView window. Re-read it when the reader comes
+        // back to this window and when the File menu opens, so a list another window cleared or added
+        // to is current before anyone looks at it. Only the File menu's own opening counts: the event
+        // also bubbles up from Open Recent's submenu, which must not be rebuilt while it is opening.
+        Activated += (_, _) => RefreshSharedRecentFiles();
+        FileMenuItem.SubmenuOpened += (_, e) =>
+        {
+            if (ReferenceEquals(e.Source, FileMenuItem))
+            {
+                RefreshSharedRecentFiles();
+            }
+        };
+
         // Tunnelling, so Alt+Left/Right reach the shortcut before the menu bar's own Alt handling.
         AddHandler(KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
 
@@ -207,7 +220,7 @@ public partial class MainWindow : Window
 
         // Equally before the first navigation, which this constructor itself starts: the request
         // boundary has to be on the WebView before any document is. See DocumentWebView.
-        _documentWebView = DocumentWebView.Attach(Browser, () => _theme);
+        _documentWebView = DocumentWebView.Attach(Browser, () => _theme, () => _settings.LoadRemoteImages);
 
         // Fails closed: the WebView then shows its own notice, and the status bar must not go on
         // describing a document as if it were on screen.
@@ -346,7 +359,8 @@ public partial class MainWindow : Window
             // print engine has to be the one the retained HTML's @page rule was written for, and a
             // preference changed while this export was being set up must not split the two apart.
             var result = await PdfExporter.ExportAsync(
-                new PdfExportRequest(document.Html, outputPath, document.PageSetup), cancellation.Token);
+                new PdfExportRequest(document.Html, outputPath, document.PageSetup, _settings.LoadRemoteImages),
+                cancellation.Token);
 
             if (_windowClosed)
             {
@@ -551,8 +565,7 @@ public partial class MainWindow : Window
         SetReloadModeChecked(mode);
         RefreshStatusBar();
 
-        _settings.ReloadMode = mode;
-        SaveSettings();
+        UpdateSettings(settings => settings.ReloadMode = mode);
     }
 
     /// <summary>
@@ -612,8 +625,7 @@ public partial class MainWindow : Window
         // Help is a separate window, so nothing repaints it for us.
         HelpWindow.ApplyTheme(theme);
 
-        _settings.Theme = theme;
-        SaveSettings();
+        UpdateSettings(settings => settings.Theme = theme);
 
         await RefreshViewerAsync();
     }
@@ -716,20 +728,22 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnEmojiShortcodesClick(object? sender, RoutedEventArgs e)
     {
-        _settings.EmojiShortcodes = !_settings.EmojiShortcodes;
+        var enabled = !_settings.EmojiShortcodes;
+        UpdateSettings(settings => settings.EmojiShortcodes = enabled);
         await ApplyRenderingOptionsAsync();
     }
 
     /// <inheritdoc cref="OnEmojiShortcodesClick"/>
     private async void OnSyntaxHighlightingClick(object? sender, RoutedEventArgs e)
     {
-        _settings.SyntaxHighlighting = !_settings.SyntaxHighlighting;
+        var enabled = !_settings.SyntaxHighlighting;
+        UpdateSettings(settings => settings.SyntaxHighlighting = enabled);
         await ApplyRenderingOptionsAsync();
     }
 
     /// <summary>
-    /// The one place a changed rendering option takes effect: re-resolve the options, re-check the
-    /// menu, persist, and re-render what is on screen.
+    /// The one place a changed rendering option takes effect, once it is recorded: re-resolve the
+    /// options, re-check the menu, and re-render what is on screen.
     /// </summary>
     /// <remarks>
     /// Unlike a PDF preference, these change the pixels, so the viewer really is re-navigated — through
@@ -741,7 +755,6 @@ public partial class MainWindow : Window
     {
         _renderingOptions = _settings.ToRenderingOptions();
         SetRenderingMenuChecked();
-        SaveSettings();
 
         await RefreshViewerAsync();
     }
@@ -750,6 +763,22 @@ public partial class MainWindow : Window
     {
         EmojiShortcodesItem.IsChecked = _settings.EmojiShortcodes;
         SyntaxHighlightingItem.IsChecked = _settings.SyntaxHighlighting;
+        LoadRemoteImagesItem.IsChecked = _settings.LoadRemoteImages;
+    }
+
+    /// <summary>
+    /// View &gt; Rendering &gt; Load Remote Images. The request boundary reads the setting on every
+    /// request (see <see cref="DocumentWebView.Attach"/>), so turning it off refuses the next web image
+    /// before anything is sent; the page is then re-rendered from the retained Markdown, exactly as a
+    /// rendering option is, so images already on screen go too and turning it back on brings them in.
+    /// </summary>
+    private async void OnLoadRemoteImagesClick(object? sender, RoutedEventArgs e)
+    {
+        var enabled = !_settings.LoadRemoteImages;
+        UpdateSettings(settings => settings.LoadRemoteImages = enabled);
+        SetRenderingMenuChecked();
+
+        await RefreshViewerAsync();
     }
 
     private void OnPdfPaperA3Click(object? sender, RoutedEventArgs e) => SetPdfPaperSize(PdfPaperSize.A3);
@@ -778,31 +807,32 @@ public partial class MainWindow : Window
         // The remembered setting is the question, not the menu item's own toggle: a click forwarded
         // from the toolbar's menu mirror never flips it. SetPdfExportMenuChecked writes the check mark
         // back from the setting, so both surfaces leave the same state behind — see MenuMirror.
-        _settings.PdfPageNumbers = !_settings.PdfPageNumbers;
+        var enabled = !_settings.PdfPageNumbers;
+        UpdateSettings(settings => settings.PdfPageNumbers = enabled);
         ApplyPdfExportSettings();
     }
 
     private void SetPdfPaperSize(PdfPaperSize paper)
     {
-        _settings.PdfPaperSize = paper;
+        UpdateSettings(settings => settings.PdfPaperSize = paper);
         ApplyPdfExportSettings();
     }
 
     private void SetPdfOrientation(PdfOrientation orientation)
     {
-        _settings.PdfOrientation = orientation;
+        UpdateSettings(settings => settings.PdfOrientation = orientation);
         ApplyPdfExportSettings();
     }
 
     private void SetPdfMargins(PdfMarginPreset margins)
     {
-        _settings.PdfMargins = margins;
+        UpdateSettings(settings => settings.PdfMargins = margins);
         ApplyPdfExportSettings();
     }
 
     /// <summary>
-    /// The one place a changed PDF preference takes effect: re-resolve the page geometry, persist the
-    /// choice, re-check the menu, and re-render the retained document's HTML so the next export uses
+    /// The one place a changed PDF preference takes effect, once it is recorded: re-resolve the page
+    /// geometry, re-check the menu, and re-render the retained document's HTML so the next export uses
     /// the new paper.
     /// </summary>
     /// <remarks>
@@ -823,7 +853,6 @@ public partial class MainWindow : Window
     {
         _pdfPageSetup = _settings.ToPdfPageSetup();
         SetPdfExportMenuChecked();
-        SaveSettings();
 
         _renderedDocument = _renderedDocument?.WithPageSetup(_pdfPageSetup);
     }
@@ -900,8 +929,7 @@ public partial class MainWindow : Window
         _editorConfiguration = configuration;
         SetEditorTypeMenuChecked(configuration.Type);
 
-        _settings.ApplyEditorConfiguration(configuration);
-        SaveSettings();
+        UpdateSettings(settings => settings.ApplyEditorConfiguration(configuration));
     }
 
     private void SetEditorTypeMenuChecked(EditorType type)
@@ -1117,9 +1145,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _settings.AddRecentFile(path);
-        RebuildRecentFilesMenu();
-        SaveSettings();
+        UpdateSettings(settings => settings.AddRecentFile(path));
     }
 
     /// <summary>
@@ -1145,9 +1171,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnClearRecentFilesClick(object? sender, RoutedEventArgs e)
     {
-        _settings.ClearRecentFiles();
-        RebuildRecentFilesMenu();
-        SaveSettings();
+        UpdateSettings(settings => settings.ClearRecentFiles());
     }
 
     /// <summary>
@@ -1205,8 +1229,11 @@ public partial class MainWindow : Window
     /// <see cref="MenuFlyout.ItemsSource"/>, so a retained flyout would keep showing the list as it was
     /// the first time it opened. A new one per opening cannot go stale.
     /// </summary>
-    private void OnOpenRecentToolbarClick(object? sender, RoutedEventArgs e) =>
+    private void OnOpenRecentToolbarClick(object? sender, RoutedEventArgs e)
+    {
+        RefreshSharedRecentFiles();
         ShowToolbarFlyout(BuildRecentFileItems(), OpenRecentToolbarButton);
+    }
 
     /// <summary>
     /// The toolbar history dropdown, filled and shown here rather than declared as the button's
@@ -1260,6 +1287,7 @@ public partial class MainWindow : Window
     private void OnMenuToolbarClick(object? sender, RoutedEventArgs e)
     {
         HistoryMenuItem.ItemsSource = BuildHistoryItems();
+        RefreshSharedRecentFiles();
 
         MenuMirror.Create(MainMenu).ShowAt(MenuToolbarButton);
     }
@@ -1560,6 +1588,16 @@ public partial class MainWindow : Window
             // drop on the chrome. ViewerRequestOrigin tells them apart by what the page links to.
             var origin = ViewerRequestOrigin.Classify(markdownPath, _renderedDocument?.FilePath, _renderedDocument?.Html);
 
+            // Nothing the page on screen asks for may open a share: that would sign in to the host with
+            // the reader's Windows credentials. Decided before anything opens it, and whatever the
+            // classification above concluded; File > Open and the other explicit opens are unaffected.
+            // See NetworkLinkPolicy.
+            if (NetworkLinkPolicy.Refuses(markdownPath, documentOnScreen: _renderedDocument is not null))
+            {
+                SetStatusOverride(NetworkLinkPolicy.RefusedMessage, TransientStatusDuration);
+                return true;
+            }
+
             // Posted rather than called directly: this runs inside the WebView's own navigation
             // callback, and starting the replacement navigation from there re-enters it.
             Dispatcher.UIThread.Post(() => OpenFile(markdownPath, origin));
@@ -1795,8 +1833,7 @@ public partial class MainWindow : Window
 
         if (persist)
         {
-            _settings.ApplyToolbarActions(actions);
-            SaveSettings();
+            UpdateSettings(settings => settings.ApplyToolbarActions(actions));
         }
     }
 
@@ -1882,8 +1919,7 @@ public partial class MainWindow : Window
 
         if (persist)
         {
-            _settings.ApplyCommandSurfaces(surfaces);
-            SaveSettings();
+            UpdateSettings(settings => settings.ApplyCommandSurfaces(surfaces));
         }
     }
 
@@ -1899,8 +1935,7 @@ public partial class MainWindow : Window
 
         if (persist)
         {
-            _settings.StatusBarVisible = visible;
-            SaveSettings();
+            UpdateSettings(settings => settings.StatusBarVisible = visible);
         }
     }
 
@@ -2146,29 +2181,91 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Copies the tracked geometry into the settings object. Called once, on close: window move and
-    /// resize events fire continuously while dragging, and writing a file on each of them would be
-    /// both wasteful and a good way to corrupt it.
+    /// Records the tracked geometry. Called once, on close: window move and resize events fire
+    /// continuously while dragging, and writing a file on each of them would be wasteful. Only the
+    /// placement is written; closing a window must not write back anything else it remembers.
     /// </summary>
     private void PersistWindowPlacement()
     {
-        var placement = _settings.Window;
-        placement.Maximized = WindowState == WindowState.Maximized;
+        var maximized = WindowState == WindowState.Maximized;
+        var width = _normalWidth;
+        var height = _normalHeight;
+        var position = _normalPosition;
 
-        if (_normalWidth is { } width && _normalHeight is { } height)
+        UpdateSettings(settings =>
         {
-            placement.Width = width;
-            placement.Height = height;
+            var placement = settings.Window;
+            placement.Maximized = maximized;
+
+            if (width is { } normalWidth && height is { } normalHeight)
+            {
+                placement.Width = normalWidth;
+                placement.Height = normalHeight;
+            }
+
+            if (position is { } normalPosition)
+            {
+                placement.X = normalPosition.X;
+                placement.Y = normalPosition.Y;
+            }
+        });
+    }
+
+    /// <summary>
+    /// Records one settings change: in this window's copy, and in the settings file shared with every
+    /// other TigerMarkView window, on top of whatever they have written there since this one started.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every window is its own process with its own copy of the settings. Writing that whole copy back
+    /// was how a theme change in one window brought back recent files another had just cleared, so
+    /// <paramref name="change"/> is applied to the file as it is now and only what it sets is written —
+    /// see <see cref="ApplicationSettingsFile"/>. A change must therefore state the value it sets
+    /// (computed beforehand from this window's state), never toggle what it finds.
+    /// </para>
+    /// <para>
+    /// Open Recent is the one list every window shares, so the merged list comes back into this
+    /// window, which is how a recent file opened elsewhere appears here and a cleared list stays clear.
+    /// Theme, editor, chrome and the other preferences stay as this window has them until it next
+    /// starts: a window does not repaint itself because another one changed its mind.
+    /// </para>
+    /// </remarks>
+    private void UpdateSettings(Action<ApplicationSettings> change)
+    {
+        change(_settings);
+
+        var shared = _settingsStore.Update(change);
+        if (_windowClosed)
+        {
+            return;
         }
 
-        if (_normalPosition is { } position)
+        if (shared is not null)
         {
-            placement.X = position.X;
-            placement.Y = position.Y;
+            _settings.RecentFiles = [.. shared.RecentFiles];
+        }
+
+        RebuildRecentFilesMenu();
+    }
+
+    /// <summary>
+    /// Re-reads Open Recent from the shared settings file, so a list another window changed is current
+    /// here before the reader looks at it: when this window is activated and when a surface that shows
+    /// the list opens.
+    /// </summary>
+    private void RefreshSharedRecentFiles()
+    {
+        if (!_windowClosed)
+        {
+            AdoptSharedRecentFiles(_settingsStore.Load().RecentFiles);
         }
     }
 
-    private void SaveSettings() => _settingsStore.Save(_settings);
+    private void AdoptSharedRecentFiles(List<string> recentFiles)
+    {
+        _settings.RecentFiles = [.. recentFiles];
+        RebuildRecentFilesMenu();
+    }
 
     protected override void OnClosed(EventArgs e)
     {
@@ -2180,7 +2277,7 @@ public partial class MainWindow : Window
         _watcher?.Dispose();
 
         PersistWindowPlacement();
-        SaveSettings();
+        GeneratedPages.Remove(PreviewHtmlPath);
 
         base.OnClosed(e);
     }
