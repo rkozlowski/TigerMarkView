@@ -11,6 +11,7 @@
       - identity: ItTiger.TigerMarkView, TigerMarkView, IT Tiger, the expected version, x64, both
         scopes with per-user first, and the Add/Remove Programs key;
       - content: the GUI, tiger-mark, and the offline documentation, and no .pdb or .xml file;
+        Docs\PRIVACY.md is docs\PRIVACY.md byte for byte, the statement the release publishes;
       - integration: the PATH option on by default, the Start Menu shortcut, the Markdown handler
         registration (never a default), the Inno Setup installation it replaces, and the two
         prerequisites;
@@ -76,6 +77,35 @@ foreach ($required in 'TigerMarkView.exe', 'tiger-mark.exe', 'TigerMarkView.Core
 }
 $excluded = @($paths | Where-Object { $_ -match '\.(pdb|xml)$' })
 Assert-That ($excluded.Count -eq 0) "the payload carries debug symbols or XML documentation: $($excluded -join ', ')."
+
+# The installed privacy statement is the one the release publishes as PRIVACY.md: the payload's
+# Docs\PRIVACY.md must be this repository's docs\PRIVACY.md, byte for byte. inspect lists no file
+# hashes, so the payload is exported as a ZIP and the entry hashed.
+$payloadZip = Join-Path ([IO.Path]::GetTempPath()) ('TigerMarkView-payload-' + [Guid]::NewGuid().ToString('N') + '.zip')
+try {
+    & $tigerSetup inspect $InstallerPath --output-zip $payloadZip | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "tiger-setup inspect --output-zip failed for '$InstallerPath' (exit code $LASTEXITCODE)." }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $payload = [IO.Compression.ZipFile]::OpenRead($payloadZip)
+    try {
+        $entry = @($payload.Entries | Where-Object { $_.FullName.Replace('\', '/') -ceq 'Docs/PRIVACY.md' })
+        $installedSha256 = $null
+        if ($entry.Count -eq 1) {
+            $stream = $entry[0].Open()
+            try { $installedSha256 = (Get-FileHash -InputStream $stream -Algorithm SHA256).Hash.ToLowerInvariant() }
+            finally { $stream.Dispose() }
+        }
+    }
+    finally {
+        $payload.Dispose()
+    }
+}
+finally {
+    if (Test-Path -LiteralPath $payloadZip) { Remove-Item -LiteralPath $payloadZip -Force }
+}
+$sourceSha256 = (Get-FileHash -LiteralPath (Join-Path $repoRoot 'docs\PRIVACY.md') -Algorithm SHA256).Hash.ToLowerInvariant()
+Assert-That ($installedSha256 -ceq $sourceSha256) `
+    "the payload's Docs\PRIVACY.md ($installedSha256) is not docs\PRIVACY.md ($sourceSha256), the statement the release publishes."
 
 $pathOption = @($inspection.options | Where-Object { $_.name -ceq 'path' })
 Assert-That ($pathOption.Count -eq 1 -and [string] $pathOption[0].default -eq 'True') 'the PATH option is not declared on by default.'

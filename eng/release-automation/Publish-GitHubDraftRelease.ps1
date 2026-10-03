@@ -12,8 +12,8 @@
     own.
 
     .PARAMETER ArtifactDirectory
-    The validated release directory: installer, WinGet manifest archive, SHA256SUMS.txt,
-    release-artifacts.json.
+    The validated release directory: installer, WinGet manifest archive, PRIVACY.md,
+    SHA256SUMS.txt, release-artifacts.json.
 
     .PARAMETER Version
     The release version.
@@ -116,12 +116,7 @@ if (-not $AllowDifferentHeadForRecovery -and $head -cne $CommitSha) {
 
 $tag = "v$Version"
 $title = "TigerMarkView $Version"
-$assetNames = @(
-    "TigerMarkView-$Version-win-x64-setup.exe"
-    "TigerMarkView-$Version-WinGet.zip"
-    'SHA256SUMS.txt'
-    'release-artifacts.json'
-)
+$assetNames = @(& $constant.releaseAssetNames $Version)
 $assets = @($assetNames | ForEach-Object { Get-Item -LiteralPath (Join-Path $ArtifactDirectory $_) })
 
 $remoteTag = (git -C $repoRoot ls-remote --tags origin "refs/tags/$tag" | Out-String).Trim()
@@ -251,7 +246,9 @@ if (-not [string]::IsNullOrWhiteSpace($RunUrl)) {
 $report = New-TigerMarkViewReleaseReport -Title "Draft GitHub Release for TigerMarkView $Version" `
     -Checks $checks `
     -Handoff @(
-        "Review the draft at $draftUrl - tag, commit, the four assets, the recorded hashes, and the notes."
+        ("Review the draft at $draftUrl - tag, commit, the $($assetNames.Count) assets ($($assetNames -join ', ')), " +
+            'the recorded hashes, and the notes.')
+        "Confirm PRIVACY.md is the privacy statement this version ships, and that the notes link it."
         'Confirm the notes state the runtime prerequisites and the current unsigned status.'
         'Publish the draft explicitly. Automation never publishes it.'
     ) `

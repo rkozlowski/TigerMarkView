@@ -5,7 +5,7 @@
 
     .DESCRIPTION
     installer\TigerSetup.toml repeats a few values TigerSetup cannot read from the build - the
-    product links, the privacy statement's URL and the WinGet descriptions - and names the extensions the Markdown handler is
+    product links, the privacy statement's URL template and the WinGet descriptions - and names the extensions the Markdown handler is
     registered for. Version.props owns the first, Core's MarkdownLinkResolver the second; this suite
     fails when either drifts. It also checks the builder pin and that the release workflow provisions
     exactly that builder. It needs no TigerSetup, so it runs in normal CI.
@@ -55,13 +55,28 @@ Assert-True ($winget.package_url -ceq $repositoryUrl) 'TigerSetup.toml [winget] 
 Assert-True ($winget.publisher_url -ceq [string] $properties.WebsiteUrl) 'TigerSetup.toml [winget] publisher_url is not Version.props WebsiteUrl.'
 Assert-True ($winget.publisher_support_url -ceq (& $expand ([string] $properties.IssueTrackerUrl))) 'TigerSetup.toml [winget] publisher_support_url is not Version.props IssueTrackerUrl.'
 Assert-True ($winget.short_description -ceq [string] $properties.Description) 'TigerSetup.toml [winget] short_description is not Version.props Description.'
-# WinGet repository policy requires a product privacy statement; TigerSetup writes PrivacyUrl only when declared.
-$privacyUrl = & $expand ([string] $properties.PrivacyUrl)
-Assert-True ($privacyUrl -ceq "$repositoryUrl/blob/main/docs/PRIVACY.md" -and
+# WinGet repository policy expects a product privacy statement; TigerSetup writes PrivacyUrl only when
+# declared, and verbatim. The statement of a version is its own release's PRIVACY.md asset, so both
+# declarations are version templates - $(Version) in Version.props, {version} in TigerSetup.toml, which
+# states no version - and must agree for any version.
+$privacyTemplate = & $expand ([string] $properties.PrivacyUrl)
+Assert-True ($privacyTemplate -ceq "$repositoryUrl/releases/download/v`$(Version)/PRIVACY.md" -and
     (Test-Path -LiteralPath (Join-Path $repositoryRoot 'docs\PRIVACY.md') -PathType Leaf)) `
-    "Version.props PrivacyUrl '$privacyUrl' must be the default branch's docs/PRIVACY.md, and that file must exist."
-Assert-True ($winget.ContainsKey('privacy_url') -and $winget.privacy_url -ceq $privacyUrl) 'TigerSetup.toml [winget] privacy_url is not Version.props PrivacyUrl.'
+    "Version.props PrivacyUrl '$privacyTemplate' must be the version's own PRIVACY.md release asset, and docs\PRIVACY.md must exist."
+Assert-True ($winget.ContainsKey('privacy_url')) 'TigerSetup.toml [winget] must declare privacy_url.'
+foreach ($sampleVersion in [string] $properties.Version, '0.11.1', '1.0.0-rc.1') {
+    Assert-True ($winget.privacy_url.Replace('{version}', $sampleVersion) -ceq $privacyTemplate.Replace('$(Version)', $sampleVersion)) `
+        "TigerSetup.toml [winget] privacy_url '$($winget.privacy_url)' does not resolve to Version.props PrivacyUrl for $sampleVersion."
+}
 Assert-True (@($manifestLines | Where-Object { $_ -match '^\s*version\s*=' }).Count -eq 0) 'TigerSetup.toml must not state a version; [metadata] reads it from Version.props.'
+# The statement ships twice from one checkout - installed as Docs\PRIVACY.md and published as the
+# release's PRIVACY.md - so a checkout must reproduce the committed bytes exactly on every machine.
+$privacyAttributes = (& git -C $repositoryRoot check-attr text eol -- docs/PRIVACY.md | Out-String)
+Assert-True ($privacyAttributes -match 'text: set' -and $privacyAttributes -match 'eol: lf') `
+    '.gitattributes must pin docs/PRIVACY.md to LF so every checkout produces the committed bytes.'
+$privacyBytes = [IO.File]::ReadAllBytes((Join-Path $repositoryRoot 'docs\PRIVACY.md'))
+Assert-True ($privacyBytes -notcontains [byte] 13 -and -not ($privacyBytes.Length -ge 3 -and $privacyBytes[0] -eq 0xEF)) `
+    'docs\PRIVACY.md must be UTF-8 without a byte-order mark and with LF line endings only.'
 Write-Host 'PASS: TigerSetup.toml repeats Version.props exactly and states no version'
 
 $resolverSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src\TigerMarkView.Core\Navigation\MarkdownLinkResolver.cs') -Raw

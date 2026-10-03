@@ -16,8 +16,9 @@
 
       1. the sealed manifests say what this release implies - identity, one version
          across all three documents, and the immutable asset URL;
-      2. the asset actually published at that URL is the one those manifests hash;
-         and
+      2. the asset actually published at that URL is the one those manifests hash,
+         and the PrivacyUrl they name serves the release's frozen PRIVACY.md - the
+         recorded bytes, and the release commit's docs/PRIVACY.md; and
       3. WinGet can install that exact payload on a clean Windows machine, run the
          command it registers, and remove it again.
 
@@ -309,6 +310,42 @@ function Invoke-TigerMarkViewWinGetReleaseValidation {
                 -Observed ("$($release.installerFileName) is not retained under artifacts\winget-release, " +
                     'so the workflow-produced installer was not compared with the published asset.')))
         }
+    }
+
+    # 2b. The privacy statement. The sealed PrivacyUrl names this release's PRIVACY.md asset, so
+    #     that URL must serve, to an anonymous client, exactly the bytes SHA256SUMS.txt and
+    #     release-artifacts.json record - and those must be docs/PRIVACY.md as the release
+    #     commit records it, the same file the installer carries.
+    if (-not (Test-TigerMarkViewReleasePredatesWinGetArchive -Version $Version)) {
+        $privacyName = $release.privacyStatementFileName
+        $privacyPath = Join-Path $publishedRoot $privacyName
+        $privacyProblems = [Collections.Generic.List[string]]::new()
+        $privacyHash = $null
+        try {
+            $progress = $ProgressPreference
+            $ProgressPreference = 'SilentlyContinue'
+            try {
+                Invoke-WebRequest -Uri $release.privacyUrl -OutFile $privacyPath -MaximumRedirection 5 -ErrorAction Stop
+            }
+            finally {
+                $ProgressPreference = $progress
+            }
+            $privacyHash = (Get-FileHash -LiteralPath $privacyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            foreach ($problem in @(Get-TigerMarkViewPublishedPrivacyStatementProblem -PublishedRoot $publishedRoot `
+                    -Version $Version -RepositoryRoot $RepositoryRoot -Commit $provenance.commit)) {
+                $privacyProblems.Add($problem)
+            }
+        }
+        catch {
+            $privacyProblems.Add("$($release.privacyUrl) could not be downloaded: $($_.Exception.Message)")
+        }
+        $checks.Add((New-TigerMarkViewReleaseAssertion -Id 'release/privacy-statement' `
+            -Condition ($privacyProblems.Count -eq 0) `
+            -PassObserved ("$($release.privacyUrl) serves the privacy statement of $Version (SHA-256 $privacyHash): " +
+                'the bytes both release records name and the release commit''s docs/PRIVACY.md.') `
+            -FailObserved "The PrivacyUrl asset is not this release's frozen privacy statement: $($privacyProblems -join '; ')." `
+            -Evidence $release.privacyUrl `
+            -Remediation 'Never replace a published asset; a wrong statement ships as the next version.'))
     }
 
     # 3. The sealed submission set. One rule source decides identity, version agreement,

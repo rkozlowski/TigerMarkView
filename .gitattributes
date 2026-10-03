@@ -1,2 +1,6 @@
 # cmd.exe can mis-resolve goto labels in a batch file with LF-only line endings.
 *.cmd text eol=crlf
+
+# The privacy statement is released byte for byte as a GitHub Release asset and installed beside
+# the application. Every checkout must produce the committed bytes, whatever core.autocrlf says.
+docs/PRIVACY.md text eol=lf

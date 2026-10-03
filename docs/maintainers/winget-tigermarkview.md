@@ -41,9 +41,14 @@ release workflow generated and validated. Nothing downstream regenerates or edit
 
 The release workflow's artifact root is the submission directory itself: exactly the version,
 default-locale, and installer YAML files. `Assert-TigerMarkViewWinGetSubmission.ps1` proves the file
-set, encoding, identity, version, the default-locale `PrivacyUrl` (Version.props `PrivacyUrl`, the
-product privacy statement WinGet policy requires), immutable asset URL, installer hash, and combined
-submission digest. The publication job downloads and rechecks that sealed set; it does not regenerate it.
+set, encoding, identity, version, the default-locale `PrivacyUrl`, immutable asset URL, installer
+hash, and combined submission digest. `PrivacyUrl` must be exactly the version's own `PRIVACY.md`
+release asset, `https://github.com/rkozlowski/TigerMarkView/releases/download/v<version>/PRIVACY.md`
+(Version.props `PrivacyUrl` with `$(Version)`): a `blob/main` copy, a tag's repository file, another
+release's asset, another document, or a `releases/latest` URL is refused by generation and by sealing.
+TigerSetup writes `[winget] privacy_url` verbatim, so `installer\TigerSetup.toml` declares it with a
+`{version}` token that `Prepare-TigerMarkViewWinGet.ps1` resolves between `winget prepare` and
+`finalize`; that line is then exactly what TigerSetup writes for the literal URL. The publication job downloads and rechecks that sealed set; it does not regenerate it.
 
 Post-release regeneration is verification-only. It writes to throwaway storage, compares all files
 byte-for-byte with the sealed set, and can never replace the sealed files. It needs the pinned TigerSetup
@@ -111,14 +116,17 @@ Publication verification must prove all of the following before any `winget-pkgs
 - `v<version>` resolves to the expected release commit, dereferencing the annotated tag;
 - the expected release workflow run for that version and commit concluded `success`;
 - the GitHub Release exists and `isDraft` is false;
-- its expected installer, `TigerMarkView-<version>-WinGet.zip`, `SHA256SUMS.txt`, and
+- its expected installer, `TigerMarkView-<version>-WinGet.zip`, `PRIVACY.md`, `SHA256SUMS.txt`, and
   `release-artifacts.json` assets exist with no unexpected package assets (releases up to 0.10.0
-  were published without the archive, and only the other three are expected for them); and
+  were published without the archive and the privacy statement, and only the other three are expected
+  for them); and
 - the release page and immutable installer URL are publicly accessible without authenticated API
   headers.
 
 The downloaded installer must match the hashes and lengths in both verification records and the
-sealed manifests. The workflow artifact archive must match the digest GitHub recorded, and the
+sealed manifests. `PRIVACY.md`, downloaded anonymously from the `PrivacyUrl` the sealed manifests name,
+must match its entry in both records and be byte-identical to `docs/PRIVACY.md` at the release commit
+(compared by Git blob id, so the commit must be fetched locally). The workflow artifact archive must match the digest GitHub recorded, and the
 extracted three-file set must reproduce its recorded seal.
 
 ## Dedicated clone lifecycle

@@ -2,19 +2,24 @@
 <#
     .SYNOPSIS
     Closes the release artifact set: the installer, the sealed WinGet manifests that
-    describe it, their recorded hashes, and the record that names the commit they
-    were built from.
+    describe it, the version's privacy statement, their recorded hashes, and the
+    record that names the commit they were built from.
 
     .DESCRIPTION
     With -InstallerPath the artifact directory is created and populated here, so
     the release workflow needs no staging or copying step of its own: the
     directory this writes holds the installer, TigerMarkView-<version>-WinGet.zip,
-    SHA256SUMS.txt, and release-artifacts.json and nothing else.
+    PRIVACY.md, SHA256SUMS.txt, and release-artifacts.json and nothing else.
 
     The archive is packed from the sealed submission directory, never regenerated,
     and release-artifacts.json records the submission digest of what it holds, so
     the published archive can be proven to carry the exact manifest bytes the
     workflow sealed.
+
+    PRIVACY.md is the privacy statement frozen for this version: a byte-for-byte copy
+    of -PrivacyStatementPath, the docs\PRIVACY.md the installer was built with. It is
+    what the version's WinGet PrivacyUrl names, so once published it can never come
+    to describe another version.
 
     .PARAMETER ArtifactDirectory
     The closed release directory to write.
@@ -31,6 +36,10 @@
 
     .PARAMETER WinGetManifestDirectory
     The sealed submission directory: exactly the three manifests.
+
+    .PARAMETER PrivacyStatementPath
+    The privacy statement to freeze as PRIVACY.md: the repository's docs\PRIVACY.md,
+    the same file the installer carries as Docs\PRIVACY.md.
 
     .PARAMETER ExpectedSubmissionDigest
     When supplied, the submission digest the sealing step recorded. The archive
@@ -56,6 +65,9 @@ param(
 
     [Parameter(Mandatory)]
     [string] $WinGetManifestDirectory,
+
+    [Parameter(Mandatory)]
+    [string] $PrivacyStatementPath,
 
     [string] $ExpectedSubmissionDigest,
 
@@ -96,7 +108,21 @@ if (-not [string]::IsNullOrWhiteSpace($ExpectedSubmissionDigest) -and
         "'$($ExpectedSubmissionDigest.ToLowerInvariant())'.")
 }
 
-$expectedNames = @($installerName, $archiveName)
+$privacyName = $release.privacyStatementFileName
+$PrivacyStatementPath = [IO.Path]::GetFullPath($PrivacyStatementPath)
+if (-not (Test-Path -LiteralPath $PrivacyStatementPath -PathType Leaf)) {
+    throw "Privacy statement not found: $PrivacyStatementPath"
+}
+$privacyPath = Join-Path $ArtifactDirectory $privacyName
+if ($PrivacyStatementPath -cne [IO.Path]::GetFullPath($privacyPath)) {
+    Copy-Item -LiteralPath $PrivacyStatementPath -Destination $privacyPath -Force
+}
+$privacySha256 = (Get-FileHash -LiteralPath $privacyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($privacySha256 -cne (Get-FileHash -LiteralPath $PrivacyStatementPath -Algorithm SHA256).Hash.ToLowerInvariant()) {
+    throw "$privacyName is not a byte-for-byte copy of '$PrivacyStatementPath'."
+}
+
+$expectedNames = @($installerName, $archiveName, $privacyName)
 $actualNames = @(Get-ChildItem -LiteralPath $ArtifactDirectory -File | ForEach-Object Name)
 $missing = @($expectedNames | Where-Object { $_ -cnotin $actualNames })
 $unexpected = @($actualNames | Where-Object { $_ -cnotin $expectedNames })
@@ -119,6 +145,12 @@ $artifacts = @(
         sha256 = $archive.sha256
         submissionSha256 = $archive.digest
     }
+    [ordered]@{
+        name = $privacyName
+        kind = 'PrivacyStatement'
+        length = (Get-Item -LiteralPath $privacyPath).Length
+        sha256 = $privacySha256
+    }
 )
 
 $manifestPath = Join-Path $ArtifactDirectory 'release-artifacts.json'
@@ -135,6 +167,7 @@ $checksumPath = Join-Path $ArtifactDirectory 'SHA256SUMS.txt'
     Set-Content -LiteralPath $checksumPath -Encoding utf8NoBOM
 Write-Host "Recorded the closed TigerMarkView $Version release artifact set."
 Write-Host "$archiveName holds the sealed WinGet submission set $($archive.digest)."
+Write-Host "$privacyName is the privacy statement of $Version, SHA-256 $privacySha256."
 
 $manifestSha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
 Write-Host "release-artifacts.json SHA-256: $manifestSha256"

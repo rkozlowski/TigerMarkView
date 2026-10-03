@@ -1,10 +1,10 @@
 ---
-TigerAiCore.version: 1.27.0
+TigerAiCore.version: 1.28.0
 ---
 
 # AI Agent Instructions
 
-<!-- TigerAiCore:begin version="1.27.0" sha256="d991df77e716d1f840891100fbacd0fca420d7c599f90350bce94035a420dcad" -->
+<!-- TigerAiCore:begin version="1.28.0" sha256="860698984e5f9c164617345b8a41adcd3981ba947c3e28139c485b075d6a4f99" -->
 ## TigerAiCore inherited rules
 
 <!-- Managed content. Author these rules in AGENTS.core.md in the TigerAiCore repository, never in a project copy. -->
@@ -330,6 +330,15 @@ complete form of each rule is in the role instructions (`AI-CODER.md`,
   visible or irreversible actions without explicit authorization. The single
   exception is an explicit `Autonomous Development` run, and only for commits,
   pushes, and pull requests scoped to its own branch.
+- **First WinGet submission** — **first WinGet submission requires a critical
+  review against current TigerWingetHelper guidance**: the application's source
+  and release, not only its manifests, reviewed by TigerWingetHelper's review
+  procedure, with every applicable concern resolved by evidence before
+  submission. TigerAiCore owns the gate; TigerWingetHelper owns the WinGet
+  knowledge — never copy it or substitute a checklist of your own. A passed
+  review is not a guarantee of approval. Later submissions are re-reviewed only
+  where its guidance or a material change calls for it, and the gate covers
+  WinGet only.
 - **Ecosystem write boundary** — change only a repository the task explicitly
   puts in scope. Never modify TigerAiCore, a Lab, a shared tool, or another
   project as a side effect of work on this one; escalate the need instead.
@@ -943,7 +952,10 @@ lock, or deletes anything, and the default direct-write path must stay unchanged
 `Version.props` is the single source of `Version`, assembly/file/informational versions, `Product`,
 `Authors`, `Company`, `Copyright`, repository/documentation/issue/privacy-statement links, and shared
 description. The privacy statement link is the WinGet `PrivacyUrl`, which every submission set must
-declare.
+declare. It is version-derived - `$(RepositoryUrl)/releases/download/v$(Version)/PRIVACY.md`, the
+version's own immutable release asset - and generation, sealing, and the post-release gate refuse any
+other value, `blob/main` included. A privacy statement is version-specific product behaviour: never
+point a released version at a mutable copy.
 The four shipped projects import it explicitly; test/helper projects do not. `Directory.Build.props`
 contains repository-wide build policy only. Assemblies, About, TigerCli help/version output, installer
 metadata, artifact names, release automation, and WinGet preparation derive from `Version.props`. Do
@@ -1000,12 +1012,15 @@ fails with `dependency_requires_elevation` rather than prompting). Debug symbols
 are excluded from the installed files.
 
 TigerMarkView is an application repository. It publishes one GUI+CLI installer, not NuGet packages,
-a separate CLI installer, or a portable application ZIP. A release carries TigerSetup's four-asset
-model: the installer, `TigerMarkView-<version>-WinGet.zip` packed from the sealed submission set (never
+a separate CLI installer, or a portable application ZIP. A release carries five assets: TigerSetup's
+four - the installer, `TigerMarkView-<version>-WinGet.zip` packed from the sealed submission set (never
 regenerated; `release-artifacts.json` records its hash and the set's submission digest),
-`SHA256SUMS.txt`, and `release-artifacts.json`. Releases up to 0.10.0 keep their published three
-assets; `Test-TigerMarkViewReleasePredatesWinGetArchive` is that one historic boundary. Release notes
-link `docs/PRIVACY.md` in the release's own tag, which the notes gate requires. Public documentation remains `README.md` plus `docs/`;
+`SHA256SUMS.txt`, and `release-artifacts.json` - plus `PRIVACY.md`, the commit's `docs/PRIVACY.md`
+frozen byte for byte (kind `PrivacyStatement` in both records, proven equal to the commit's blob and to
+the installer's `Docs\PRIVACY.md`; `.gitattributes` pins the file to LF so checkouts reproduce those
+bytes). Releases up to 0.10.0 keep their published three assets;
+`Test-TigerMarkViewReleasePredatesWinGetArchive` is that one historic boundary, and 0.11.0 was never
+published. Release notes link the release's `PRIVACY.md` asset, which the notes gate requires. Public documentation remains `README.md` plus `docs/`;
 do not introduce DocFX, generated API docs, or an API-documentation site. TigerMarkView's completed
 release/WinGet workflow is the reference model for future Tiger projects. The durable maintainer
 lifecycle is in `docs/maintainers/releasing-tigermarkview.md` and the artifact and submission rules

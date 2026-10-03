@@ -118,8 +118,12 @@ tags = ["markdown", "pdf", "viewer"]
 package_url = "https://github.com/rkozlowski/TigerMarkView"
 publisher_url = "https://www.ittiger.net/"
 publisher_support_url = "https://github.com/rkozlowski/TigerMarkView/issues"
-privacy_url = "https://github.com/rkozlowski/TigerMarkView/blob/main/docs/PRIVACY.md"   # docs\PRIVACY.md; WinGet requires it
-short_description = "A local Markdown viewer, reviewer and PDF exporter."
+# The privacy statement of the exact version: docs\PRIVACY.md frozen as its release's PRIVACY.md
+# asset. TigerSetup writes this verbatim; eng\winget\Prepare-TigerMarkViewWinGet.ps1 replaces
+# {version}, because no version is stated in this file.
+privacy_url = "https://github.com/rkozlowski/TigerMarkView/releases/download/v{version}/PRIVACY.md"
+short_description = "A Markdown viewer, reviewer and PDF exporter for local files."
 description = """
-TigerMarkView is a Windows desktop application for reading and reviewing local Markdown files.
-The installer includes the graphical viewer and the tiger-mark Markdown-to-PDF command."""
+TigerMarkView is a Windows desktop application for reading and reviewing Markdown files on your computer, with PDF export.
+The installer includes the graphical viewer and the tiger-mark Markdown-to-PDF command, adds its folder to PATH, and offers TigerMarkView under Open with for .md and .markdown files without changing your default app.
+Settings and the recent-file list stay on this PC, and there is no telemetry. Web images that a document refers to are downloaded from the addresses it names."""

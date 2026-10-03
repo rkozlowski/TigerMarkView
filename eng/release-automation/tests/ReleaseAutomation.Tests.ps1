@@ -115,14 +115,15 @@ try {
     Assert-True ((@(& $constant.releaseAssetNames '0.10.0') -join ',') -ceq
         'TigerMarkView-0.10.0-win-x64-setup.exe,SHA256SUMS.txt,release-artifacts.json') `
         '0.10.0 was published with the installer and its two records only.'
-    foreach ($later in '0.10.1', '0.11.0-rc.1', '1.0.0') {
+    foreach ($later in '0.10.1', '0.11.1', '0.11.0-rc.1', '1.0.0') {
         Assert-True ((@(& $constant.releaseAssetNames $later) -join ',') -ceq
-            "TigerMarkView-$later-win-x64-setup.exe,TigerMarkView-$later-WinGet.zip,SHA256SUMS.txt,release-artifacts.json") `
-            "A release after 0.10.0 ($later) publishes its WinGet manifests beside the installer."
+            ("TigerMarkView-$later-win-x64-setup.exe,TigerMarkView-$later-WinGet.zip,PRIVACY.md," +
+                'SHA256SUMS.txt,release-artifacts.json')) `
+            "A release after 0.10.0 ($later) publishes its WinGet manifests and its privacy statement beside the installer."
     }
-    Assert-True ((& $constant.privacyStatementUrl '0.10.1') -ceq
-        'https://github.com/rkozlowski/TigerMarkView/blob/v0.10.1/docs/PRIVACY.md') `
-        'The privacy statement a release links is the copy in its own tag.'
+    Assert-True ((& $constant.privacyStatementUrl '0.11.1') -ceq
+        'https://github.com/rkozlowski/TigerMarkView/releases/download/v0.11.1/PRIVACY.md') `
+        'The privacy statement of a release is the PRIVACY.md asset published with it.'
     Write-Host 'PASS: the release asset set and privacy link follow the published history'
 
     # --- Release notes link the release's own privacy statement ----------
@@ -141,20 +142,24 @@ Download and run the installer from the assets below.
 "@
     Set-Content -LiteralPath (Join-Path $notesRoot '0.10.1.md') -Encoding utf8NoBOM -Value $notesBody
     $unlinked = Test-TigerMarkViewReleaseNotes -Version '0.10.1' -RepositoryRoot $repositoryRoot -NotesRoot $notesRoot
-    Assert-True ($unlinked.status -ceq 'FAIL' -and $unlinked.expected -match 'blob/v0\.10\.1/docs/PRIVACY\.md') `
-        'Notes for a release after 0.10.0 must link the privacy statement in that release''s tag.'
+    Assert-True ($unlinked.status -ceq 'FAIL' -and $unlinked.expected -match 'releases/download/v0\.10\.1/PRIVACY\.md') `
+        'Notes for a release after 0.10.0 must link the privacy statement published with that release.'
+    foreach ($foreign in 'https://github.com/rkozlowski/TigerMarkView/blob/main/docs/PRIVACY.md',
+        'https://github.com/rkozlowski/TigerMarkView/blob/v0.10.1/docs/PRIVACY.md',
+        'https://github.com/rkozlowski/TigerMarkView/releases/download/v0.10.0/PRIVACY.md') {
+        Set-Content -LiteralPath (Join-Path $notesRoot '0.10.1.md') -Encoding utf8NoBOM -Value ($notesBody +
+            "`n## Privacy`n`nSee $foreign.`n")
+        $foreignLinked = Test-TigerMarkViewReleaseNotes -Version '0.10.1' -RepositoryRoot $repositoryRoot -NotesRoot $notesRoot
+        Assert-True ($foreignLinked.status -ceq 'FAIL') "A link to '$foreign' is not the release's own frozen statement."
+    }
     Set-Content -LiteralPath (Join-Path $notesRoot '0.10.1.md') -Encoding utf8NoBOM -Value ($notesBody +
-        "`n## Privacy`n`nSee https://github.com/rkozlowski/TigerMarkView/blob/main/docs/PRIVACY.md.`n")
-    $mainLinked = Test-TigerMarkViewReleaseNotes -Version '0.10.1' -RepositoryRoot $repositoryRoot -NotesRoot $notesRoot
-    Assert-True ($mainLinked.status -ceq 'FAIL') 'A link to the moving main-branch copy is not the release''s statement.'
-    Set-Content -LiteralPath (Join-Path $notesRoot '0.10.1.md') -Encoding utf8NoBOM -Value ($notesBody +
-        "`n## Privacy`n`nSee https://github.com/rkozlowski/TigerMarkView/blob/v0.10.1/docs/PRIVACY.md.`n")
+        "`n## Privacy`n`nSee https://github.com/rkozlowski/TigerMarkView/releases/download/v0.10.1/PRIVACY.md.`n")
     $linked = Test-TigerMarkViewReleaseNotes -Version '0.10.1' -RepositoryRoot $repositoryRoot -NotesRoot $notesRoot
-    Assert-True ($linked.status -ceq 'PASS') "Notes linking the tag-bound privacy statement pass; got $($linked.status): $($linked.observed)"
+    Assert-True ($linked.status -ceq 'PASS') "Notes linking the released privacy statement pass; got $($linked.status): $($linked.observed)"
     Set-Content -LiteralPath (Join-Path $notesRoot '0.10.0.md') -Encoding utf8NoBOM -Value $notesBody
     $historic = Test-TigerMarkViewReleaseNotes -Version '0.10.0' -RepositoryRoot $repositoryRoot -NotesRoot $notesRoot
     Assert-True ($historic.status -ceq 'PASS') 'The published 0.10.0 notes predate the privacy statement and still pass.'
-    Write-Host 'PASS: release notes must link the privacy statement in the release''s own tag'
+    Write-Host 'PASS: release notes must link the privacy statement published with the release'
 
     # --- Verdict precedence and exit codes ---------------------------------
 
@@ -480,7 +485,7 @@ running-head option to the tiger-mark command line for exported PDFs.
 
 ## Privacy
 
-See the [privacy statement for this release](https://github.com/rkozlowski/TigerMarkView/blob/v$gateVersion/docs/PRIVACY.md).
+See the [privacy statement for this release](https://github.com/rkozlowski/TigerMarkView/releases/download/v$gateVersion/PRIVACY.md).
 "@
     Invoke-FixtureGit -Root $gateRoot -GitArgs @('init', '--quiet', '-b', 'main') | Out-Null
     Invoke-FixtureGit -Root $gateRoot -GitArgs @('config', 'user.email', 'test@example.com') | Out-Null
@@ -646,12 +651,19 @@ See the [privacy statement for this release](https://github.com/rkozlowski/Tiger
     $state = Get-TigerMarkViewReleaseState -Cli $withoutArchive -Version $laterVersion -ExpectedCommit $commit -Repository $repository
     Assert-True (@($state.checks | Where-Object { $_.id -ceq 'release/assets' }).status -ceq 'FAIL') `
         'A release after 0.10.0 without its WinGet archive is FAIL.'
-    $withArchive = New-FakeGh -Routes @{ $laterRoute = (New-LaterRelease @(
+    $withoutPrivacy = New-FakeGh -Routes @{ $laterRoute = (New-LaterRelease @(
         "TigerMarkView-$laterVersion-win-x64-setup.exe", "TigerMarkView-$laterVersion-WinGet.zip",
         'SHA256SUMS.txt', 'release-artifacts.json')) }
-    $state = Get-TigerMarkViewReleaseState -Cli $withArchive -Version $laterVersion -ExpectedCommit $commit -Repository $repository
+    $state = Get-TigerMarkViewReleaseState -Cli $withoutPrivacy -Version $laterVersion -ExpectedCommit $commit -Repository $repository
+    $assetCheck = @($state.checks | Where-Object { $_.id -ceq 'release/assets' })
+    Assert-True ($assetCheck.status -ceq 'FAIL' -and $assetCheck.observed -match 'Missing: PRIVACY\.md') `
+        'A release after 0.10.0 without its PRIVACY.md asset is FAIL: its PrivacyUrl would name nothing.'
+    $complete = New-FakeGh -Routes @{ $laterRoute = (New-LaterRelease @(
+        "TigerMarkView-$laterVersion-win-x64-setup.exe", "TigerMarkView-$laterVersion-WinGet.zip", 'PRIVACY.md',
+        'SHA256SUMS.txt', 'release-artifacts.json')) }
+    $state = Get-TigerMarkViewReleaseState -Cli $complete -Version $laterVersion -ExpectedCommit $commit -Repository $repository
     Assert-True (@($state.checks | Where-Object { $_.status -cne 'PASS' }).Count -eq 0) `
-        'A release after 0.10.0 with the installer, its WinGet archive and both records passes.'
+        'A release after 0.10.0 with the installer, its WinGet archive, its privacy statement and both records passes.'
     Write-Host 'PASS: release-state checks separate missing, draft, wrong-commit, and wrong-asset releases'
 
     # --- Workflow script references -----------------------------------
@@ -701,7 +713,6 @@ See the [privacy statement for this release](https://github.com/rkozlowski/Tiger
     # check is what makes "the same bytes" checkable across the artifact upload.
     . (Join-Path (Split-Path -Parent $automationRoot) 'winget' 'TigerMarkViewWinGet.ps1')
     $artifactVersion = '0.10.1'
-    $artifactCommit = 'd' * 40
     $installerName = "TigerMarkView-$artifactVersion-win-x64-setup.exe"
     $archiveName = "TigerMarkView-$artifactVersion-WinGet.zip"
     $buildRoot = Join-Path $testRoot 'build'
@@ -710,6 +721,20 @@ See the [privacy statement for this release](https://github.com/rkozlowski/Tiger
     New-Item -ItemType Directory -Path $buildRoot, $sealedRoot -Force | Out-Null
     $builtInstaller = Join-Path $buildRoot $installerName
     [IO.File]::WriteAllBytes($builtInstaller, [byte[]] (1..64))
+
+    # The release commit, in a repository of its own, records the privacy statement the release
+    # freezes. Non-ASCII on purpose, so a copy that re-encoded the text would not be byte-identical.
+    $sourceRoot = Join-Path $testRoot 'source'
+    New-Item -ItemType Directory -Path (Join-Path $sourceRoot 'docs') -Force | Out-Null
+    $privacySource = Join-Path $sourceRoot 'docs\PRIVACY.md'
+    [IO.File]::WriteAllText($privacySource, "# TigerMarkView privacy statement`n`nZażółć: what it stores.`n",
+        [Text.UTF8Encoding]::new($false))
+    Invoke-FixtureGit -Root $sourceRoot -GitArgs @('init', '--quiet', '-b', 'main') | Out-Null
+    Invoke-FixtureGit -Root $sourceRoot -GitArgs @('config', 'core.autocrlf', 'false') | Out-Null
+    Invoke-FixtureGit -Root $sourceRoot -GitArgs @('add', '-A') | Out-Null
+    Invoke-FixtureGit -Root $sourceRoot -GitArgs @('-c', 'user.email=test@example.com', '-c', 'user.name=Test',
+        'commit', '--quiet', '-m', 'release commit') | Out-Null
+    $artifactCommit = Invoke-FixtureGit -Root $sourceRoot -GitArgs @('rev-parse', 'HEAD')
 
     # A sealed submission set: the three manifests exactly as the workflow sealed them. CRLF and a
     # non-ASCII character on purpose, so a packer that normalised text would change the digest.
@@ -729,13 +754,14 @@ See the [privacy statement for this release](https://github.com/rkozlowski/Tiger
         -InstallerPath $builtInstaller `
         -WinGetManifestDirectory $sealedRoot `
         -ExpectedSubmissionDigest $sealed.digest `
+        -PrivacyStatementPath $privacySource `
         -ArtifactDirectory $releaseRoot `
         -Version $artifactVersion `
         -CommitSha $artifactCommit `
         -GitHubOutput $outputFile | Out-Null
 
     $releaseNames = @(Get-ChildItem -LiteralPath $releaseRoot -File | ForEach-Object Name | Sort-Object)
-    $expectedNames = @(@('SHA256SUMS.txt', 'release-artifacts.json', $installerName, $archiveName) | Sort-Object)
+    $expectedNames = @(@('SHA256SUMS.txt', 'release-artifacts.json', $installerName, $archiveName, 'PRIVACY.md') | Sort-Object)
     Assert-True (($releaseNames -join ',') -ceq ($expectedNames -join ',')) `
         "Staging must leave exactly the closed set; it left $($releaseNames -join ', ')."
 
@@ -749,8 +775,98 @@ See the [privacy statement for this release](https://github.com/rkozlowski/Tiger
         -ExpectedVersion $artifactVersion `
         -ExpectedCommit $artifactCommit `
         -ExpectedManifestSha256 $recordedHash[0] `
-        -ExpectedSubmissionDigest $sealed.digest | Out-Null
+        -ExpectedSubmissionDigest $sealed.digest `
+        -PrivacyStatementPath $privacySource `
+        -SourceRepository $sourceRoot | Out-Null
     Write-Host 'PASS: the artifact set is staged, closed, and verified against its recorded manifest'
+
+    # --- The frozen privacy statement -------------------------------------
+
+    $frozenPrivacy = Join-Path $releaseRoot 'PRIVACY.md'
+    $privacyHash = (Get-FileHash -LiteralPath $privacySource -Algorithm SHA256).Hash.ToLowerInvariant()
+    Assert-True ((Get-FileHash -LiteralPath $frozenPrivacy -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $privacyHash) `
+        'PRIVACY.md is a byte-for-byte copy of the statement the release was built from.'
+    $record = Get-Content -LiteralPath (Join-Path $releaseRoot 'release-artifacts.json') -Raw | ConvertFrom-Json
+    Assert-True ((@($record.artifacts | ForEach-Object { "$($_.name)=$($_.kind)" }) -join ',') -ceq
+        "$installerName=WindowsInstaller,$archiveName=WinGetManifests,PRIVACY.md=PrivacyStatement") `
+        'release-artifacts.json records the installer, the WinGet archive, and the privacy statement, in that order.'
+    $privacyRecord = @($record.artifacts | Where-Object name -CEQ 'PRIVACY.md')
+    Assert-True ($privacyRecord[0].sha256 -ceq $privacyHash -and [long] $privacyRecord[0].length -eq (Get-Item $frozenPrivacy).Length) `
+        'release-artifacts.json records the privacy statement''s SHA-256 and size.'
+    Assert-True (@(Get-Content -LiteralPath (Join-Path $releaseRoot 'SHA256SUMS.txt')) -ccontains "$privacyHash  PRIVACY.md") `
+        'SHA256SUMS.txt lists the privacy statement.'
+    Write-Host 'PASS: PRIVACY.md is frozen into the closed set and recorded in release-artifacts.json and SHA256SUMS.txt'
+
+    function Copy-ReleaseSet([string] $Name) {
+        $copy = Join-Path $testRoot $Name
+        Copy-Item -LiteralPath $releaseRoot -Destination $copy -Recurse
+        $copy
+    }
+    function Write-ReleaseRecord([string] $Root, [object] $Record) {
+        $Record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $Root 'release-artifacts.json') -Encoding utf8NoBOM
+        @($Record.artifacts | ForEach-Object { "$($_.sha256)  $($_.name)" }) |
+            Set-Content -LiteralPath (Join-Path $Root 'SHA256SUMS.txt') -Encoding utf8NoBOM
+    }
+    $assertArtifacts = Join-Path $automationRoot 'Assert-ReleaseArtifactManifest.ps1'
+
+    $noPrivacyAsset = Copy-ReleaseSet 'release-no-privacy'
+    Remove-Item -LiteralPath (Join-Path $noPrivacyAsset 'PRIVACY.md')
+    Assert-Throws -MessagePattern 'Missing: PRIVACY\.md' -Action {
+        & $assertArtifacts -ArtifactDirectory $noPrivacyAsset -ExpectedVersion $artifactVersion -ExpectedCommit $artifactCommit | Out-Null
+    }
+    Write-Host 'PASS: a release set without its PRIVACY.md asset is refused'
+
+    $unsummed = Copy-ReleaseSet 'release-privacy-unsummed'
+    @(Get-Content -LiteralPath (Join-Path $unsummed 'SHA256SUMS.txt') | Where-Object { $_ -notmatch 'PRIVACY\.md$' }) |
+        Set-Content -LiteralPath (Join-Path $unsummed 'SHA256SUMS.txt') -Encoding utf8NoBOM
+    Assert-Throws -MessagePattern 'SHA256SUMS\.txt does not exactly match' -Action {
+        & $assertArtifacts -ArtifactDirectory $unsummed -ExpectedVersion $artifactVersion -ExpectedCommit $artifactCommit | Out-Null
+    }
+    Write-Host 'PASS: a privacy statement absent from SHA256SUMS.txt is refused'
+
+    $unrecorded = Copy-ReleaseSet 'release-privacy-unrecorded'
+    $unrecordedRecord = Get-Content -LiteralPath (Join-Path $unrecorded 'release-artifacts.json') -Raw | ConvertFrom-Json
+    $unrecordedRecord.artifacts = @($unrecordedRecord.artifacts | Where-Object name -CNE 'PRIVACY.md')
+    Write-ReleaseRecord -Root $unrecorded -Record $unrecordedRecord
+    Assert-Throws -MessagePattern 'not the installer, its WinGet archive, and the privacy statement' -Action {
+        & $assertArtifacts -ArtifactDirectory $unrecorded -ExpectedVersion $artifactVersion -ExpectedCommit $artifactCommit | Out-Null
+    }
+    Write-Host 'PASS: a privacy statement absent from release-artifacts.json is refused'
+
+    # Bytes that differ from the statement the release was built from - here a frozen copy rewritten
+    # with CRLF, its hash recorded consistently - are refused against the build input and against the
+    # release commit, even though the set agrees with itself.
+    $rewritten = Copy-ReleaseSet 'release-privacy-rewritten'
+    $rewrittenPrivacy = Join-Path $rewritten 'PRIVACY.md'
+    [IO.File]::WriteAllText($rewrittenPrivacy, [IO.File]::ReadAllText($privacySource).Replace("`n", "`r`n"),
+        [Text.UTF8Encoding]::new($false))
+    $rewrittenRecord = Get-Content -LiteralPath (Join-Path $rewritten 'release-artifacts.json') -Raw | ConvertFrom-Json
+    $rewrittenRecord.artifacts[2].sha256 = (Get-FileHash -LiteralPath $rewrittenPrivacy -Algorithm SHA256).Hash.ToLowerInvariant()
+    $rewrittenRecord.artifacts[2].length = (Get-Item -LiteralPath $rewrittenPrivacy).Length
+    Write-ReleaseRecord -Root $rewritten -Record $rewrittenRecord
+    & $assertArtifacts -ArtifactDirectory $rewritten -ExpectedVersion $artifactVersion -ExpectedCommit $artifactCommit | Out-Null
+    Assert-Throws -MessagePattern 'release was built from' -Action {
+        & $assertArtifacts -ArtifactDirectory $rewritten -ExpectedVersion $artifactVersion -ExpectedCommit $artifactCommit `
+            -PrivacyStatementPath $privacySource | Out-Null
+    }
+    Assert-Throws -MessagePattern 'not the privacy statement of the release commit' -Action {
+        & $assertArtifacts -ArtifactDirectory $rewritten -ExpectedVersion $artifactVersion -ExpectedCommit $artifactCommit `
+            -SourceRepository $sourceRoot | Out-Null
+    }
+    $otherSource = Join-Path $testRoot 'other-PRIVACY.md'
+    [IO.File]::WriteAllText($otherSource, "# A statement for another build`n", [Text.UTF8Encoding]::new($false))
+    Assert-Throws -MessagePattern 'release was built from' -Action {
+        & $assertArtifacts -ArtifactDirectory $releaseRoot -ExpectedVersion $artifactVersion -ExpectedCommit $artifactCommit `
+            -PrivacyStatementPath $otherSource | Out-Null
+    }
+    Assert-Throws -MessagePattern 'Privacy statement not found' -Action {
+        & (Join-Path $automationRoot 'New-ReleaseArtifactManifest.ps1') `
+            -InstallerPath $builtInstaller -WinGetManifestDirectory $sealedRoot `
+            -PrivacyStatementPath (Join-Path $testRoot 'absent-PRIVACY.md') `
+            -ArtifactDirectory (Join-Path $testRoot 'release-absent-privacy') `
+            -Version $artifactVersion -CommitSha $artifactCommit | Out-Null
+    }
+    Write-Host 'PASS: a frozen statement whose bytes differ from the build input or the release commit is refused'
 
     # The record and the checksum file name the archive by its own hash, and the record ties it to
     # the sealed set by the submission digest.
@@ -797,6 +913,7 @@ See the [privacy statement for this release](https://github.com/rkozlowski/Tiger
             -InstallerPath $builtInstaller `
             -WinGetManifestDirectory $sealedRoot `
             -ExpectedSubmissionDigest ('0' * 64) `
+            -PrivacyStatementPath $privacySource `
             -ArtifactDirectory (Join-Path $testRoot 'release-other-set') `
             -Version $artifactVersion `
             -CommitSha $artifactCommit | Out-Null
@@ -832,15 +949,17 @@ See the [privacy statement for this release](https://github.com/rkozlowski/Tiger
         & (Join-Path $automationRoot 'New-ReleaseArtifactManifest.ps1') `
             -InstallerPath $wrongName `
             -WinGetManifestDirectory $sealedRoot `
+            -PrivacyStatementPath $privacySource `
             -ArtifactDirectory (Join-Path $testRoot 'release-wrong') `
             -Version $artifactVersion `
             -CommitSha $artifactCommit | Out-Null
     }
     Write-Host 'PASS: only the expected release installer can close the set'
 
-    # The draft carries all four, and the workflow closes the set only from the sealed directory.
+    # The draft carries the whole set, and the workflow closes the set only from the sealed directory.
     $publish = Get-Content -LiteralPath (Join-Path $automationRoot 'Publish-GitHubDraftRelease.ps1') -Raw
-    Assert-True ($publish.Contains('"TigerMarkView-$Version-WinGet.zip"')) 'The draft release uploads the WinGet archive.'
+    Assert-True ($publish.Contains('$assetNames = @(& $constant.releaseAssetNames $Version)')) `
+        'The draft release uploads exactly the release asset set the shared constant names.'
     $releaseWorkflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github/workflows/release.yml') -Raw
     $sealStep = $releaseWorkflow.IndexOf('Seal and record the WinGet submission set')
     $closeStep = $releaseWorkflow.IndexOf('Close and hash the release artifact set')
@@ -852,6 +971,15 @@ See the [privacy statement for this release](https://github.com/rkozlowski/Tiger
     Assert-True (([regex]::Matches($releaseWorkflow, '-ExpectedSubmissionDigest')).Count -ge 3) `
         'The archive is checked against the sealed digest when closed, when verified, and after the transfer.'
     Write-Host 'PASS: the workflow and the draft carry the WinGet archive packed from the sealed set'
+
+    Assert-True ($releaseWorkflow -match '(?s)New-ReleaseArtifactManifest\.ps1.{0,600}?-PrivacyStatementPath docs/PRIVACY\.md') `
+        'The release set freezes the checked-out docs/PRIVACY.md, the file the installer was built with.'
+    Assert-True ($releaseWorkflow -match 'artifacts/release/PRIVACY\.md') `
+        'The validated release artifact carries PRIVACY.md to the publication job.'
+    Assert-True (([regex]::Matches($releaseWorkflow,
+        '(?s)Assert-ReleaseArtifactManifest\.ps1(?:(?!- name:).)*?-PrivacyStatementPath docs/PRIVACY\.md\s+-SourceRepository \.')).Count -eq 2) `
+        'PRIVACY.md is proven to be the release commit''s docs/PRIVACY.md when verified and again after the transfer.'
+    Write-Host 'PASS: the workflow freezes and proves the privacy statement in the release set'
 
     Write-Host
     Write-Host 'PASS: release automation foundation' -ForegroundColor Green

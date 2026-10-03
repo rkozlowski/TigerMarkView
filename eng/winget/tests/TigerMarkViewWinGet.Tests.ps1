@@ -127,9 +127,15 @@ exit 2
     $env:TIGERMARKVIEW_TEST_TIGERSETUP_LOG = $fakeTigerSetupLog
     $env:TIGERMARKVIEW_TEST_TIGERSETUP_VERSION = $pinnedTigerSetup
     $env:TIGERMARKVIEW_TEST_TIGERSETUP_URL = ''
-    # What [winget] privacy_url in installer\TigerSetup.toml makes TigerSetup write.
-    $privacyUrl = 'https://github.com/rkozlowski/TigerMarkView/blob/main/docs/PRIVACY.md'
-    $env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL = $privacyUrl
+    # What [winget] privacy_url in installer\TigerSetup.toml makes TigerSetup write: the declared
+    # value verbatim, {version} token included. Prepare must turn it into this version's asset URL.
+    $privacyTemplateLine = @(Get-Content -LiteralPath (Join-Path $repositoryRoot 'installer\TigerSetup.toml') |
+        Where-Object { $_ -match '^\s*privacy_url\s*=\s*"[^"]+"' })
+    Assert-True ($privacyTemplateLine.Count -eq 1) 'installer\TigerSetup.toml must declare exactly one privacy_url.'
+    $null = $privacyTemplateLine[0] -match '"(?<value>[^"]+)"'
+    $privacyTemplate = $Matches.value
+    $privacyUrl = "https://github.com/rkozlowski/TigerMarkView/releases/download/v$version/PRIVACY.md"
+    $env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL = $privacyTemplate
 
     $defaultOutput = Join-Path $testRoot 'default'
     & $prepareScript `
@@ -167,15 +173,27 @@ exit 2
     $env:TIGERMARKVIEW_TEST_TIGERSETUP_URL = ''
     Write-Host 'PASS: a generated set that does not declare the release URL is refused'
 
-    foreach ($generatedPrivacyUrl in '', 'https://www.ittiger.net/privacy') {
+    # A PrivacyUrl that is missing, mutable, or the statement of anything but this release is refused:
+    # the default branch, a tag's repository file, another release's asset, another document of this
+    # release, the latest release, or a website policy.
+    $foreignPrivacyUrls = @(
+        ''
+        'https://www.ittiger.net/privacy'
+        'https://github.com/rkozlowski/TigerMarkView/blob/main/docs/PRIVACY.md'
+        "https://github.com/rkozlowski/TigerMarkView/blob/v$version/docs/PRIVACY.md"
+        'https://github.com/rkozlowski/TigerMarkView/releases/download/v0.11.0/PRIVACY.md'
+        "https://github.com/rkozlowski/TigerMarkView/releases/download/v$version/HELP.md"
+        'https://github.com/rkozlowski/TigerMarkView/releases/latest/download/PRIVACY.md'
+    )
+    foreach ($generatedPrivacyUrl in $foreignPrivacyUrls) {
         $env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL = $generatedPrivacyUrl
         Assert-Throws -MessagePattern 'PrivacyUrl' -Action {
             & $prepareScript -TigerSetupPath $fakeTigerSetup -InstallerPath $installerPath `
                 -OutputRoot (Join-Path $testRoot 'wrong-privacy') -ExpectedVersion $version | Out-Host
         }
     }
-    $env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL = $privacyUrl
-    Write-Host 'PASS: a generated set without the product privacy statement as PrivacyUrl is refused'
+    $env:TIGERMARKVIEW_TEST_TIGERSETUP_PRIVACY_URL = $privacyTemplate
+    Write-Host 'PASS: a generated PrivacyUrl that is not this release''s PRIVACY.md asset is refused'
 
     $fakeWinGet = Join-Path $testRoot 'winget-test.cmd'
     $fakeWinGetContent = @'
@@ -265,8 +283,88 @@ exit /b 2
     Assert-True ($stored.installer.installerUrl -ceq $release.installerUrl) `
         'The installer manifest must declare the immutable release asset URL.'
     Assert-True ($release.privacyUrl -ceq $privacyUrl -and $stored.locale.privacyUrl -ceq $privacyUrl) `
-        'The default-locale manifest must declare the product privacy statement as PrivacyUrl.'
+        'The default-locale manifest must declare this version''s PRIVACY.md release asset as PrivacyUrl.'
+    $storedLocaleLines = @(Get-Content -LiteralPath (Join-Path $storedDirectory $release.manifestFileNames[1]))
+    Assert-True (@($storedLocaleLines | Where-Object { $_ -ceq "PrivacyUrl: $privacyUrl" }).Count -eq 1 -and
+        @($storedLocaleLines | Where-Object { $_ -match '\{version\}' }).Count -eq 0) `
+        'The {version} token must be resolved in the one PrivacyUrl line, as a plain scalar, and nowhere else left behind.'
     Write-Host 'PASS: a prepared directory reads back as the three-file submission set'
+
+    # The rule itself, independently of generation: only the version's own release asset passes.
+    Assert-True ($null -eq (Get-TigerMarkViewPrivacyStatementUrlProblem -Url $privacyUrl -Version $version)) `
+        'The version''s own PRIVACY.md release asset is its privacy statement.'
+    foreach ($case in @(
+            @{ url = 'https://github.com/rkozlowski/TigerMarkView/blob/main/docs/PRIVACY.md'; reason = 'can change after the release' }
+            @{ url = 'https://github.com/rkozlowski/TigerMarkView/raw/main/docs/PRIVACY.md'; reason = 'can change after the release' }
+            @{ url = 'https://github.com/rkozlowski/TigerMarkView/releases/download/v0.11.0/PRIVACY.md'; reason = 'release v0\.11\.0, not' }
+            @{ url = "https://github.com/rkozlowski/TigerMarkView/releases/download/v$version/HELP.md"; reason = "'HELP\.md', not the release's PRIVACY\.md" }
+            @{ url = 'https://github.com/rkozlowski/TigerMarkView/releases/latest/download/PRIVACY.md'; reason = 'whichever release is latest' }
+            @{ url = 'https://www.ittiger.net/privacy'; reason = 'is not the PRIVACY\.md asset' }
+            @{ url = ''; reason = 'no privacy statement URL' })) {
+        $problem = Get-TigerMarkViewPrivacyStatementUrlProblem -Url $case.url -Version $version
+        Assert-True ($null -ne $problem -and $problem -match $case.reason) `
+            "'$($case.url)' must be refused as '$($case.reason)'; the rule said '$problem'."
+    }
+    Write-Host 'PASS: the privacy-statement rule accepts only the version''s own PRIVACY.md release asset'
+
+    # After publication: what PrivacyUrl serves must be the bytes both release records name and the
+    # release commit's docs/PRIVACY.md. A repository with one commit stands in for the release commit.
+    $privacyRepository = Join-Path $testRoot 'privacy-source'
+    New-Item -ItemType Directory -Path (Join-Path $privacyRepository 'docs') -Force | Out-Null
+    $committedPrivacy = Join-Path $privacyRepository 'docs\PRIVACY.md'
+    [IO.File]::WriteAllText($committedPrivacy, "# TigerMarkView privacy statement`n`nŻółw: local data.`n",
+        [Text.UTF8Encoding]::new($false))
+    $previousNative = $PSNativeCommandUseErrorActionPreference
+    try {
+        $PSNativeCommandUseErrorActionPreference = $false
+        foreach ($gitArguments in @(
+                @('init', '--quiet', '-b', 'main'), @('config', 'core.autocrlf', 'false'), @('add', '-A'),
+                @('-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--quiet', '-m', 'release'))) {
+            & git -C $privacyRepository @gitArguments | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "git $($gitArguments -join ' ') failed in the privacy fixture." }
+        }
+        $privacyCommit = (& git -C $privacyRepository rev-parse HEAD | Out-String).Trim()
+    }
+    finally {
+        $PSNativeCommandUseErrorActionPreference = $previousNative
+        $global:LASTEXITCODE = 0
+    }
+    function New-PublishedPrivacy([string] $Name, [string] $Text, [switch] $OmitSum, [switch] $OmitRecord) {
+        $root = Join-Path $testRoot $Name
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+        $path = Join-Path $root 'PRIVACY.md'
+        [IO.File]::WriteAllText($path, $Text, [Text.UTF8Encoding]::new($false))
+        $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        $artifacts = @([ordered]@{ name = 'PRIVACY.md'; kind = 'PrivacyStatement'; length = (Get-Item $path).Length; sha256 = $hash })
+        if ($OmitRecord) { $artifacts = @() }
+        [ordered]@{ schemaVersion = 1; releaseVersion = $version; artifacts = $artifacts } | ConvertTo-Json -Depth 4 |
+            Set-Content -LiteralPath (Join-Path $root 'release-artifacts.json') -Encoding utf8NoBOM
+        $sums = if ($OmitSum) { "$('0' * 64)  other.exe" } else { "$hash  PRIVACY.md" }
+        Set-Content -LiteralPath (Join-Path $root 'SHA256SUMS.txt') -Value $sums -Encoding utf8NoBOM
+        $root
+    }
+    $committedText = [IO.File]::ReadAllText($committedPrivacy)
+    $checkPublished = {
+        param([string] $Root)
+        @(Get-TigerMarkViewPublishedPrivacyStatementProblem -PublishedRoot $Root -Version $version `
+            -RepositoryRoot $privacyRepository -Commit $privacyCommit)
+    }
+    $published = @(& $checkPublished (New-PublishedPrivacy 'published-good' $committedText))
+    Assert-True ($published.Count -eq 0) "The released statement passes; the check said: $($published -join '; ')"
+    $absent = Join-Path $testRoot 'published-absent'
+    New-Item -ItemType Directory -Path $absent -Force | Out-Null
+    Assert-True (((& $checkPublished $absent) -join '; ') -match 'was not published') 'A release without PRIVACY.md is refused.'
+    Assert-True (((& $checkPublished (New-PublishedPrivacy 'published-unsummed' $committedText -OmitSum)) -join '; ') -match 'SHA256SUMS\.txt') `
+        'A statement SHA256SUMS.txt does not list is refused.'
+    Assert-True (((& $checkPublished (New-PublishedPrivacy 'published-unrecorded' $committedText -OmitRecord)) -join '; ') -match 'release-artifacts\.json') `
+        'A statement release-artifacts.json does not record is refused.'
+    $rewrittenProblems = @(& $checkPublished (New-PublishedPrivacy 'published-rewritten' $committedText.Replace("`n", "`r`n")))
+    Assert-True ($rewrittenProblems.Count -eq 1 -and $rewrittenProblems[0] -match "not the release commit's docs/PRIVACY\.md") `
+        'A statement whose bytes differ from the release commit''s is refused even when both records agree with it.'
+    Assert-True ((@(Get-TigerMarkViewPublishedPrivacyStatementProblem -PublishedRoot (Join-Path $testRoot 'published-good') `
+            -Version $version -RepositoryRoot $privacyRepository -Commit ('e' * 40)) -join '; ') -match 'not available') `
+        'A release commit the repository does not have is reported, never assumed to match.'
+    Write-Host 'PASS: the published PRIVACY.md must be the recorded bytes and the release commit''s docs/PRIVACY.md'
 
     $extraFile = Join-Path $storedDirectory 'notes.txt'
     Set-Content -LiteralPath $extraFile -Value 'not part of the submission' -Encoding utf8NoBOM
@@ -410,6 +508,13 @@ exit /b 2
         & $assertScript -ManifestDirectory $noPrivacyDirectory -Version $version -InstallerPath $installerPath | Out-Host
     }
     Write-Host 'PASS: sealing refuses a set whose default-locale manifest lacks PrivacyUrl'
+
+    [IO.File]::WriteAllText($noPrivacyLocale, [IO.File]::ReadAllText($noPrivacyLocale).TrimEnd("`n") +
+        "`nPrivacyUrl: https://github.com/rkozlowski/TigerMarkView/blob/main/docs/PRIVACY.md`n")
+    Assert-Throws -MessagePattern 'PrivacyUrl.*can change after the release' -Action {
+        & $assertScript -ManifestDirectory $noPrivacyDirectory -Version $version -InstallerPath $installerPath | Out-Host
+    }
+    Write-Host 'PASS: sealing refuses a set whose PrivacyUrl is the default branch''s mutable copy'
 
     Assert-Throws -MessagePattern 'not the same manifests' -Action {
         & $assertScript `

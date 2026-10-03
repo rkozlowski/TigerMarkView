@@ -253,7 +253,7 @@ function Test-Installed {
     $handler = @($md.handlers | Where-Object { ([string] $_.name) -like '*\TigerMarkView.exe' })
     @(
         (New-Check 'Files installed per user' "$Prefix.files" ((Test-Path (Join-Path $root 'TigerMarkView.exe')) -and (Test-Path (Join-Path $root 'tiger-mark.exe')) -and (Test-Path (Join-Path $root 'Docs\HELP.md')) -and -not (Test-Path (Join-Path $root 'unins000.exe'))) "Install root $root.")
-        (New-Check 'Add/Remove Programs entry' "$Prefix.registration" ($Probe.registration.exists -and $Probe.registration.displayVersion -eq $Version -and $Probe.registration.publisher -eq 'IT Tiger' -and -not $Probe.legacyRegistration) "ItTiger.TigerMarkView $($Probe.registration.displayVersion) by $($Probe.registration.publisher); Inno entry present: $($Probe.legacyRegistration).")
+        (New-Check 'Add/Remove Programs entry' "$Prefix.registration" ($Probe.registration.exists -and $Probe.registration.displayName -eq 'TigerMarkView' -and $Probe.registration.displayVersion -eq $Version -and $Probe.registration.publisher -eq 'IT Tiger' -and -not $Probe.legacyRegistration) "ItTiger.TigerMarkView: '$($Probe.registration.displayName)' $($Probe.registration.displayVersion) by $($Probe.registration.publisher); Inno entry present: $($Probe.legacyRegistration).")
         (New-Check 'One user PATH entry' "$Prefix.path" ($entries.Count -eq 1) "Entries for $root in the user PATH: $($entries.Count).")
         (New-Check 'Start Menu shortcut' "$Prefix.shortcut" (Test-Path -LiteralPath $link) $link)
         (New-Check 'Markdown handler class' "$Prefix.progid" ($Probe.progIdExists -and $Probe.progIdCommand -eq $command) "HKCU $ProgId opens with: $($Probe.progIdCommand)")
@@ -539,8 +539,18 @@ try {
         New-Item -ItemType Directory -Path (Split-Path -Parent $neighbour) -Force | Out-Null
         [IO.File]::WriteAllText($neighbour, 'another application', (New-Object Text.UTF8Encoding $false))
     }
+    # The privacy statement discloses the browser engine's own history of the pages it showed; it lives
+    # in the profile the uninstall removes.
+    $engineHistory = Join-Path $installed.localAppData 'TigerMarkView\WebView2\Viewer\EBWebView\Default\History'
+    $checks.Add((New-Check 'Browser engine history is in the removed profile' 'uninstall.engine-history' (Test-Path -LiteralPath $engineHistory -PathType Leaf) "$engineHistory exists before the uninstall: $(Test-Path -LiteralPath $engineHistory -PathType Leaf)."))
     $uninstallCommand = Split-Command ([string] $installed.registration.quietUninstall)
     $removal = Invoke-Setup -FilePath $uninstallCommand.program -Arguments @($uninstallCommand.arguments | Where-Object { $_ -notin '--quiet' }) -Name 'upgrade-uninstall'
+    # The statement says the uninstaller's log (here written to an explicit --log path; by default to
+    # %TEMP%\TigerSetup) names none of the reader's documents, though it removes data that did.
+    $uninstallLog = Join-Path $IoRoot 'upgrade-uninstall.log'
+    $logText = if (Test-Path -LiteralPath $uninstallLog) { [IO.File]::ReadAllText($uninstallLog) } else { '' }
+    $logNamesDocument = $logText.Contains($DocRoot) -or $logText.Contains('picked file') -or $logText.Contains('dropped') -or $logText.Contains('linked doc')
+    $checks.Add((New-Check 'The uninstall log names no document' 'uninstall.setup-log' ($logText.Length -gt 0 -and -not $logNamesDocument) "$uninstallLog ($($logText.Length) characters) names a document: $logNamesDocument."))
     $checks.Add((New-Check 'Registered quiet uninstall' 'uninstall.run' ($removal.exitCode -eq 0) "$($installed.registration.quietUninstall) -> exit $($removal.exitCode)."))
     $removed = Invoke-Shell -Mode probe -Name 'uninstall-after'
     foreach ($check in @(Test-Removed -Probe $removed -Prefix 'uninstall')) { $checks.Add($check) }

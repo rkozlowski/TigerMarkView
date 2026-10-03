@@ -2,8 +2,9 @@ name: Release TigerMarkView
 run-name: Release TigerMarkView ${{ inputs.version }}
 
 # This workflow performs only the work that must happen in CI: the authoritative
-# build, the WinGet submission set generated from that exact installer, and the
-# draft GitHub Release that publishes both. Every check and every decision it makes lives in an
+# build, the WinGet submission set generated from that exact installer, the
+# version's frozen privacy statement, and the draft GitHub Release that publishes
+# them. Every check and every decision it makes lives in an
 # eng/ script that a maintainer can run and read locally. Post-release WinGet
 # submission is one local command and is deliberately not automated here.
 #
@@ -16,7 +17,7 @@ on:
       version:
         description: Exact release version already recorded in Version.props
         required: true
-        default: '0.11.0'
+        default: '0.11.1'
         type: string
 
 permissions:
@@ -161,11 +162,14 @@ jobs:
           -InstallerPath "artifacts/installer/TigerMarkView-$env:RELEASE_VERSION-win-x64-setup.exe"
           -WinGetManifestDirectory "artifacts/winget/manifests/i/ItTiger/TigerMarkView/$env:RELEASE_VERSION"
           -ExpectedSubmissionDigest $env:SUBMISSION_SHA256
+          -PrivacyStatementPath docs/PRIVACY.md
           -ArtifactDirectory artifacts/release
           -Version $env:RELEASE_VERSION
           -CommitSha ${{ github.sha }}
           -GitHubOutput $env:GITHUB_OUTPUT
 
+      # PRIVACY.md must be the committed docs/PRIVACY.md - the file the installer carries as
+      # Docs\PRIVACY.md, which Assert-Installer compared above - byte for byte.
       - name: Verify the closed release artifact set
         shell: pwsh
         env:
@@ -176,6 +180,8 @@ jobs:
           -ExpectedVersion $env:RELEASE_VERSION
           -ExpectedCommit ${{ github.sha }}
           -ExpectedSubmissionDigest $env:SUBMISSION_SHA256
+          -PrivacyStatementPath docs/PRIVACY.md
+          -SourceRepository .
 
       - name: Verify release construction did not mutate committed inputs
         run: git diff --exit-code
@@ -187,6 +193,7 @@ jobs:
           path: |
             artifacts/release/TigerMarkView-${{ inputs.version }}-win-x64-setup.exe
             artifacts/release/TigerMarkView-${{ inputs.version }}-WinGet.zip
+            artifacts/release/PRIVACY.md
             artifacts/release/SHA256SUMS.txt
             artifacts/release/release-artifacts.json
           if-no-files-found: error
@@ -234,6 +241,8 @@ jobs:
           -ExpectedCommit ${{ github.sha }}
           -ExpectedManifestSha256 $env:EXPECTED_MANIFEST_SHA256
           -ExpectedSubmissionDigest $env:EXPECTED_SUBMISSION_SHA256
+          -PrivacyStatementPath docs/PRIVACY.md
+          -SourceRepository .
 
       - name: Download the validated WinGet submission set
         uses: actions/download-artifact@v7

@@ -38,9 +38,11 @@ function Get-TigerMarkViewWinGetRelease {
         .DESCRIPTION
         The installer file name, the immutable release asset URL, the three
         manifest file names in submission order, and the winget-pkgs path are all
-        functions of the version alone; the privacy statement's URL comes from
-        Version.props. Deriving them once keeps the generator and
-        the gate from drifting into two slightly different opinions.
+        functions of the version alone. So is the privacy statement's URL: Version.props
+        declares it as the version's own PRIVACY.md release asset, and anything else is
+        refused here, so no generator or gate can be handed a mutable or foreign
+        statement. Deriving them once keeps the generator and the gate from drifting
+        into two slightly different opinions.
     #>
     [CmdletBinding()]
     param(
@@ -58,9 +60,10 @@ function Get-TigerMarkViewWinGetRelease {
         $RepositoryUrl = $properties.RepositoryUrl
     }
     $RepositoryUrl = $RepositoryUrl.TrimEnd('/')
-    $privacyUrl = ([string] $properties.PrivacyUrl).Replace('$(RepositoryUrl)', $RepositoryUrl)
-    if ([string]::IsNullOrWhiteSpace($privacyUrl)) {
-        throw 'Version.props does not define PrivacyUrl, which every WinGet submission must declare.'
+    $privacyUrl = ([string] $properties.PrivacyUrl).Replace('$(RepositoryUrl)', $RepositoryUrl).Replace('$(Version)', $Version)
+    $privacyProblem = Get-TigerMarkViewPrivacyStatementUrlProblem -Url $privacyUrl -Version $Version
+    if ($null -ne $privacyProblem) {
+        throw "Version.props PrivacyUrl does not name this version's privacy statement: $privacyProblem."
     }
 
     $packageIdentifier = 'ItTiger.TigerMarkView'
@@ -72,9 +75,10 @@ function Get-TigerMarkViewWinGetRelease {
         repositoryUrl = $RepositoryUrl
         installerFileName = $installerFileName
         installerUrl = "$RepositoryUrl/releases/download/v$Version/$installerFileName"
-        # The product privacy statement; WinGet repository policy requires the
-        # default-locale manifest to name it as PrivacyUrl.
+        # The privacy statement published with this version; WinGet repository policy
+        # expects the default-locale manifest to name it as PrivacyUrl.
         privacyUrl = $privacyUrl
+        privacyStatementFileName = (Get-TigerMarkViewReleaseConstant).privacyStatementAssetName
         # The release asset that publishes the sealed set; see New-TigerMarkViewWinGetArchive.
         wingetArchiveFileName = "TigerMarkView-$Version-WinGet.zip"
         # Submission order: installer, default locale, version. Read-only consumers
@@ -204,6 +208,116 @@ function Read-TigerMarkViewWinGetSubmissionSet {
             packageIdentifier = Get-TigerMarkViewWinGetManifestField -Lines $documents[2].lines -Name 'PackageIdentifier'
             packageVersion = Get-TigerMarkViewWinGetManifestField -Lines $documents[2].lines -Name 'PackageVersion'
         }
+    }
+}
+
+function Resolve-TigerMarkViewWinGetPrivacyUrl {
+    <#
+        .SYNOPSIS
+        Writes the version into the PrivacyUrl TigerSetup generated from its template.
+
+        .DESCRIPTION
+        installer\TigerSetup.toml must not state a version, but the privacy statement of a
+        version is that version's own release asset. TigerSetup writes [winget] privacy_url
+        verbatim, so the manifest declares it with a {version} token and this replaces that
+        token, and nothing else, in the one PrivacyUrl line of the default-locale manifest
+        TigerSetup has just written. The value stays a plain YAML scalar, so the line is
+        exactly what TigerSetup writes for the literal URL. It runs between
+        `winget prepare` and `winget finalize`, before anything reads or seals the set.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $ManifestDirectory,
+
+        [Parameter(Mandatory)]
+        [string] $Version
+    )
+
+    $release = Get-TigerMarkViewWinGetRelease -Version $Version
+    $path = Join-Path $ManifestDirectory $release.manifestFileNames[1]
+    $encoding = [Text.UTF8Encoding]::new($false, $true)
+    $text = $encoding.GetString([IO.File]::ReadAllBytes($path))
+    $pattern = '(?m)^PrivacyUrl: (?<value>[^\r\n]*)$'
+    $found = @([regex]::Matches($text, $pattern))
+    if ($found.Count -ne 1) {
+        throw "'$path' declares PrivacyUrl $($found.Count) times; TigerSetup writes it exactly once."
+    }
+    $value = $found[0].Groups['value'].Value
+    $resolved = $value.Replace('{version}', $Version)
+    if ($resolved -cne $value) {
+        $text = $text.Substring(0, $found[0].Groups['value'].Index) + $resolved +
+            $text.Substring($found[0].Groups['value'].Index + $value.Length)
+        [IO.File]::WriteAllBytes($path, $encoding.GetBytes($text))
+    }
+    $resolved
+}
+
+function Get-TigerMarkViewPublishedPrivacyStatementProblem {
+    <#
+        .SYNOPSIS
+        Why a downloaded PRIVACY.md is not the release's frozen privacy statement, or nothing.
+
+        .DESCRIPTION
+        Reads what an anonymous client downloaded from a published release - PRIVACY.md,
+        SHA256SUMS.txt and release-artifacts.json in one directory - and requires the
+        statement to be exactly the bytes both records name, and exactly docs/PRIVACY.md
+        as the release commit records it. Returns one message per problem; no output means
+        the statement the version's PrivacyUrl serves is the one it was released with.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $PublishedRoot,
+
+        [Parameter(Mandatory)]
+        [string] $Version,
+
+        [Parameter(Mandatory)]
+        [string] $RepositoryRoot,
+
+        [Parameter(Mandatory)]
+        [string] $Commit
+    )
+
+    $release = Get-TigerMarkViewWinGetRelease -Version $Version
+    $name = $release.privacyStatementFileName
+    $path = Join-Path $PublishedRoot $name
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        return "$name was not published with v$Version"
+    }
+    $sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $length = [long] (Get-Item -LiteralPath $path).Length
+
+    $summed = $null
+    $sumsPath = Join-Path $PublishedRoot 'SHA256SUMS.txt'
+    if (Test-Path -LiteralPath $sumsPath -PathType Leaf) {
+        $pattern = '^(?<hash>[0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($name) + '\s*$'
+        foreach ($line in @(Get-Content -LiteralPath $sumsPath)) {
+            if ($line -cmatch $pattern) { $summed = ([string] $Matches.hash).ToLowerInvariant(); break }
+        }
+    }
+    if ($summed -cne $sha256) {
+        "SHA256SUMS.txt records '$summed' for $name, not its SHA-256 $sha256"
+    }
+
+    $entry = $null
+    try {
+        $record = Get-Content -LiteralPath (Join-Path $PublishedRoot 'release-artifacts.json') -Raw | ConvertFrom-Json
+        $entry = @($record.artifacts | Where-Object { $_.name -ceq $name }) | Select-Object -First 1
+    }
+    catch {
+        $entry = $null
+    }
+    if ($null -eq $entry -or [string] $entry.kind -cne 'PrivacyStatement' -or
+        [string] $entry.sha256 -cne $sha256 -or [long] $entry.length -ne $length) {
+        "release-artifacts.json does not record $name as the PrivacyStatement with SHA-256 $sha256 and length $length"
+    }
+
+    $committed = Test-TigerMarkViewCommittedFile -RepositoryRoot $RepositoryRoot -Commit $Commit `
+        -RepositoryPath (Get-TigerMarkViewReleaseConstant).privacyStatementSourcePath -Path $path
+    if (-not $committed.matches) {
+        "$name is not the release commit's docs/PRIVACY.md: $($committed.problem) (fetch origin if the commit is missing)"
     }
 }
 

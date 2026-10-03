@@ -6,7 +6,7 @@
     Project-specific metadata such as AssemblyName and Description may remain in a project file.
   -->
   <PropertyGroup>
-    <Version>0.11.0</Version>
+    <Version>0.11.1</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>
     <UtcBuildTimestamp>$([System.DateTime]::UtcNow.ToString('yyyyMMdd.HHmmss'))</UtcBuildTimestamp>
@@ -20,14 +20,17 @@
     <!-- This remains aligned with the copyright notice in LICENSE. -->
     <Copyright>Copyright (c) 2026 Ryszard Kozlowski</Copyright>
     <NeutralLanguage>en-US</NeutralLanguage>
-    <Description>A local Markdown viewer, reviewer and PDF exporter.</Description>
+    <Description>A Markdown viewer, reviewer and PDF exporter for local files.</Description>
 
     <RepositoryUrl>https://github.com/rkozlowski/TigerMarkView</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <DocumentationUrl>$(RepositoryUrl)/blob/main/docs/HELP.md</DocumentationUrl>
     <IssueTrackerUrl>$(RepositoryUrl)/issues</IssueTrackerUrl>
-    <!-- The product privacy statement; WinGet publishes it as PrivacyUrl. -->
-    <PrivacyUrl>$(RepositoryUrl)/blob/main/docs/PRIVACY.md</PrivacyUrl>
+    <!--
+      The privacy statement of this exact version: docs/PRIVACY.md frozen as the PRIVACY.md asset of
+      the version's own GitHub Release, which is never replaced. WinGet publishes it as PrivacyUrl.
+    -->
+    <PrivacyUrl>$(RepositoryUrl)/releases/download/v$(Version)/PRIVACY.md</PrivacyUrl>
     <WebsiteUrl>https://www.ittiger.net/</WebsiteUrl>
     <LicenseIdentity>MIT</LicenseIdentity>
 

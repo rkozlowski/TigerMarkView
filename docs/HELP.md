@@ -288,9 +288,11 @@ apply on screen, in an exported PDF, and in `tiger-mark`.
 
 Pictures work as usual. Local images load from beside the file, and web images load from the web, like
 the badges on a project's README — which also means that the server hosting a web image can see that
-the document was opened (see the [privacy statement](PRIVACY.md)). Nothing else in a document can reach the network.
-Web images do not receive browser cookies or Windows sign-in credentials. A picture that requires
-you to sign in will not load; open its website in your browser to view it there.
+the document was opened (see the [privacy statement](PRIVACY.md)). Nothing else in a document is
+fetched automatically. Web images are requested without browser cookies, and their web servers never
+receive your Windows sign-in; if your network uses a proxy server that requires Windows authentication,
+only that proxy is signed in to. A picture that requires you to sign in will not load; open its website
+in your browser to view it there.
 
 Images on network shares are the exception: a picture addressed as `\\server\share\...`, or reached
 through a mapped network drive or a symbolic link to a share, is not shown. Windows would sign in to
@@ -321,9 +323,11 @@ Between sessions, TigerMarkView remembers:
 - which optional toolbar buttons you added.
 
 These are kept in a small settings file in your own user profile, under
-`%LocalAppData%\TigerMarkView`, and are not sent anywhere. Deleting that folder while TigerMarkView is
-closed resets it to its defaults; nothing else is affected. To forget only the recent files, choose
-**File > Open Recent > Clear Recent Files**.
+`%LocalAppData%\TigerMarkView`, and are not sent anywhere. The browser engine that displays documents
+keeps its own data in the same folder, including a history of the documents it has shown by file name.
+Deleting that folder while TigerMarkView is closed resets it to its defaults and removes that history;
+nothing else is affected. To forget only the recent files, choose
+**File > Open Recent > Clear Recent Files** while no other TigerMarkView window is open.
 
 Upgrading to a newer version keeps all of this. Uninstalling TigerMarkView removes it for the Windows
 account that runs the uninstall. The [privacy statement](PRIVACY.md) describes exactly what is stored,

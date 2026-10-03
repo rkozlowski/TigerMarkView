@@ -4,11 +4,16 @@
     Proves a directory holds exactly the recorded TigerMarkView release bytes.
 
     .DESCRIPTION
-    The set is the installer, TigerMarkView-<version>-WinGet.zip, SHA256SUMS.txt,
-    and release-artifacts.json. Both recorded artifacts must match their recorded
-    length and SHA-256, SHA256SUMS.txt must say exactly the same, and the archive
-    must hold exactly the three submission manifests whose submission digest the
-    record names.
+    The set is the installer, TigerMarkView-<version>-WinGet.zip, PRIVACY.md,
+    SHA256SUMS.txt, and release-artifacts.json. Every recorded artifact must match
+    its recorded length and SHA-256, SHA256SUMS.txt must say exactly the same, and
+    the archive must hold exactly the three submission manifests whose submission
+    digest the record names.
+
+    PRIVACY.md is the privacy statement frozen for the version. With
+    -PrivacyStatementPath it must be byte-identical to that file (the docs\PRIVACY.md
+    the installer was built with); with -SourceRepository it must be byte-identical to
+    docs/PRIVACY.md as the expected commit records it.
 
     .PARAMETER ArtifactDirectory
     The release directory to check.
@@ -28,6 +33,14 @@
     .PARAMETER ExpectedSubmissionDigest
     When supplied, the submission digest the sealing step recorded: the archive
     the release publishes must hold exactly that sealed set.
+
+    .PARAMETER PrivacyStatementPath
+    When supplied, the privacy statement the release was built from; PRIVACY.md must
+    be a byte-for-byte copy of it.
+
+    .PARAMETER SourceRepository
+    When supplied, a repository holding the expected commit; PRIVACY.md must be the
+    exact blob that commit records for docs/PRIVACY.md.
 #>
 [CmdletBinding()]
 param(
@@ -43,7 +56,11 @@ param(
 
     [string] $ExpectedManifestSha256,
 
-    [string] $ExpectedSubmissionDigest
+    [string] $ExpectedSubmissionDigest,
+
+    [string] $PrivacyStatementPath,
+
+    [string] $SourceRepository
 )
 
 $ErrorActionPreference = 'Stop'
@@ -72,12 +89,14 @@ $release = Get-TigerMarkViewWinGetRelease -Version $ExpectedVersion
 $expected = [ordered]@{
     $release.installerFileName = 'WindowsInstaller'
     $release.wingetArchiveFileName = 'WinGetManifests'
+    $release.privacyStatementFileName = 'PrivacyStatement'
 }
 $entries = @($manifest.artifacts)
 $recorded = @($entries | ForEach-Object { "$($_.name)=$($_.kind)" })
 $wanted = @($expected.Keys | ForEach-Object { "$_=$($expected[$_])" })
 if (($recorded -join ',') -cne ($wanted -join ',')) {
-    throw "Release manifest records '$($recorded -join ', ')', not the installer and its WinGet archive."
+    throw ("Release manifest records '$($recorded -join ', ')', not the installer, its WinGet archive, " +
+        'and the privacy statement.')
 }
 
 $allowedNames = @(@($expected.Keys) + @('release-artifacts.json', 'SHA256SUMS.txt'))
@@ -109,6 +128,23 @@ if (-not [string]::IsNullOrWhiteSpace($ExpectedSubmissionDigest) -and
         "'$($ExpectedSubmissionDigest.ToLowerInvariant())'.")
 }
 
+$privacyEntry = $entries[2]
+$privacyPath = Join-Path $ArtifactDirectory $privacyEntry.name
+if (-not [string]::IsNullOrWhiteSpace($PrivacyStatementPath)) {
+    $sourceSha256 = (Get-FileHash -LiteralPath $PrivacyStatementPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($sourceSha256 -cne [string] $privacyEntry.sha256) {
+        throw ("$($privacyEntry.name) records SHA-256 '$($privacyEntry.sha256)', but the privacy statement the " +
+            "release was built from, '$PrivacyStatementPath', hashes to '$sourceSha256'.")
+    }
+}
+if (-not [string]::IsNullOrWhiteSpace($SourceRepository)) {
+    $committed = Test-TigerMarkViewCommittedFile -RepositoryRoot $SourceRepository -Commit $ExpectedCommit `
+        -RepositoryPath (Get-TigerMarkViewReleaseConstant).privacyStatementSourcePath -Path $privacyPath
+    if (-not $committed.matches) {
+        throw "$($privacyEntry.name) is not the privacy statement of the release commit: $($committed.problem)."
+    }
+}
+
 $expectedChecksums = @($entries | ForEach-Object { "$($_.sha256)  $($_.name)" }) -join [Environment]::NewLine
 $actualChecksums = (Get-Content -LiteralPath $checksumPath -Raw).TrimEnd("`r", "`n") -replace "`r`n", "`n"
 if ($actualChecksums -cne ($expectedChecksums -replace "`r`n", "`n")) {
@@ -117,3 +153,4 @@ if ($actualChecksums -cne ($expectedChecksums -replace "`r`n", "`n")) {
 
 Write-Host "Verified exact TigerMarkView $ExpectedVersion release bytes at $ExpectedCommit."
 Write-Host "$($archiveEntry.name) holds the sealed WinGet submission set $($archive.digest)."
+Write-Host "$($privacyEntry.name) is the frozen privacy statement, SHA-256 $($privacyEntry.sha256)."

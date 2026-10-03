@@ -55,12 +55,17 @@ function Get-TigerMarkViewReleaseConstant {
                 "TigerMarkView-$Version-win-x64-setup.exe"
                 if (-not (Test-TigerMarkViewReleasePredatesWinGetArchive -Version $Version)) {
                     "TigerMarkView-$Version-WinGet.zip"
+                    'PRIVACY.md'
                 }
                 'SHA256SUMS.txt'
                 'release-artifacts.json'
             ) }
+        # The privacy statement of one version is the PRIVACY.md asset of that version's
+        # release: an immutable file, unlike a branch or even a tag's rendered page.
+        privacyStatementAssetName = 'PRIVACY.md'
+        privacyStatementSourcePath = 'docs/PRIVACY.md'
         privacyStatementUrl = { param([string] $Version)
-            "https://github.com/rkozlowski/TigerMarkView/blob/v$Version/docs/PRIVACY.md" }
+            "https://github.com/rkozlowski/TigerMarkView/releases/download/v$Version/PRIVACY.md" }
         releaseNotesPath = { param([string] $Version) ".github/release-notes/$Version.md" }
         versionPattern = '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$'
     }
@@ -70,14 +75,16 @@ function Test-TigerMarkViewReleasePredatesWinGetArchive {
     <#
         .SYNOPSIS
         True for a version published before releases carried their WinGet manifests
-        and a tag-bound privacy statement.
+        and their own privacy statement.
 
         .DESCRIPTION
         0.10.0 and every earlier release were published with the installer,
         SHA256SUMS.txt, and release-artifacts.json alone, and their notes link no
         privacy statement. Published releases are never edited to match a later
         shape, so the checks that read them accept that shape for those versions
-        only; every later release has TigerMarkView-<version>-WinGet.zip too.
+        only; every later release also carries TigerMarkView-<version>-WinGet.zip and
+        PRIVACY.md. (0.11.0 was prepared but never published, so no release has any
+        intermediate shape.)
     #>
     [CmdletBinding()]
     param(
@@ -102,6 +109,111 @@ function Test-TigerMarkViewReleaseVersion {
 
     -not [string]::IsNullOrWhiteSpace($Version) -and
         $Version -match (Get-TigerMarkViewReleaseConstant).versionPattern
+}
+
+function Get-TigerMarkViewPrivacyStatementUrlProblem {
+    <#
+        .SYNOPSIS
+        Why a URL is not the privacy statement of a version, or $null when it is.
+
+        .DESCRIPTION
+        A version's privacy statement is the PRIVACY.md asset of that version's own
+        GitHub Release and nothing else. A branch copy changes after the release, a tag's
+        rendered page is not the published bytes, another release's asset describes
+        another version, and another document is not the statement at all. The URL is
+        compared exactly; the reason only makes a refusal easy to act on.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()]
+        [string] $Url,
+
+        [Parameter(Mandatory)]
+        [string] $Version
+    )
+
+    $expected = & (Get-TigerMarkViewReleaseConstant).privacyStatementUrl $Version
+    if ($Url -ceq $expected) { return $null }
+
+    $reason = if ([string]::IsNullOrWhiteSpace($Url)) {
+        'no privacy statement URL is declared'
+    }
+    elseif ($Url -match '/(blob|raw|tree)/|/(main|master|HEAD)/') {
+        "'$Url' is a repository file that can change after the release"
+    }
+    elseif ($Url -match '/releases/latest/') {
+        "'$Url' follows whichever release is latest"
+    }
+    elseif ($Url -match '/releases/download/v(?<tag>[^/]+)/(?<file>[^/]+)$' -and $Matches.tag -cne $Version) {
+        "'$Url' is published with release v$($Matches.tag), not v$Version"
+    }
+    elseif ($Url -match '/releases/download/v[^/]+/(?<file>[^/]+)$' -and $Matches.file -cne 'PRIVACY.md') {
+        "'$Url' is '$($Matches.file)', not the release's PRIVACY.md"
+    }
+    else {
+        "'$Url' is not the PRIVACY.md asset of the v$Version release"
+    }
+    "$reason; the privacy statement of $Version is $expected"
+}
+
+function Test-TigerMarkViewCommittedFile {
+    <#
+        .SYNOPSIS
+        Proves a file holds exactly the bytes a commit records for a repository path.
+
+        .DESCRIPTION
+        Compares Git blob ids: the blob the commit names for the path, and the blob id of
+        the file's raw bytes (hash-object --no-filters, so no line-ending conversion can
+        make two different files look alike). Equal ids mean byte-identical content. This
+        needs only git and the commit in the local repository; it never contacts GitHub.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $RepositoryRoot,
+
+        [Parameter(Mandatory)]
+        [string] $Commit,
+
+        [Parameter(Mandatory)]
+        [string] $RepositoryPath,
+
+        [Parameter(Mandatory)]
+        [string] $Path
+    )
+
+    $previousNative = $PSNativeCommandUseErrorActionPreference
+    try {
+        $PSNativeCommandUseErrorActionPreference = $false
+        $committed = (& git -C $RepositoryRoot rev-parse --verify --quiet "${Commit}:$RepositoryPath" 2>$null |
+            Out-String).Trim()
+        $committedExit = $LASTEXITCODE
+        $actual = (& git -C $RepositoryRoot hash-object --no-filters -- $Path 2>$null | Out-String).Trim()
+        $actualExit = $LASTEXITCODE
+    }
+    finally {
+        $PSNativeCommandUseErrorActionPreference = $previousNative
+        $global:LASTEXITCODE = 0
+    }
+
+    $problem = if ($committedExit -ne 0 -or [string]::IsNullOrWhiteSpace($committed)) {
+        "commit $Commit is not available in '$RepositoryRoot', or it has no '$RepositoryPath'"
+    }
+    elseif ($actualExit -ne 0 -or [string]::IsNullOrWhiteSpace($actual)) {
+        "'$Path' could not be hashed"
+    }
+    elseif ($actual -cne $committed) {
+        "'$Path' is blob $actual; commit $Commit records '$RepositoryPath' as blob $committed"
+    }
+    else {
+        $null
+    }
+    [pscustomobject][ordered]@{
+        matches = $null -eq $problem
+        committedBlob = $committed
+        fileBlob = $actual
+        problem = $problem
+    }
 }
 
 # --- Result vocabulary -------------------------------------------------------
@@ -377,13 +489,13 @@ function Test-TigerMarkViewReleaseNotes {
             -Observed "$relative still contains placeholder text: '$($placeholder.Value)'." -Remediation $repair
     }
 
-    # The privacy statement a release is published under is the one in its own tag: a link to the
-    # tag-bound copy cannot later come to describe a different version.
+    # The privacy statement a release is published under is the PRIVACY.md asset of that release:
+    # a file that, unlike a branch or a tag's rendered page, can never come to say anything else.
     if (-not (Test-TigerMarkViewReleasePredatesWinGetArchive -Version $Version)) {
         $privacyUrl = & (Get-TigerMarkViewReleaseConstant).privacyStatementUrl $Version
         if (-not $content.Contains($privacyUrl)) {
             return New-TigerMarkViewReleaseCheck -Id 'release-notes/source' -Status 'FAIL' `
-                -Observed "$relative does not link the privacy statement in the release's own tag." `
+                -Observed "$relative does not link the privacy statement published with the release." `
                 -Expected $privacyUrl -Remediation "Link $privacyUrl as the template's Privacy section does."
         }
     }

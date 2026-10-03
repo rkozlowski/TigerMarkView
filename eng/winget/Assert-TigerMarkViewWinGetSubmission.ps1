@@ -8,7 +8,8 @@
     what makes "the same set" checkable on both sides of that upload: it asserts
     the directory holds exactly the three submission manifests, UTF-8 without a
     byte-order mark, that all three agree on identity and version, that the
-    default-locale manifest names the product privacy statement as PrivacyUrl, and
+    default-locale manifest names the version's own PRIVACY.md release asset as
+    PrivacyUrl (never a branch, another release, or another document), and
     that the installer manifest names the immutable v<version> release asset URL. It then
     prints a digest over the three files.
 
@@ -89,9 +90,9 @@ foreach ($document in @('installer', 'locale', 'version')) {
     }
 }
 
-if ($submission.locale.privacyUrl -cne $release.privacyUrl) {
-    throw ("The default-locale manifest declares PrivacyUrl '$($submission.locale.privacyUrl)'; " +
-        "the product privacy statement is '$($release.privacyUrl)'.")
+$privacyProblem = Get-TigerMarkViewPrivacyStatementUrlProblem -Url $submission.locale.privacyUrl -Version $Version
+if ($null -ne $privacyProblem -or $submission.locale.privacyUrl -cne $release.privacyUrl) {
+    throw "The default-locale manifest's PrivacyUrl is not the privacy statement of ${Version}: $privacyProblem."
 }
 if ($submission.installer.installerUrl -cne $release.installerUrl) {
     throw ("The installer manifest declares InstallerUrl '$($submission.installer.installerUrl)'; " +

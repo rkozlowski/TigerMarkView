@@ -11,18 +11,25 @@ checked-in version-specific release notes, the preparation and readiness helpers
 `winget-pkgs` submission orchestrator. Every GitHub operation uses the `gh auth login` session; no
 command takes a token.
 
-TigerMarkView publishes the same four assets as TigerSetup's own releases: one installer containing
-the GUI and CLI, `TigerMarkView-<version>-WinGet.zip` holding the exact sealed WinGet manifests for
-that installer, `SHA256SUMS.txt`, and `release-artifacts.json`. It does not publish NuGet packages,
-a portable application archive, or a separate CLI installer. Releases up to and including 0.10.0
-were published before the WinGet archive existed and keep their original three assets; a published
-release is never amended to match a later shape. `Version.props` remains the only product-version and
-shared-metadata source.
+TigerMarkView publishes five assets: one installer containing the GUI and CLI,
+`TigerMarkView-<version>-WinGet.zip` holding the exact sealed WinGet manifests for that installer,
+`PRIVACY.md` (the version's privacy statement), `SHA256SUMS.txt`, and `release-artifacts.json`. These
+are TigerSetup's own four release assets plus the privacy statement. It does not publish NuGet
+packages, a portable application archive, or a separate CLI installer. Releases up to and including
+0.10.0 were published before the WinGet archive and the privacy statement existed and keep their
+original three assets; 0.11.0 was prepared but never published; a published release is never amended
+to match a later shape. `Version.props` remains the only product-version and shared-metadata source.
 
-The release notes link the privacy statement in the release's own tag,
-`https://github.com/rkozlowski/TigerMarkView/blob/v<version>/docs/PRIVACY.md`, which the release-notes
-gate requires, and the installer carries the same document as `Docs\PRIVACY.md`. Together they make
-the statement a release is published under fixed and inspectable for that release.
+A privacy statement describes one version's behaviour, so each release freezes its own. The release
+set carries `docs/PRIVACY.md` from the release commit, byte for byte, as `PRIVACY.md`, and records its
+length and SHA-256 in `release-artifacts.json` (kind `PrivacyStatement`) and `SHA256SUMS.txt`. The
+installer carries the identical bytes as `Docs\PRIVACY.md`; `Assert-Installer.ps1` compares them, and
+`.gitattributes` pins the file to LF so every checkout reproduces the committed bytes. The version's
+WinGet `PrivacyUrl` and its release notes both name the asset,
+`https://github.com/rkozlowski/TigerMarkView/releases/download/v<version>/PRIVACY.md`, never a branch
+or another release. `Version.props` declares that URL with `$(Version)`, and `installer\TigerSetup.toml`
+with a `{version}` token that `Prepare-TigerMarkViewWinGet.ps1` resolves, because TigerSetup writes
+`privacy_url` verbatim and the manifest states no version.
 
 ## Maintainer tools and authentication
 
@@ -185,14 +192,15 @@ The release workflow then builds once and uses those exact outputs throughout. I
    `tiger-setup winget prepare` and `finalize`;
 6. seals the exact three-file submission set and records its digest (`winget validate` and the lab
    run on it after the draft);
-7. closes the release set: the installer and `TigerMarkView-<version>-WinGet.zip`, packed from the
-   sealed bytes and never regenerated, with `SHA256SUMS.txt` and `release-artifacts.json` recording
-   both and the record naming the sealed set's digest, then verifies it;
+7. closes the release set: the installer, `TigerMarkView-<version>-WinGet.zip` packed from the
+   sealed bytes and never regenerated, and `PRIVACY.md` frozen from the commit's `docs/PRIVACY.md`,
+   with `SHA256SUMS.txt` and `release-artifacts.json` recording all three and the record naming the
+   sealed set's digest, then verifies it, including that `PRIVACY.md` is the commit's blob;
 8. uploads the release set and `TigerMarkView-WinGet-<version>-<commit>`;
-9. transfers and reverifies both, including that the archive still holds the sealed set, without
-   rebuilding or regenerating;
+9. transfers and reverifies both, including that the archive still holds the sealed set and
+   `PRIVACY.md` is still the commit's blob, without rebuilding or regenerating;
 10. creates annotated tag `v<version>` at the validated commit; and
-11. creates a draft GitHub Release with the four assets and useful prepared release notes.
+11. creates a draft GitHub Release with the five assets and useful prepared release notes.
 
 The run ends with the `READY FOR HUMAN ACTION` handoff `Publish-GitHubDraftRelease.ps1` writes -
 draft URL, version, tag, commit, assets, the sealed WinGet artifact and its digest, and the exact
@@ -201,7 +209,7 @@ release and never creates the final WinGet pull request.
 
 ### 4. Review and publish the draft
 
-The human verifies the tag and commit, the four expected assets, the recorded hashes, and the
+The human verifies the tag and commit, the five expected assets, the recorded hashes, and the
 release notes, then explicitly publishes the draft. The release notes must be a useful user-facing
 summary. GitHub `--generate-notes` produced only a **Full Changelog** link for 0.8.1, so generic
 generated notes alone are not an acceptable finished implementation. Until signing is introduced,
@@ -248,7 +256,7 @@ pwsh eng/release-automation/Test-TigerMarkViewReleaseReadiness.ps1 -Version <ver
 #    The workflow's prerequisites job proves the commit is on origin/main and that its exact CI
 #    push run concluded success before it builds or tags anything.
 
-# 4. Review the draft - tag, commit, four assets, hashes, and the notes from
+# 4. Review the draft - tag, commit, five assets, hashes, and the notes from
 #    .github/release-notes/<version>.md - then publish it yourself.
 
 # 5. Prepare and push the WinGet submission branch.

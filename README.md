@@ -319,9 +319,11 @@ Contributor, architecture, and release guidance is in `AGENTS.md`; maintainer pr
 ## Privacy
 
 TigerMarkView keeps its settings and the Open Recent list on the local computer and sends them
-nowhere; it has no telemetry, accounts, or update checks. The application's only network requests are for web images
-that an opened document itself refers to. The [privacy statement](docs/PRIVACY.md) describes what is
-stored, how to clear it, what uninstalling removes, and those image requests.
+nowhere; it has no telemetry, accounts, or update checks. Its network requests are for the web images
+an opened document refers to, for documents opened from a network share, and, in the installer, for a
+missing Microsoft runtime. The [privacy statement](docs/PRIVACY.md) describes what is stored, how to
+clear it, what uninstalling removes, and those requests; each release publishes the statement for its
+version as its `PRIVACY.md` asset.
 
 ## Licence
 

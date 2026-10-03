@@ -134,3 +134,21 @@ ever again finds an install root left after uninstall on a migration row, read t
 looking anywhere else; the fix belongs in TigerSetup's migration, not in a TigerMarkView custom action.
 
 **Generalization candidate:** none; TigerSetup owns and has fixed it.
+
+## The Inno Setup migration source is the published 0.8.1, not the local copy
+
+**Area:** TigerWinLab installer acceptance (Inno Setup migration row)
+**Status:** Active
+
+The published v0.8.0 and v0.8.1 GitHub Releases no longer serve any asset, so
+`Test-TigerMarkViewRelease.ps1` stops before staging: it downloads the migration source only when
+GitHub records its digest. Two different files named `TigerMarkView-0.8.1-win-x64-setup.exe` sit under
+`artifacts\`: `CDD8978F...` in `artifacts\installer\` is a local build made before publication, and
+`B81118C9...` is the published asset, as `artifacts\winget-release\0.8.1\validation\result.json`
+records from its download on 2026-08-28.
+
+Pass the published bytes explicitly, for example
+`-UpgradeFromInstallerPath artifacts\lab\0.11.0\payload\TigerMarkView-0.8.1-win-x64-setup.exe`, and
+check its SHA-256 is `B81118C96655A7E6E28642A22AE5FC14CBD4EF47F2FA5928A35408833EE4BE9F` first.
+
+**Generalization candidate:** none; the migration source is this product's history.
