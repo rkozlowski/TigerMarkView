@@ -21,11 +21,19 @@
     .PARAMETER Baseline
     The TigerWinLab baseline. Windows 11 ships the Evergreen WebView2 Runtime, and the application is
     published self-contained, so a clean baseline needs no prerequisites.
+
+    .PARAMETER Scope
+    All (the default) runs every phase. RemoteImages runs only the phases that exercise remote images
+    and the request boundary they pass through - the viewer and tiger-mark on hostile.md, remote images
+    off, remote images changed live across two open windows, and the shared settings file - for a
+    change confined to that path.
 #>
 [CmdletBinding()]
 param(
     [string] $TigerWinLabRoot,
     [string] $Baseline = 'TigerWinLab-Win11-Clean',
+    [ValidateSet('All', 'RemoteImages')]
+    [string] $Scope = 'All',
     [ValidateRange(5, 120)]
     [int] $TimeoutMinutes = 30
 )
@@ -68,6 +76,7 @@ foreach ($file in @('accept.ps1', 'hostile.md', 'shares.md', 'code.md')) {
     Get-Content -LiteralPath (Join-Path $PSScriptRoot "active-content\$file") -Raw -Encoding utf8 |
         Set-Content -LiteralPath (Join-Path $payloadRoot $file) -Encoding utf8BOM -NoNewline
 }
+Set-Content -LiteralPath (Join-Path $payloadRoot 'scope.txt') -Value $Scope -Encoding ascii -NoNewline
 
 $env:TMV_ACCEPTANCE_SCRIPT = Join-Path $payloadRoot 'accept.ps1'
 try {
@@ -133,5 +142,5 @@ if ($labExit -ne 0 -or $result.status -ne 'OK' -or $phases.Count -eq 0 -or $fail
     exit 1
 }
 
-Write-Host "PASS: active content is inert in the TigerMarkView viewer and tiger-mark ($Baseline)." -ForegroundColor Green
+Write-Host "PASS: active content is inert in the TigerMarkView viewer and tiger-mark ($Baseline, scope $Scope)." -ForegroundColor Green
 exit 0

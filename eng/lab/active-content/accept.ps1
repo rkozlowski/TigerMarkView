@@ -39,6 +39,15 @@ $ScreenKeyword = @(207, 34, 46)
 $phases = New-Object System.Collections.Generic.List[object]
 $listener = $null
 
+# The wrapper's -Scope, staged as scope.txt: 'All' runs every phase; 'RemoteImages' runs only the phases
+# that exercise remote images and the request boundary they pass through (viewer, pdf, remote-images-off,
+# remote-images-live, multi-window-settings).
+$Scope = 'All'
+$scopePath = Join-Path $PSScriptRoot 'scope.txt'
+if (Test-Path -LiteralPath $scopePath) { $Scope = (Get-Content -LiteralPath $scopePath -Raw).Trim() }
+if (@('All', 'RemoteImages') -notcontains $Scope) { throw "Unknown acceptance scope '$Scope'." }
+$Everything = $Scope -eq 'All'
+
 function New-Check {
     param([string] $Name, [string] $Code, [bool] $Passed, [string] $Message)
     $status = 'FAIL'
@@ -365,6 +374,72 @@ function Invoke-GuiExport {
     [pscustomobject]@{ dialog = $null -ne $dialog; exported = (Wait-File -Path $PdfPath -TimeoutSeconds 90) }
 }
 
+function Get-RowInkColumns {
+    # The columns of one menu row, counted from its left edge, that hold ink: pixels far from the row's
+    # own dominant background colour, so the measure works in either theme.
+    param([string] $PngPath, [int] $Left, [int] $Top, [int] $Width, [int] $Height)
+    Add-Type -AssemblyName System.Drawing
+    $bitmap = New-Object System.Drawing.Bitmap $PngPath
+    try {
+        $right = [math]::Min($bitmap.Width, $Left + $Width)
+        $bottom = [math]::Min($bitmap.Height, $Top + $Height - 2)
+        $top = [math]::Max(0, $Top + 2)
+        $counts = @{}
+        for ($x = [math]::Max(0, $Left); $x -lt $right; $x++) { for ($y = $top; $y -lt $bottom; $y++) { $key = $bitmap.GetPixel($x, $y).ToArgb(); $counts[$key] = 1 + [int] $counts[$key] } }
+        $background = [System.Drawing.Color]::FromArgb([int] (@($counts.GetEnumerator() | Sort-Object Value -Descending)[0].Key))
+        $columns = New-Object System.Collections.Generic.List[int]
+        for ($x = [math]::Max(0, $Left); $x -lt $right; $x++) {
+            $ink = 0
+            for ($y = $top; $y -lt $bottom; $y++) {
+                $pixel = $bitmap.GetPixel($x, $y)
+                if (([math]::Abs($pixel.R - $background.R) + [math]::Abs($pixel.G - $background.G) + [math]::Abs($pixel.B - $background.B)) -gt 240) { $ink++ }
+            }
+            if ($ink -gt 0) { $columns.Add($x - $Left) }
+        }
+        # Unrolled: a callers' @() then holds integers, never one nested array (see LESSONS_LEARNED.md).
+        $columns.ToArray()
+    }
+    finally { $bitmap.Dispose() }
+}
+
+function Get-RemoteImagesCheckMark {
+    # Opens View > Rendering in the window and reads Load Remote Images' check mark as the reader sees it,
+    # then closes the menus again: 'On', 'Off', or what went wrong. Avalonia's menu items expose no UIA
+    # toggle state, so the mark is read from a screen capture. Fluent gives every item of a submenu one
+    # shared check column: Emoji Shortcodes, off throughout this phase, has no mark, so its label marks
+    # where that column ends, and Load Remote Images is checked exactly when its row has ink before it.
+    param([object] $Window, [int] $ProcessId, [string] $Name)
+    $state = 'not found'
+    try {
+        Invoke-MenuPath -Window $Window -ProcessId $ProcessId -Path @(@{ automationId = 'ViewMenu' }, @{ automationId = 'RenderingMenu' })
+        $rows = @{}
+        foreach ($id in @('LoadRemoteImagesItem', 'EmojiShortcodesItem')) {
+            $selector = @{ processId = $ProcessId; automationId = $id; index = 0 }
+            $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-wait -Parameters @{ selector = $selector; timeoutSeconds = 15 }
+            $rows[$id] = (Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-find -Parameters @{ selector = $selector }).element.bounds
+        }
+        Start-Sleep -Milliseconds 500
+        $capture = Save-DesktopCapture -Session $TigerWinLabDesktop -Name $Name -Destination $Artifacts -NoCursor
+        $png = Join-Path $Artifacts $capture.name
+        $mark = $rows['LoadRemoteImagesItem']
+        $control = $rows['EmojiShortcodesItem']
+        $markColumns = @(Get-RowInkColumns -PngPath $png -Left ($mark.x - $capture.x) -Top ($mark.y - $capture.y) -Width $mark.width -Height $mark.height)
+        $controlColumns = @(Get-RowInkColumns -PngPath $png -Left ($control.x - $capture.x) -Top ($control.y - $capture.y) -Width $control.width -Height $control.height)
+        if ($controlColumns.Count -eq 0) { $state = 'unreadable: no label in the Emoji Shortcodes row' }
+        else {
+            $labelStart = $controlColumns[0]
+            $before = @($markColumns | Where-Object { $_ -lt $labelStart - 2 }).Count
+            $state = if ($before -ge 4) { 'On' } else { 'Off' }
+            $state = "$state (ink columns before the label at $labelStart px: $before)"
+        }
+    }
+    catch { $state = "error: $($_.Exception.Message)" }
+    finally {
+        try { $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command keyboard -Parameters @{ action = 'keys'; keys = @('Escape', 'Escape', 'Escape'); settleMilliseconds = 500 } } catch { }
+    }
+    $state
+}
+
 function Invoke-Cli {
     param([string[]] $Arguments)
     Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command run -Parameters @{ filePath = $cliExe; arguments = $Arguments; workingDirectory = $DocRoot; timeoutSeconds = 180 }
@@ -541,6 +616,7 @@ try {
     Add-Phase -Name 'staging' -Checks $checks
     if (-not $ready) { throw 'The request logger did not start.' }
 
+    if ($Everything) {
     # --- share controls --------------------------------------------------------------------------
     # Without these the share checks below could pass vacuously: the audit must see an SMB read, and an
     # unprotected Chromium must be shown to fetch an image from the share at all.
@@ -629,6 +705,7 @@ try {
     $touched = @(Get-DocumentShareAccess -Since $since)
     $checks.Add((New-Check 'Adapter lifecycle never leaks SMB requests' 'lifecycle.no-smb' ($touched.Count -eq 0) (Format-ShareAccess -Since $since)))
     Add-Phase -Name 'adapter-lifecycle' -Checks $checks
+    }
 
     # --- viewer ----------------------------------------------------------------------------------
     $checks = New-Object System.Collections.Generic.List[object]
@@ -703,6 +780,7 @@ try {
     $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command stop-process -Parameters @{ processId = $app.processId }
     Add-Phase -Name 'viewer' -Checks $checks
 
+    if ($Everything) {
     # --- viewer: network shares ------------------------------------------------------------------
     $checks = New-Object System.Collections.Generic.List[object]
     $mark = @(Get-Requests).Count
@@ -768,6 +846,7 @@ try {
     $checks.Add((New-Check 'Hostile code stays inert in the viewer and GUI export' 'viewer.code-no-exfil' ($codeExfil.Count -eq 0) "Exfiltration requests: $(Format-Paths $codeExfil)."))
     $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command stop-process -Parameters @{ processId = $app.processId }
     Add-Phase -Name 'viewer-code' -Checks $checks
+    }
 
     # --- PDF conversion --------------------------------------------------------------------------
     $checks = New-Object System.Collections.Generic.List[object]
@@ -808,6 +887,7 @@ try {
     }
     Add-Phase -Name 'pdf' -Checks $checks
 
+    if ($Everything) {
     # --- PDF conversion: network shares and code -------------------------------------------------
     $checks = New-Object System.Collections.Generic.List[object]
     $mark = @(Get-Requests).Count
@@ -897,6 +977,7 @@ try {
     }
     catch { $checks.Add((New-Check 'Phase completed' 'viewer-share-links.error' $false $_.Exception.Message)) }
     Add-Phase -Name 'viewer-share-links' -Checks $checks
+    }
 
     # --- remote images turned off ----------------------------------------------------------------
     $checks = New-Object System.Collections.Generic.List[object]
@@ -934,6 +1015,100 @@ try {
     catch { $checks.Add((New-Check 'Phase completed' 'remote-images-off.error' $false $_.Exception.Message)) }
     Add-Phase -Name 'remote-images-off' -Checks $checks
 
+    # --- remote images: a change in one window reaches every open window ------------------------
+    # Window B stays open throughout while window A turns Load Remote Images off and back on. B is never
+    # restarted: its check mark, its viewer and its GUI export must all follow what A chose. B reloads
+    # automatically, so rewriting its document re-renders it while A, not B, is the active window: the
+    # request that follows is decided by the setting as shared now, not by anything B is shown.
+    $checks = New-Object System.Collections.Generic.List[object]
+    try {
+    $liveA = Join-Path $DocRoot 'live-a.md'
+    $liveB = Join-Path $DocRoot 'live-b.md'
+    $liveImage = '/img/live-b.png'
+    Set-Content -LiteralPath $liveA -Value "# live-a.md`r`n`r`n![Local image](local.png)`r`n" -Encoding UTF8
+    $writeLiveB = {
+        param([int] $Revision)
+        Set-Content -LiteralPath $liveB -Encoding UTF8 -Value ("# live-b.md`r`n`r`nRevision $Revision`r`n`r`n![Live web image](http://127.0.0.1:$Port$liveImage)`r`n`r`n![Local image](local.png)`r`n")
+    }
+    & $writeLiveB 1
+    Set-UserSettings -Replace -Values @{ toolbarExportPdfVisible = $true; loadRemoteImages = $true; reloadMode = 'Automatic' }
+
+    $mark = @(Get-Requests).Count
+    $appB = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command start-process -Parameters @{ filePath = $viewerExe; arguments = @($liveB); workingDirectory = $DocRoot }
+    $windowB = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $appB.processId; titlePattern = '^live-b\.md'; timeoutSeconds = 120 }
+    $bLoaded = Wait-Request -Mark $mark -Path $liveImage -TimeoutSeconds 60
+    $appA = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command start-process -Parameters @{ filePath = $viewerExe; arguments = @($liveA); workingDirectory = $DocRoot }
+    $windowA = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command wait-window -Parameters @{ processId = $appA.processId; titlePattern = '^live-a\.md'; timeoutSeconds = 120 }
+    $markA = Get-RemoteImagesCheckMark -Window $windowA -ProcessId $appA.processId -Name 'remote-live-a-menu-initial.png'
+    $markB = Get-RemoteImagesCheckMark -Window $windowB -ProcessId $appB.processId -Name 'remote-live-b-menu-initial.png'
+    $checks.Add((New-Check 'Both windows start with remote images on' 'remote-live.initial' ($bLoaded -and $markA -like 'On *' -and $markB -like 'On *') "B requested its web image: $bLoaded; check marks: A $markA, B $markB."))
+
+    # A turns them off. B, behind A, reloads its changed document.
+    $menuFailure = ''
+    try { Invoke-MenuPath -Window $windowA -ProcessId $appA.processId -Path @(@{ automationId = 'ViewMenu' }, @{ automationId = 'RenderingMenu' }, @{ automationId = 'LoadRemoteImagesItem' }) }
+    catch { $menuFailure = $_.Exception.Message }
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do { $saved = Get-UserSettings; Start-Sleep -Milliseconds 500 } while ([DateTime]::UtcNow -lt $deadline -and -not ($null -ne $saved -and -not [bool] $saved.loadRemoteImages))
+    $savedOff = $null -ne $saved -and -not [bool] $saved.loadRemoteImages
+    $mark = @(Get-Requests).Count
+    & $writeLiveB 2
+    $reloaded = $true
+    try { $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-wait -Parameters @{ selector = @{ hwnd = [int64] $windowB.hwnd; scope = 'descendants'; name = '^Revision 2$'; index = 0 }; timeoutSeconds = 60 } } catch { $reloaded = $false }
+    Start-Sleep -Seconds 5
+    $web = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -like '/img/*' })
+    $checks.Add((New-Check 'Turned off in A, B requests no web image while A is in front' 'remote-live.off-viewer' ($menuFailure -eq '' -and $savedOff -and $reloaded -and $web.Count -eq 0) "Menu in A: $(if ($menuFailure) { $menuFailure } else { 'clicked' }); saved off: $savedOff; B re-rendered revision 2: $reloaded; web image requests: $(Format-Paths $web)."))
+
+    $markB = Get-RemoteImagesCheckMark -Window $windowB -ProcessId $appB.processId -Name 'remote-live-b-menu-off.png'
+    Start-Sleep -Seconds 3
+    $web = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -like '/img/*' })
+    $localSize = Get-ImageSize -Hwnd ([int64] $windowB.hwnd) -Name 'Local image'
+    $null = Save-DesktopCapture -Session $TigerWinLabDesktop -Name 'remote-live-b-off.png' -Destination $Artifacts -Hwnd ([int64] $windowB.hwnd)
+    $checks.Add((New-Check "B's check mark shows remote images off" 'remote-live.off-menu' ($markB -like 'Off *' -and $web.Count -eq 0 -and $localSize.rendered) "Check mark in B: $markB; web image requests: $(Format-Paths $web); 'Local image' laid out at $($localSize.description)."))
+
+    $offPdf = Join-Path $DocRoot 'live-b-off.pdf'
+    $export = Invoke-GuiExport -Window $windowB -ProcessId $appB.processId -PdfPath $offPdf
+    Start-Sleep -Seconds 2
+    $web = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -like '/img/*' })
+    $offImages = Get-ImageObjectCount -PdfPath $offPdf
+    $checks.Add((New-Check "B's GUI export follows remote images off" 'remote-live.off-export' ($export.exported -and $web.Count -eq 0 -and $offImages -ge 1) "Save dialog: $($export.dialog); written: $($export.exported); web image requests: $(Format-Paths $web); image objects: $offImages (the local image)."))
+
+    # A turns them back on. B, behind A again, reloads once more.
+    $menuFailure = ''
+    try { Invoke-MenuPath -Window $windowA -ProcessId $appA.processId -Path @(@{ automationId = 'ViewMenu' }, @{ automationId = 'RenderingMenu' }, @{ automationId = 'LoadRemoteImagesItem' }) }
+    catch { $menuFailure = $_.Exception.Message }
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do { $saved = Get-UserSettings; Start-Sleep -Milliseconds 500 } while ([DateTime]::UtcNow -lt $deadline -and -not ($null -ne $saved -and [bool] $saved.loadRemoteImages))
+    $savedOn = $null -ne $saved -and [bool] $saved.loadRemoteImages
+    $mark = @(Get-Requests).Count
+    & $writeLiveB 3
+    $reloaded = $true
+    try { $null = Invoke-DesktopCommand -Session $TigerWinLabDesktop -Command ui-wait -Parameters @{ selector = @{ hwnd = [int64] $windowB.hwnd; scope = 'descendants'; name = '^Revision 3$'; index = 0 }; timeoutSeconds = 60 } } catch { $reloaded = $false }
+    $refetched = Wait-Request -Mark $mark -Path $liveImage -TimeoutSeconds 30
+    $checks.Add((New-Check 'Turned back on in A, B loads its web image again while A is in front' 'remote-live.on-viewer' ($menuFailure -eq '' -and $savedOn -and $reloaded -and $refetched) "Menu in A: $(if ($menuFailure) { $menuFailure } else { 'clicked' }); saved on: $savedOn; B re-rendered revision 3: $reloaded; web image requested: $refetched."))
+
+    $markB = Get-RemoteImagesCheckMark -Window $windowB -ProcessId $appB.processId -Name 'remote-live-b-menu-on.png'
+    $null = Save-DesktopCapture -Session $TigerWinLabDesktop -Name 'remote-live-b-on.png' -Destination $Artifacts -Hwnd ([int64] $windowB.hwnd)
+    $checks.Add((New-Check "B's check mark shows remote images on" 'remote-live.on-menu' ($markB -like 'On *') "Check mark in B: $markB."))
+
+    $mark = @(Get-Requests).Count
+    $onPdf = Join-Path $DocRoot 'live-b-on.pdf'
+    $export = Invoke-GuiExport -Window $windowB -ProcessId $appB.processId -PdfPath $onPdf
+    Start-Sleep -Seconds 2
+    $exportFetched = @(Get-RequestsSince -Mark $mark | Where-Object { $_.path -eq $liveImage }).Count -gt 0
+    $onImages = Get-ImageObjectCount -PdfPath $onPdf
+    $checks.Add((New-Check "B's GUI export follows remote images on" 'remote-live.on-export' ($export.exported -and $exportFetched) "Save dialog: $($export.dialog); written: $($export.exported); web image requested: $exportFetched; image objects: $onImages, against $offImages with remote images off (a missing image's placeholder is an image object too, so the request log is the oracle)."))
+    foreach ($file in @($offPdf, $onPdf)) {
+        if (Test-Path -LiteralPath $file) { Copy-Item -LiteralPath $file -Destination $Artifacts }
+    }
+
+    $closedB = Close-Viewer -Window $windowB -ProcessId $appB.processId
+    $closedA = Close-Viewer -Window $windowA -ProcessId $appA.processId
+    $checks.Add((New-Check 'Both windows close normally' 'remote-live.closed' ($closedA -and $closedB) "A $closedA, B $closedB."))
+    }
+    catch { $checks.Add((New-Check 'Phase completed' 'remote-images-live.error' $false $_.Exception.Message)) }
+    Add-Phase -Name 'remote-images-live' -Checks $checks
+
+    if ($Everything) {
     # --- an authenticating proxy is never signed in to ------------------------------------------
     # The interactive user's own proxy setting points at the logger, which answers every proxied
     # request with an NTLM challenge and records whether a Proxy-Authorization header ever arrives.
@@ -968,6 +1143,7 @@ try {
     }
     catch { $checks.Add((New-Check 'Phase completed' 'proxy-credentials.error' $false $_.Exception.Message)) }
     Add-Phase -Name 'proxy-credentials' -Checks $checks
+    }
 
     # --- several windows, one settings file -----------------------------------------------------
     # Two viewer processes with their own copies of the settings. Each changes something through its
@@ -1030,6 +1206,7 @@ try {
     catch { $checks.Add((New-Check 'Phase completed' 'multi-window-settings.error' $false $_.Exception.Message)) }
     Add-Phase -Name 'multi-window-settings' -Checks $checks
 
+    if ($Everything) {
     # --- no browsing history on disk -------------------------------------------------------------
     # Every viewer and export in this run has ended, several by being killed. A persistent engine profile
     # would now hold the generated pages' addresses and the documents' titles; InPrivate holds nothing.
@@ -1070,6 +1247,7 @@ try {
     }
     catch { $checks.Add((New-Check 'Phase completed' 'browsing-history.error' $false $_.Exception.Message)) }
     Add-Phase -Name 'browsing-history' -Checks $checks
+    }
 }
 catch {
     Add-Phase -Name 'error' -Checks @(New-Check 'Payload completed' 'payload.error' $false $_.Exception.Message)

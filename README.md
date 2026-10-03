@@ -72,8 +72,8 @@ Three rendering options are available under **View > Rendering**:
   is off by default. TigerMarkView does not guess languages; an absent or unsupported language falls
   back to the normal code-block rendering.
 - **Load Remote Images** lets documents show `http`/`https` images. It is on by default; turned
-  off, the viewer and GUI PDF export request no web image at all, while local and embedded images still
-  show.
+  off, the viewer and GUI PDF export request no web image at all, in every open window, while local and
+  embedded images still show.
 
 The options are applied identically to the displayed document and an exported PDF. The CLI uses the
 defaults: emoji and highlighting off, remote images on.

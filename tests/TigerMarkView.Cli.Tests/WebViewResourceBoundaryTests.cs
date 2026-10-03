@@ -1,4 +1,5 @@
 using Microsoft.Web.WebView2.Core;
+using TigerMarkView.Core.Exporting;
 using TigerMarkView.Pdf;
 
 namespace TigerMarkView.Cli.Tests;
@@ -68,6 +69,65 @@ public class WebViewResourceBoundaryTests
         try
         {
             Assert.True(WebViewResourceBoundary.IsAllowed(new Uri(path).AbsoluteUri, CoreWebView2WebResourceContext.Image, remoteImages: false));
+        }
+        finally { File.Delete(path); }
+    }
+
+    /// <summary>
+    /// The boundary asks the live setting at the request, so a window follows a value another window
+    /// changed after it started; it asks only where the answer decides something.
+    /// </summary>
+    [Fact]
+    public void TheLiveSettingIsAskedForEachWebImageAndDecidesIt()
+    {
+        var asked = 0;
+        var remoteImages = true;
+        bool Current() { asked++; return remoteImages; }
+
+        Assert.True(WebViewResourceBoundary.IsAllowed("https://example.com/a.png", CoreWebView2WebResourceContext.Image, Current));
+        remoteImages = false;
+        Assert.False(WebViewResourceBoundary.IsAllowed("https://example.com/a.png", CoreWebView2WebResourceContext.Image, Current));
+        remoteImages = true;
+        Assert.True(WebViewResourceBoundary.IsAllowed("https://example.com/a.png", CoreWebView2WebResourceContext.Image, Current));
+        Assert.Equal(3, asked);
+    }
+
+    /// <summary>
+    /// GUI export carries the question rather than an answer, so a change made in any window while an
+    /// export runs governs its next request; <c>tiger-mark</c>'s request carries none and always may.
+    /// </summary>
+    [Fact]
+    public void AnExportRequestFollowsTheSettingWhileItRuns()
+    {
+        var remoteImages = true;
+        var gui = new PdfExportRequest("<html></html>", "out.pdf", RemoteImages: () => remoteImages);
+        var cli = new PdfExportRequest("<html></html>", "out.pdf");
+
+        Assert.True(WebViewResourceBoundary.IsAllowed("https://example.com/a.png", CoreWebView2WebResourceContext.Image, gui.RemoteImages));
+        remoteImages = false;
+        Assert.False(WebViewResourceBoundary.IsAllowed("https://example.com/a.png", CoreWebView2WebResourceContext.Image, gui.RemoteImages));
+        Assert.True(WebViewResourceBoundary.IsAllowed("https://example.com/a.png", CoreWebView2WebResourceContext.Image, cli.RemoteImages));
+    }
+
+    [Theory]
+    [InlineData("file://server/share/x.png")]
+    [InlineData("file:///%5c%5cserver%5cshare%5cx.png")]
+    [InlineData("//server/share/x.png")]
+    public void ANetworkImageStaysRefusedWhateverTheLiveSettingSays(string uri) =>
+        Assert.False(WebViewResourceBoundary.IsAllowed(uri, CoreWebView2WebResourceContext.Image, () => true));
+
+    [Fact]
+    public void TheLiveSettingIsNotAskedForWhatItCannotChange()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            bool Refuse() => throw new InvalidOperationException("asked");
+
+            Assert.True(WebViewResourceBoundary.IsAllowed(new Uri(path).AbsoluteUri, CoreWebView2WebResourceContext.Image, Refuse));
+            Assert.True(WebViewResourceBoundary.IsAllowed(new Uri(path).AbsoluteUri, CoreWebView2WebResourceContext.Document, Refuse));
+            Assert.True(WebViewResourceBoundary.IsAllowed("data:image/svg+xml,%3Csvg/%3E", CoreWebView2WebResourceContext.Image, Refuse));
+            Assert.False(WebViewResourceBoundary.IsAllowed("https://example.com/a.js", CoreWebView2WebResourceContext.Script, Refuse));
         }
         finally { File.Delete(path); }
     }

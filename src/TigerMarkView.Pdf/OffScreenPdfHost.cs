@@ -87,14 +87,14 @@ internal sealed class OffScreenPdfHost : OffScreenWebViewHost
     /// the viewer applies, with the same Load Remote Images choice — so an exported PDF embeds a remote
     /// image exactly when the viewer shows it.
     /// </remarks>
-    private static void ConfineToDocument(CoreWebView2 core, Uri documentUri, bool remoteImages)
+    private static void ConfineToDocument(CoreWebView2 core, Uri documentUri, Func<bool>? remoteImages)
     {
         core.Settings.IsScriptEnabled = false;
         core.Settings.IsWebMessageEnabled = false;
         core.Settings.AreHostObjectsAllowed = false;
         core.Settings.AreDefaultScriptDialogsEnabled = false;
 
-        WebViewResourceBoundary.Apply(core, () => remoteImages);
+        WebViewResourceBoundary.Apply(core, remoteImages);
 
         core.NavigationStarting += (_, e) =>
         {

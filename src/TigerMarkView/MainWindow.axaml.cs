@@ -92,6 +92,13 @@ public partial class MainWindow : Window
     private readonly ApplicationSettings _settings;
     private readonly SettingsStore _settingsStore;
 
+    /// <summary>
+    /// What authorizes a web image, in the viewer and in GUI export: the Load Remote Images value every
+    /// window shares, read when it is needed. <c>_settings.LoadRemoteImages</c> is only what this
+    /// window's check mark and rendered page currently reflect.
+    /// </summary>
+    private readonly SharedRemoteImagesSetting _remoteImages;
+
     /// <summary>The only route by which the viewer's WebView is navigated.</summary>
     private readonly DocumentWebView _documentWebView;
 
@@ -175,6 +182,7 @@ public partial class MainWindow : Window
 
         _settings = settings;
         _settingsStore = settingsStore;
+        _remoteImages = new SharedRemoteImagesSetting(settingsStore.TryLoad);
         _currentReloadMode = settings.ReloadMode;
         _editorConfiguration = settings.ToEditorConfiguration();
         _theme = settings.Theme;
@@ -202,12 +210,25 @@ public partial class MainWindow : Window
         // back to this window and when the File menu opens, so a list another window cleared or added
         // to is current before anyone looks at it. Only the File menu's own opening counts: the event
         // also bubbles up from Open Recent's submenu, which must not be rebuilt while it is opening.
-        Activated += (_, _) => RefreshSharedRecentFiles();
+        // Load Remote Images is shared the same way and is brought up to date at the same moments,
+        // with the View menu that shows it standing in for the File menu.
+        Activated += (_, _) =>
+        {
+            RefreshSharedRecentFiles();
+            RefreshSharedRemoteImages();
+        };
         FileMenuItem.SubmenuOpened += (_, e) =>
         {
             if (ReferenceEquals(e.Source, FileMenuItem))
             {
                 RefreshSharedRecentFiles();
+            }
+        };
+        ViewMenuItem.SubmenuOpened += (_, e) =>
+        {
+            if (ReferenceEquals(e.Source, ViewMenuItem))
+            {
+                RefreshSharedRemoteImages();
             }
         };
 
@@ -220,7 +241,7 @@ public partial class MainWindow : Window
 
         // Equally before the first navigation, which this constructor itself starts: the request
         // boundary has to be on the WebView before any document is. See DocumentWebView.
-        _documentWebView = DocumentWebView.Attach(Browser, () => _theme, () => _settings.LoadRemoteImages);
+        _documentWebView = DocumentWebView.Attach(Browser, () => _theme, _remoteImages.AllowedNow);
 
         // Fails closed: the WebView then shows its own notice, and the status bar must not go on
         // describing a document as if it were on screen.
@@ -358,8 +379,9 @@ public partial class MainWindow : Window
             // The document's own page setup, not the current preferences: the sheet handed to the
             // print engine has to be the one the retained HTML's @page rule was written for, and a
             // preference changed while this export was being set up must not split the two apart.
+            // Remote images, by contrast, follow the value every window shares at each request.
             var result = await PdfExporter.ExportAsync(
-                new PdfExportRequest(document.Html, outputPath, document.PageSetup, _settings.LoadRemoteImages),
+                new PdfExportRequest(document.Html, outputPath, document.PageSetup, _remoteImages.AllowedNow),
                 cancellation.Token);
 
             if (_windowClosed)
@@ -767,15 +789,44 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// View &gt; Rendering &gt; Load Remote Images. The request boundary reads the setting on every
-    /// request (see <see cref="DocumentWebView.Attach"/>), so turning it off refuses the next web image
-    /// before anything is sent; the page is then re-rendered from the retained Markdown, exactly as a
-    /// rendering option is, so images already on screen go too and turning it back on brings them in.
+    /// View &gt; Rendering &gt; Load Remote Images. The request boundary asks the shared setting on
+    /// every request (see <see cref="SharedRemoteImagesSetting"/>), so turning it off refuses the next
+    /// web image in every window before anything is sent; the page is then re-rendered from the
+    /// retained Markdown, exactly as a rendering option is, so images already on screen go too and
+    /// turning it back on brings them in. The new value is the opposite of the check mark the reader
+    /// saw, which opening the menu brought up to date with the shared value.
     /// </summary>
     private async void OnLoadRemoteImagesClick(object? sender, RoutedEventArgs e)
     {
         var enabled = !_settings.LoadRemoteImages;
-        UpdateSettings(settings => settings.LoadRemoteImages = enabled);
+        var shared = UpdateSettings(settings => settings.LoadRemoteImages = enabled);
+        _remoteImages.Chosen(enabled, shared);
+        _settings.LoadRemoteImages = _remoteImages.AllowedNow();
+        SetRenderingMenuChecked();
+
+        await RefreshViewerAsync();
+    }
+
+    /// <summary>
+    /// Brings this window's check mark and page up to date with the Load Remote Images value another
+    /// window may have changed: when the value differs from the one the page was rendered under, the
+    /// page is re-rendered from the retained Markdown, as this window's own toggle does. Requests never
+    /// depend on this having run; the boundary asks the shared value itself.
+    /// </summary>
+    private async void RefreshSharedRemoteImages()
+    {
+        if (_windowClosed)
+        {
+            return;
+        }
+
+        var allowed = _remoteImages.AllowedNow();
+        if (allowed == _settings.LoadRemoteImages)
+        {
+            return;
+        }
+
+        _settings.LoadRemoteImages = allowed;
         SetRenderingMenuChecked();
 
         await RefreshViewerAsync();
@@ -1288,6 +1339,7 @@ public partial class MainWindow : Window
     {
         HistoryMenuItem.ItemsSource = BuildHistoryItems();
         RefreshSharedRecentFiles();
+        RefreshSharedRemoteImages();
 
         MenuMirror.Create(MainMenu).ShowAt(MenuToolbarButton);
     }
@@ -2226,18 +2278,21 @@ public partial class MainWindow : Window
     /// <para>
     /// Open Recent is the one list every window shares, so the merged list comes back into this
     /// window, which is how a recent file opened elsewhere appears here and a cleared list stays clear.
-    /// Theme, editor, chrome and the other preferences stay as this window has them until it next
-    /// starts: a window does not repaint itself because another one changed its mind.
+    /// Load Remote Images is the one preference every window applies as it is shared now (see
+    /// <see cref="_remoteImages"/>). Theme, editor, chrome and the other preferences stay as this
+    /// window has them until it next starts: a window does not repaint itself because another one
+    /// changed its mind.
     /// </para>
     /// </remarks>
-    private void UpdateSettings(Action<ApplicationSettings> change)
+    /// <returns>Whether the change reached the shared file.</returns>
+    private bool UpdateSettings(Action<ApplicationSettings> change)
     {
         change(_settings);
 
         var shared = _settingsStore.Update(change);
         if (_windowClosed)
         {
-            return;
+            return shared is not null;
         }
 
         if (shared is not null)
@@ -2246,6 +2301,7 @@ public partial class MainWindow : Window
         }
 
         RebuildRecentFilesMenu();
+        return shared is not null;
     }
 
     /// <summary>

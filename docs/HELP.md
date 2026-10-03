@@ -304,8 +304,8 @@ the image's website in your browser to view it there.
 
 To keep documents from making any web request, turn off **View > Rendering > Load Remote Images**. Web
 images then appear as missing images, on screen and in PDFs you export, while local images and images
-embedded in the document still show. The setting applies to every TigerMarkView window and is
-remembered. `tiger-mark` has no settings and always loads web images.
+embedded in the document still show. The setting applies at once to every TigerMarkView window,
+including windows that are already open, and is remembered. `tiger-mark` has no settings and always loads web images.
 
 Images on network shares are the exception: a picture addressed as `\\server\share\...`, or reached
 through a mapped network drive or a symbolic link to a share, is not shown. Windows would sign in to

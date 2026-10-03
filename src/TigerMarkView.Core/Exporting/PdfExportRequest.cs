@@ -18,11 +18,12 @@ namespace TigerMarkView.Core.Exporting;
 /// document's own <c>@page</c> rule, so the two are halves of one answer.
 /// </param>
 /// <param name="RemoteImages">
-/// Whether the export may fetch <c>http</c>/<c>https</c> images. The GUI passes the reader's
-/// <c>Load Remote Images</c> setting so a PDF shows what the viewer shows; <c>tiger-mark</c> keeps the
-/// default.
+/// Asked at each <c>http</c>/<c>https</c> image request: whether the export may fetch it now. The GUI
+/// passes the reader's shared <c>Load Remote Images</c> setting, so a PDF shows what the viewer shows
+/// and a change made in any window during the export applies to its next request; <c>tiger-mark</c>
+/// keeps the default, <see langword="null"/>, under which they may.
 /// </param>
-public sealed record PdfExportRequest(string Html, string OutputPath, PdfPageSetup? Page = null, bool RemoteImages = true)
+public sealed record PdfExportRequest(string Html, string OutputPath, PdfPageSetup? Page = null, Func<bool>? RemoteImages = null)
 {
     public PdfPageSetup PageSetup => Page ?? PdfPageSetup.Default;
 }

@@ -107,7 +107,7 @@
         <MenuItem Header="_History" x:Name="HistoryMenuItem" IsEnabled="False"
                   AutomationProperties.AutomationId="HistoryMenuItem" />
       </MenuItem>
-      <MenuItem Header="_View" AutomationProperties.AutomationId="ViewMenu">
+      <MenuItem Header="_View" x:Name="ViewMenuItem" AutomationProperties.AutomationId="ViewMenu">
         <!--
           Menu Bar and Toolbar are the two command surfaces and are bound by one rule: at least one of
           them stays visible. Whichever is the last one left has its item disabled — still checked, so

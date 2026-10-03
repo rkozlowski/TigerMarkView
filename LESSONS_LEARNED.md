@@ -170,6 +170,24 @@ which reported a correct refusal as a failure.
 
 **Generalization candidate:** none; fixture spelling is this payload's concern.
 
+## Avalonia menu items expose no UIA toggle state
+
+**Area:** TigerWinLab acceptance (menu check marks)
+**Status:** Active
+
+With Avalonia 12.1.3, a `MenuItem` with `ToggleType="CheckBox"` is reported to UI Automation with only
+the ScrollItem pattern: `IsTogglePatternAvailable` is false whether it is checked or not, although its
+automation peer implements `IToggleProvider`. A lab check that read `toggleState` therefore got nothing
+for every state and cost a VM run. A scratch Avalonia window, opened programmatically off-screen and
+inactive, reproduces it on the host in seconds without any input.
+
+The remote-image check mark is read from a screen capture instead (`Get-RemoteImagesCheckMark`): Fluent
+gives all items of one submenu a shared check column, so an unchecked sibling's label start marks where
+the column ends, and the item is checked exactly when its row has ink before it. That reasoning was
+proven on locally rendered rows under Windows PowerShell 5.1 before the next lab run.
+
+**Generalization candidate:** none; the menu and its theme are this product's.
+
 ## A guest scan that skips what it cannot read proves nothing
 
 **Area:** TigerWinLab active-content acceptance (browsing-history oracle)

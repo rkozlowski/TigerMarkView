@@ -18,7 +18,7 @@ are TigerSetup's own four release assets plus the privacy statement, recorded un
 release model's `PrivacyStatement` artifact kind. It does not publish NuGet
 packages, a portable application archive, or a separate CLI installer. Releases up to and including
 0.10.0 were published before the WinGet archive and the privacy statement existed and keep their
-original three assets; 0.11.0 and 0.11.1 were prepared but never published; a published release is never amended
+original three assets; 0.11.0, 0.11.1 and 0.12.0 were prepared but never published; a published release is never amended
 to match a later shape. `Version.props` remains the only product-version and shared-metadata source.
 
 A privacy statement describes one version's behaviour, so each release freezes its own. The release

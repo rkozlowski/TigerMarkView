@@ -176,6 +176,15 @@ The payload then proves the reader-facing privacy behaviour in the same guest:
   `/img/` request in the viewer, its local image still renders, and a GUI export embeds fewer images
   than the `tiger-mark` PDF without requesting any; **View > Rendering > Load Remote Images**, clicked
   by real pointer input, brings the requests back and saves the setting.
+- **Remote images changed live** - two viewer processes, B opened first on a document with a web and
+  a local image, automatic reload on. Window A turns Load Remote Images off from its menu; B is never
+  restarted. B's document is rewritten so B re-renders while A is in front, and must make no `/img/`
+  request; B's own View > Rendering check mark must show off - read from a screen capture of the open
+  menu, because Avalonia's menu items expose no UIA toggle state, by whether the row has ink before the
+  label of Emoji Shortcodes, which is off and shares the same check column; and a
+  GUI export from B must request no web image. A then turns it back on: B's next re-render must request
+  its web image again, its check mark show on, and its export request the image and embed more images
+  than the export made while off.
 - **Proxy credentials** - the interactive user's proxy is pointed at the logger, which answers every
   proxied request with an NTLM challenge. A control client that opts in (`-ProxyUseDefaultCredentials`)
   must offer credentials; the viewer and `tiger-mark` must ask the proxy for the image and never send
@@ -201,6 +210,10 @@ them. The hostile blocks name `/exfil/` images, so any source that escaped into 
 the request log.
 
 Evidence (the request log, captures, and the PDFs) lands under `artifacts\lab\active-content\job\`.
+
+`-Scope RemoteImages` runs only the phases a change confined to remote images and their request path
+needs: staging, the viewer and `tiger-mark` on `hostile.md`, remote images off, remote images changed
+live, and several windows. The default, `-Scope All`, runs every phase and is the release acceptance.
 
 ## Current concrete lab gaps
 

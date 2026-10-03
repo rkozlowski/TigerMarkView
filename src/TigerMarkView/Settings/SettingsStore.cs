@@ -49,6 +49,9 @@ public sealed class SettingsStore
     /// <inheritdoc cref="ApplicationSettingsFile.Load"/>
     public ApplicationSettings Load() => _file.Load();
 
+    /// <inheritdoc cref="ApplicationSettingsFile.TryLoad"/>
+    public ApplicationSettings? TryLoad() => _file.TryLoad();
+
     /// <inheritdoc cref="ApplicationSettingsFile.Update"/>
     public ApplicationSettings? Update(Action<ApplicationSettings> change) => _file.Update(change);
 }

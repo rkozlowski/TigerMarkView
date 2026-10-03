@@ -56,10 +56,17 @@ public sealed class ApplicationSettingsFile
     /// unparseable file is moved aside (best effort) so the next update starts from a clean slate
     /// without destroying whatever the user had.
     /// </summary>
-    public ApplicationSettings Load()
+    public ApplicationSettings Load() => TryLoad() ?? ApplicationSettings.CreateDefault();
+
+    /// <summary>
+    /// As <see cref="Load"/>, except that a file which exists but cannot be read just now gives
+    /// <see langword="null"/> rather than defaults: for a caller that must not mistake an unreadable
+    /// choice for the default one.
+    /// </summary>
+    public ApplicationSettings? TryLoad()
     {
         using var held = AcquireLock();
-        return Read() ?? ApplicationSettings.CreateDefault();
+        return Read();
     }
 
     /// <summary>

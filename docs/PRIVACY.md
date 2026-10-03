@@ -153,7 +153,8 @@ again whenever it renders the document again. A document without such an address
 request.
 
 To turn remote images off, clear **View > Rendering > Load Remote Images**. The choice is saved with
-your settings and applies to every TigerMarkView window. While it is off, the viewer and PDF export
+your settings and applies at once to every TigerMarkView window, including windows that are already
+open. While it is off, the viewer and PDF export
 send no request for any `http://` or `https://` image — each is refused before anything leaves your
 computer, and shown as a missing image — while images stored on your computer and images embedded in
 the document itself still show. Turning it back on shows the remote images again. Help never requests

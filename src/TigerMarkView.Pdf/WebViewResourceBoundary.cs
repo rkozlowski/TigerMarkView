@@ -60,8 +60,9 @@ public static class WebViewResourceBoundary
     /// </summary>
     /// <param name="core">The engine to protect.</param>
     /// <param name="remoteImages">
-    /// Asked on every request: whether <c>http</c>/<c>https</c> images may load now. Omitted, they may —
-    /// the default of the reader's Load Remote Images setting, and what <c>tiger-mark</c> uses.
+    /// Asked on every request that only it decides: whether <c>http</c>/<c>https</c> images may load
+    /// now. Omitted, they may — the default of the reader's Load Remote Images setting, and what
+    /// <c>tiger-mark</c> uses.
     /// </param>
     public static void Apply(CoreWebView2 core, Func<bool>? remoteImages = null)
     {
@@ -77,7 +78,7 @@ public static class WebViewResourceBoundary
 
         core.WebResourceRequested += async (_, e) =>
         {
-            if (!IsAllowed(e.Request.Uri, e.ResourceContext, remoteImages?.Invoke() ?? true))
+            if (!IsAllowed(e.Request.Uri, e.ResourceContext, remoteImages))
             {
                 e.Response = core.Environment.CreateWebResourceResponse(null, 403, "Forbidden", string.Empty);
                 return;
@@ -142,6 +143,18 @@ public static class WebViewResourceBoundary
 
         return LocalImageStorage.IsLocal(target);
     }
+
+    /// <summary>
+    /// As <see cref="IsAllowed(string, CoreWebView2WebResourceContext, bool)"/>, asking
+    /// <paramref name="remoteImages"/> only for a request the policy would admit with remote images
+    /// on and refuse with them off — a web image — so the setting is read where it decides something
+    /// rather than for every local image and page.
+    /// </summary>
+    internal static bool IsAllowed(string uri, CoreWebView2WebResourceContext context, Func<bool>? remoteImages) =>
+        remoteImages is null
+            ? IsAllowed(uri, context)
+            : IsAllowed(uri, context, remoteImages: false)
+              || (IsAllowed(uri, context, remoteImages: true) && remoteImages());
 
     private static WebResourceKind KindOf(CoreWebView2WebResourceContext context) => context switch
     {

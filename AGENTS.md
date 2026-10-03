@@ -662,8 +662,10 @@ whole in-memory `ApplicationSettings`: every change goes through `MainWindow.Upd
 applies that one change to the file as it is now under a per-file named mutex
 (`ApplicationSettingsFile.Update`) and adopts the merged Open Recent list back. A change states the
 value it sets, never toggles what it finds. Closing a window writes only its placement. Open Recent is
-re-read from the file when a window is activated and when a surface showing it opens. Generated pages
-are per process (`GeneratedPages`), never one shared file.
+re-read from the file when a window is activated and when a surface showing it opens. Load Remote
+Images is the one preference every open window applies as it is in the file now (see *Rendering and PDF
+invariants*); other preferences a window adopts at its next start. Generated pages are per process
+(`GeneratedPages`), never one shared file.
 
 `TigerMarkView.Pdf` owns Windows/WebView2 PDF generation. `TigerMarkView.Cli` is a thin front end
 over Core and Pdf. Core must not reference Avalonia or Windows-only assemblies, and the CLI must not
@@ -751,10 +753,15 @@ CSP must also prevent document code from running:
 
   Remote images are a reader setting, `ApplicationSettings.LoadRemoteImages`, on by default. It is not
   a rendering option and does not change the HTML: `WebResourcePolicy.Allows(..., remoteImages)` is the
-  one rule, and `WebViewResourceBoundary.Apply(core, remoteImages)` asks it on every request, so the
-  viewer refuses web images before any request when it is off. GUI PDF export passes the same value in
-  `PdfExportRequest.RemoteImages`; Help passes `false` (offline by contract); `tiger-mark` keeps the
-  default, on.
+  one rule, and `WebViewResourceBoundary.Apply(core, remoteImages)` asks it on every web image request,
+  so the viewer refuses web images before any request when it is off. The setting is global: in a
+  window it is `SharedRemoteImagesSetting.AllowedNow()`, which reads the shared settings file at that
+  moment and fails closed when the file cannot be read, so a window opened before another window turned
+  remote images off never fetches one on its own stale copy. The window's `_settings.LoadRemoteImages`
+  is only what its check mark and page show, adopted on activation and when a menu showing it opens.
+  GUI PDF export passes that same question, `AllowedNow`, as `PdfExportRequest.RemoteImages`, so its
+  boundary asks it at each request too; Help passes `false` (offline by contract); `tiger-mark` keeps
+  the default, `null`, which is on.
 
 PDF export additionally runs with document script, web messages, and host objects disabled, and cancels
 any navigation other than its own temporary file. `eng/lab/Test-TigerMarkViewActiveContent.ps1` is the
@@ -1053,8 +1060,8 @@ regenerated; `release-artifacts.json` records its hash and the set's submission 
 frozen byte for byte (kind `PrivacyStatement` in both records, proven equal to the commit's blob and to
 the installer's `Docs\PRIVACY.md`; `.gitattributes` pins the file to LF so checkouts reproduce those
 bytes). Releases up to 0.10.0 keep their published three assets;
-`Test-TigerMarkViewReleasePredatesWinGetArchive` is that one historic boundary, and 0.11.0 and 0.11.1
-were never published. Release notes link the release's `PRIVACY.md` asset, which the notes gate requires. Public documentation remains `README.md` plus `docs/`;
+`Test-TigerMarkViewReleasePredatesWinGetArchive` is that one historic boundary, and 0.11.0, 0.11.1 and
+0.12.0 were never published. Release notes link the release's `PRIVACY.md` asset, which the notes gate requires. Public documentation remains `README.md` plus `docs/`;
 do not introduce DocFX, generated API docs, or an API-documentation site. TigerMarkView's completed
 release/WinGet workflow is the reference model for future Tiger projects. The durable maintainer
 lifecycle is in `docs/maintainers/releasing-tigermarkview.md` and the artifact and submission rules
