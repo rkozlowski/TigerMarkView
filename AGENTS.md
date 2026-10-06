@@ -1,10 +1,10 @@
 ---
-TigerAiCore.version: 1.28.0
+TigerAiCore.version: 1.30.0
 ---
 
 # AI Agent Instructions
 
-<!-- TigerAiCore:begin version="1.28.0" sha256="860698984e5f9c164617345b8a41adcd3981ba947c3e28139c485b075d6a4f99" -->
+<!-- TigerAiCore:begin version="1.30.0" sha256="80db4f620ef3feb38c0516dd9bc9ac93983c1c3126c1ed1fea5f5d864e9b2046" -->
 ## TigerAiCore inherited rules
 
 <!-- Managed content. Author these rules in AGENTS.core.md in the TigerAiCore repository, never in a project copy. -->
@@ -149,6 +149,13 @@ complete form of each rule is in the role instructions (`AI-CODER.md`,
   denormalization for LLM reliability, not redundancy. Never delete, merge, or
   replace a projection with a pointer to satisfy DRY; report suspected
   redundancy instead.
+- **Delta prompts** — **Architect prompts are delta instructions**: the task,
+  its task-specific constraints, and any explicit override, narrowing, or
+  clarification of an inherited rule, on top of the rules and project procedures
+  already inherited — never a replacement for them. A rule the prompt does not
+  mention still applies, and an override applies to its task only. Prompts
+  reference inherited rules rather than re-specify them; durable procedure
+  belongs in its owning repository, not in recurring prompts.
 - **Action mode** — Coding is the default. Non-default modes are declared with
   an explicit `[Action: ...]` header. Never change action mode silently.
   `Autonomous Development` is the only mode that moves a human gate, and only

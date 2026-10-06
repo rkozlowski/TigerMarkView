@@ -127,7 +127,23 @@ features.
 
 ## Installation
 
-The initial public distribution is the Windows installer attached to a
+### WinGet
+
+TigerMarkView is available in the WinGet community repository as `ItTiger.TigerMarkView`:
+
+```powershell
+winget install ItTiger.TigerMarkView     # install
+winget upgrade ItTiger.TigerMarkView     # upgrade to the latest version
+winget uninstall ItTiger.TigerMarkView   # uninstall
+```
+
+WinGet installs the same TigerMarkView installer that is published with the corresponding GitHub
+Release, so everything below about what it installs, its prerequisites, and uninstalling applies
+equally. Upgrading keeps your TigerMarkView settings and the Open Recent list.
+
+### Installer
+
+You can also install TigerMarkView manually using the Windows installer attached to a
 [GitHub Release](https://github.com/rkozlowski/TigerMarkView/releases). The same installer contains
 the desktop application, `tiger-mark`, bundled Help, the privacy statement, the MIT licence, and
 third-party notices. It installs for the current user by default and offers an all-users mode, which
@@ -168,10 +184,6 @@ TigerMarkView requires:
 The runtimes are not bundled. The installer checks for both and, when one is missing, downloads it
 from Microsoft and installs it before TigerMarkView; installing a runtime asks for administrator
 approval.
-
-TigerMarkView is not yet published in the WinGet community repository. The prepared package identity
-is `ItTiger.TigerMarkView`; this README will advertise `winget install ItTiger.TigerMarkView` only
-after the first manifest has been accepted and the command is live.
 
 To build the installer locally, install the TigerSetup release that `installer/tigersetup.json`
 pins (its `tiger-setup` must be on PATH) and run:

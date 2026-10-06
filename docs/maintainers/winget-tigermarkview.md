@@ -5,8 +5,8 @@ The community package identifier is `ItTiger.TigerMarkView`. The fork is
 `https://github.com/microsoft/winget-pkgs`, and TigerMarkView uses the dedicated clone
 `C:\Projects\winget-pkgs-TigerMarkView\`.
 
-Do not advertise `winget install ItTiger.TigerMarkView` as live until the first pull request is
-accepted and the community source returns the package.
+The package is live in the community source from 0.12.1, and `README.md` documents `winget install`,
+`winget upgrade`, and `winget uninstall` for it.
 
 This document is the contract, and the automation it describes is implemented. After the human
 publishes the GitHub Release, one command does everything that remains except opening the pull
